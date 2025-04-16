@@ -62,7 +62,7 @@ mv .env.example .env
 ```bash
 cd backend
 pip install -r requirements.txt
-uvicorn app.main:app --reload
+python main.py
 ```
 
 ### 3. 启动前端（Vite + React）
