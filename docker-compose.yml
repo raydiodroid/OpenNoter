@@ -1,3 +1,4 @@
+version: "3.9"
 
 services:
   backend:
@@ -14,6 +15,7 @@ services:
       - ./backend:/app
     ports:
       - "${BACKEND_PORT}:${BACKEND_PORT}"
+
     depends_on:
       - frontend
 
@@ -26,3 +28,5 @@ services:
       - .env
     ports:
       - "${FRONTEND_PORT}:80"
+
+
