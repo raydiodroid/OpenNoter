@@ -53,18 +53,21 @@ class NoteGenerator:
 
 
     def get_gpt(self) -> GPT:
+        self.provider = self.provider.lower()
         if self.provider == 'openai':
             logger.info("使用OpenAI")
             return OpenaiGPT()
-        elif self.provider == 'deepSeek':
+        elif self.provider == 'deepseek':
             logger.info("使用DeepSeek")
             return DeepSeekGPT()
         elif self.provider == 'qwen':
             logger.info("使用Qwen")
             return QwenGPT()
         else:
-            logger.warning("不支持的AI提供商")
-            raise ValueError(f"不支持的AI提供商：{self.provider}")
+            self.provider = 'openai'
+            logger.warning("不支持的AI提供商，使用 OpenAI 做完GPT")
+            return OpenaiGPT()
+
 
     def get_downloader(self, platform: str) -> Downloader:
         if platform == "bilibili":
