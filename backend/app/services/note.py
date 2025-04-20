@@ -18,7 +18,7 @@ from app.models.notes_model import AudioDownloadResult
 from app.enmus.note_enums import DownloadQuality
 from app.models.transcriber_model import TranscriptResult
 from app.transcriber.base import Transcriber
-from app.transcriber.transcriber_provider import get_transcriber
+from app.transcriber.transcriber_provider import get_transcriber,_transcribers
 from app.transcriber.whisper import WhisperTranscriber
 import re
 
@@ -89,9 +89,9 @@ class NoteGenerator:
         :param transcriber: 选择的转义器
         :return:
         '''
-        if self.transcriber_type == 'fast-whisper':
-            logger.info("使用Whisper")
-            return get_transcriber(transcriber_type='fast-whisper')
+        if self.transcriber_type in _transcribers.keys():
+            logger.info(f"使用{self.transcriber_type}转义器")
+            return get_transcriber(transcriber_type=self.transcriber_type)
         else:
             logger.warning("不支持的转义器")
             raise ValueError(f"不支持的转义器：{self.transcriber}")

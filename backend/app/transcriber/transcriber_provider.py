@@ -98,9 +98,9 @@ def get_transcriber(transcriber_type="fast-whisper", model_size="base", device="
         whisper_model_size = os.environ.get("WHISPER_MODEL_SIZE",model_size)
         return get_whisper_transcriber(whisper_model_size, device=device)
     elif transcriber_type == "mlx-whisper":
+        whisper_model_size = os.environ.get("WHISPER_MODEL_SIZE",model_size)
         if not MLX_WHISPER_AVAILABLE:
             logger.warning("MLX Whisper 不可用，回退到 fast-whisper")
-            whisper_model_size = os.environ.get("WHISPER_MODEL_SIZE",model_size)
             return get_whisper_transcriber(whisper_model_size, device=device)
         return get_mlx_whisper_transcriber(whisper_model_size)
     elif transcriber_type == "bcut":

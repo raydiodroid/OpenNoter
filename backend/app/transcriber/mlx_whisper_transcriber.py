@@ -2,6 +2,7 @@ import mlx_whisper
 from pathlib import Path
 import os
 import platform
+from huggingface_hub import snapshot_download
 
 from app.decorators.timeit import timeit
 from app.models.transcriber_model import TranscriptSegment, TranscriptResult
@@ -15,8 +16,7 @@ logger = get_logger(__name__)
 class MLXWhisperTranscriber(Transcriber):
     def __init__(
             self,
-            model_size: str = "base",
-            device: str = None,  # MLX 会自动选择最佳设备
+            model_size: str = "base"
     ):
         # 检查平台
         if platform.system() != "Darwin":
@@ -27,15 +27,21 @@ class MLXWhisperTranscriber(Transcriber):
             raise RuntimeError("必须设置环境变量 TRANSCRIBER_TYPE=mlx-whisper 才能使用 MLX Whisper")
             
         self.model_size = model_size
-        self.model_name = f"whisper-{model_size}-mlx"
+        self.model_name = f"mlx-community/whisper-{model_size}"
         self.model_path = None
         
         # 设置模型路径
         model_dir = get_model_dir("mlx-whisper")
         self.model_path = os.path.join(model_dir, self.model_name)
-        
-        # 确保模型目录存在
-        Path(model_dir).mkdir(parents=True, exist_ok=True)
+        # 检查并下载模型
+        if not Path(self.model_path).exists():
+            logger.info(f"模型 {self.model_name} 不存在，开始下载...")
+            snapshot_download(
+                self.model_name,
+                local_dir=self.model_path,
+                local_dir_use_symlinks=False,
+            )
+            logger.info("模型下载完成")
         
         logger.info(f"初始化 MLX Whisper 转录器，模型：{self.model_name}")
 
@@ -45,7 +51,7 @@ class MLXWhisperTranscriber(Transcriber):
             # 使用 MLX Whisper 进行转录
             result = mlx_whisper.transcribe(
                 file_path,
-                path_or_hf_repo=f"mlx-community/{self.model_name}"
+                path_or_hf_repo=f"{self.model_name}"
             )
             
             # 转换为标准格式
