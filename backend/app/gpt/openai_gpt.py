@@ -2,6 +2,7 @@ from typing import List
 from app.gpt.base import GPT
 from openai import OpenAI
 from app.gpt.prompt import BASE_PROMPT, AI_SUM, SCREENSHOT, LINK
+from app.gpt.provider.OpenAI_compatible_provider import OpenAICompatibleProvider
 from app.gpt.utils import fix_markdown
 from app.models.gpt_model import GPTSource
 from app.models.transcriber_model import TranscriptSegment
@@ -15,7 +16,7 @@ class OpenaiGPT(GPT):
         self.base_url = getenv("OPENAI_API_BASE_URL")
         self.model=getenv('OPENAI_MODEL')
         print(self.model)
-        self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+        self.client = OpenAICompatibleProvider(api_key=self.api_key, base_url=self.base_url)
         self.screenshot = False
         self.link=False
 
@@ -49,17 +50,20 @@ class OpenaiGPT(GPT):
 
         print(content)
         return [{"role": "user", "content": content + AI_SUM}]
-
+    def list_models(self):
+        return self.client.list_models()
     def summarize(self, source: GPTSource) -> str:
         self.screenshot = source.screenshot
         self.link = source.link
         source.segment = self.ensure_segments_type(source.segment)
         messages = self.create_messages(source.segment, source.title,source.tags)
-        response = self.client.chat.completions.create(
+        response = self.client.chat(
             model=self.model,
             messages=messages,
             temperature=0.7
         )
         return response.choices[0].message.content.strip()
 
-
+if __name__ == '__main__':
+    gpt = OpenaiGPT()
+    print(gpt.list_models())

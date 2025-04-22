@@ -1,43 +1,71 @@
-import type { FC, ReactNode } from 'react'
-import { Button } from "@/components/ui/button.tsx"
+import React, { FC } from 'react'
+import { SlidersHorizontal } from 'lucide-react'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip.tsx'
 
-interface HomeLayoutProps {
-    form: ReactNode
-    preview: ReactNode
+import { useState } from 'react'
+import { Link } from 'react-router-dom'
+
+interface IProps {
+  NoteForm: React.ReactNode
+  Preview: React.ReactNode
 }
+const HomeLayout: FC<IProps> = ({ NoteForm, Preview }) => {
+  const [, setShowSettings] = useState(false)
 
-const HomeLayout: FC<HomeLayoutProps> = ({ form, preview }) => {
-    return (
-        <div className="min-h-screen  flex flex-col bg-white">
-            <div className="flex flex-1">
-                {/* 左侧部分：Header + 表单 */}
-                <aside className="w-[400px] bg-white border-r border-neutral-200 flex flex-col">
-                    {/* Header */}
-                    <header className="h-16  flex items-center px-6 gap-2">
-                        <div className="w-10 h-10 rounded-2xl overflow-hidden flex justify-center items-center">
-                            <img src="/icon.svg" alt="logo" className="w-full h-full object-contain" />
-                        </div>
-                        <div className="text-2xl font-bold text-gray-800">BiliNote</div>
-                    </header>
-
-                    {/* 表单内容 */}
-                    <div className="flex-1 p-4 overflow-auto">
-                        {form}
-                    </div>
-                </aside>
-
-                {/* 右侧预览区域 */}
-                <main className="flex-1 h-screen p-6 bg-white overflow-hidden">
-                    {preview}
-                </main>
+  return (
+    <div className="flex min-h-screen flex-col bg-white">
+      <div className="flex flex-1">
+        {/* 左侧部分：Header + 表单 */}
+        <aside className="flex w-[400px] flex-col border-r border-neutral-200 bg-white">
+          {/* Header */}
+          <header className="flex h-16 items-center justify-between px-6">
+            <div className="flex items-center gap-2">
+              <div className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-2xl">
+                <img src="/icon.svg" alt="logo" className="h-full w-full object-contain" />
+              </div>
+              <div className="text-2xl font-bold text-gray-800">BiliNote</div>
             </div>
+            <div>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger onClick={() => setShowSettings(true)}>
+                    <Link to={'/settings'}>
+                      <SlidersHorizontal className="text-muted-foreground hover:text-primary cursor-pointer" />
+                    </Link>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <span>全局配置</span>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </div>
+          </header>
 
-            {/* 页脚 */}
-            {/*<footer className="h-12 bg-white shadow-inner flex items-center justify-center text-sm text-neutral-600">*/}
-            {/*    © 2025 BiliNote. All rights reserved.*/}
-            {/*</footer>*/}
-        </div>
-    )
+          {/* 表单内容 */}
+          <div className="flex-1 overflow-auto p-4">
+            {/*<NoteForm />*/}
+            {NoteForm}
+          </div>
+        </aside>
+
+        {/* 右侧预览区域 */}
+        <main className="h-screen flex-1 overflow-hidden bg-white p-6">
+          {/*<Outlet />*/}
+          {Preview}
+        </main>
+      </div>
+
+      {/* 页脚 */}
+      {/*<footer className="h-12 bg-white shadow-inner flex items-center justify-center text-sm text-neutral-600">*/}
+      {/*    © 2025 BiliNote. All rights reserved.*/}
+      {/*</footer>*/}
+    </div>
+  )
 }
 
 export default HomeLayout

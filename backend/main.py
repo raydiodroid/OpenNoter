@@ -3,6 +3,8 @@ import os
 import uvicorn
 from starlette.staticfiles import StaticFiles
 from dotenv import load_dotenv
+
+from app.db.provider_dao import init_provider_table
 from app.utils.logger import get_logger
 from app import create_app
 from app.db.video_task_dao import init_video_task_table
@@ -36,6 +38,7 @@ async def startup_event():
     ensure_ffmpeg_or_raise()
     get_transcriber()
     init_video_task_table()
+    init_provider_table()
 
 if __name__ == "__main__":
     port = int(os.getenv("BACKEND_PORT", 8000))

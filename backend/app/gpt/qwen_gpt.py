@@ -2,6 +2,7 @@ from typing import List
 from app.gpt.base import GPT
 from openai import OpenAI
 from app.gpt.prompt import BASE_PROMPT, AI_SUM, SCREENSHOT
+from app.gpt.provider.OpenAI_compatible_provider import OpenAICompatibleProvider
 from app.gpt.utils import fix_markdown
 from app.models.gpt_model import GPTSource
 from app.models.transcriber_model import TranscriptSegment
@@ -15,7 +16,7 @@ class QwenGPT(GPT):
         self.base_url = getenv("QWEN_API_BASE_URL")
         self.model=getenv('QWEN_MODEL')
         print(self.model)
-        self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+        self.client = OpenAICompatibleProvider(api_key=self.api_key, base_url=self.base_url)
         self.screenshot = False
 
     def _format_time(self, seconds: float) -> str:
@@ -44,7 +45,8 @@ class QwenGPT(GPT):
             content += SCREENSHOT
         print(content)
         return [{"role": "user", "content": content + AI_SUM}]
-
+    def list_models(self):
+        return self.client.list_models()
     def summarize(self, source: GPTSource) -> str:
         self.screenshot = source.screenshot
         source.segment = self.ensure_segments_type(source.segment)
@@ -56,4 +58,6 @@ class QwenGPT(GPT):
         )
         return response.choices[0].message.content.strip()
 
-
+if __name__ == '__main__':
+    gpt = QwenGPT()
+    print(gpt.list_models())

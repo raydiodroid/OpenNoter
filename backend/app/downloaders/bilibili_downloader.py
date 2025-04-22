@@ -31,6 +31,13 @@ class BilibiliDownloader(Downloader, ABC):
         ydl_opts = {
             'format': 'bestaudio[ext=m4a]/bestaudio/best',
             'outtmpl': output_path,
+            'postprocessors': [
+                {
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3',
+                    'preferredquality': '64',
+                }
+            ],
             'noplaylist': True,
             'quiet': False,
         }
@@ -41,7 +48,7 @@ class BilibiliDownloader(Downloader, ABC):
             title = info.get("title")
             duration = info.get("duration", 0)
             cover_url = info.get("thumbnail")
-            audio_path = os.path.join(output_dir, f"{video_id}.m4a")
+            audio_path = os.path.join(output_dir, f"{video_id}.mp3")
 
         return AudioDownloadResult(
             file_path=audio_path,
@@ -69,7 +76,7 @@ class BilibiliDownloader(Downloader, ABC):
         output_path = os.path.join(output_dir, "%(id)s.%(ext)s")
 
         ydl_opts = {
-            'format': 'bv*+ba/bestvideo+bestaudio/best',
+            'format': 'bv*[ext=mp4]/bestvideo+bestaudio/best',
             'outtmpl': output_path,
             'noplaylist': True,
             'quiet': False,

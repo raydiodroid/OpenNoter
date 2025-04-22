@@ -53,21 +53,18 @@ class NoteGenerator:
 
 
     def get_gpt(self) -> GPT:
-        self.provider = self.provider.lower()
         if self.provider == 'openai':
             logger.info("使用OpenAI")
             return OpenaiGPT()
-        elif self.provider == 'deepseek':
+        elif self.provider == 'deepSeek':
             logger.info("使用DeepSeek")
             return DeepSeekGPT()
         elif self.provider == 'qwen':
             logger.info("使用Qwen")
             return QwenGPT()
         else:
-            self.provider = 'openai'
-            logger.warning("不支持的AI提供商，使用 OpenAI 做完GPT")
-            return OpenaiGPT()
-
+            logger.warning("不支持的AI提供商")
+            raise ValueError(f"不支持的AI提供商：{self.provider}")
 
     def get_downloader(self, platform: str) -> Downloader:
         if platform == "bilibili":
@@ -162,9 +159,9 @@ class NoteGenerator:
         # 1. 选择下载器
         downloader = self.get_downloader(platform)
         gpt = self.get_gpt()
-        logger.info(f'使用{downloader.__class__.__name__}下载器')
-        logger.info(f'使用{gpt.__class__.__name__}GPT')
-        logger.info(f'视频地址：{video_url}')
+        logger.info(f'使用{downloader.__class__.__name__}下载器\n'
+                    f'使用{gpt.__class__.__name__}GPT\n'
+                    f'视频地址：{video_url}')
         if screenshot:
 
             video_path = downloader.download_video(video_url)
