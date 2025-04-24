@@ -145,7 +145,7 @@ QWEN_API_KEY=xxx
 - BiliNote 交流QQ群：785367111
 - BiliNote 交流微信群:
   
-  <img src="./doc/wechat.png" alt="wechat" style="zoom:33%;" />
+  <img src="https://common-1304618721.cos.ap-chengdu.myqcloud.com/20250424091227.png" alt="wechat" style="zoom:33%;" />
 
 ## 📜 License
 
