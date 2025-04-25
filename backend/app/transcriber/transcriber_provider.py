@@ -23,15 +23,15 @@ logger.info('初始化转录服务提供器')
 
 # 维护各种转录器的单例实例
 _transcribers = {
-    'whisper': None,
     'bcut': None,
     'kuaishou': None,
-    'mlx-whisper': None
+    'mlx-whisper': None,
+    'fast-whisper':None
 }
 
 def get_whisper_transcriber(model_size="base", device="cuda"):
     """获取 Whisper 转录器实例"""
-    if _transcribers['whisper'] is None:
+    if  _transcribers['fast-whisper'] is None:
         logger.info(f'创建 Whisper 转录器实例，参数：{model_size}, {device}')
         try:
             _transcribers['whisper'] = WhisperTranscriber(model_size=model_size, device=device)
