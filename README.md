@@ -29,7 +29,7 @@ BiliNote 是一个开源的 AI 视频笔记助手，支持通过哔哩哔哩、Y
 注意：由于 项目部署在 Cloudflare Pages，访问速度可能存在一些问题，请耐心等待。
 
 ## 📦 Windows 打包版
-本项目提供了 Windows 系统的 exe 文件，可在[release](https://github.com/JefferyHcool/BiliNote/releases/tag/v1.0.1) 进行下载。
+本项目提供了 Windows 系统的 exe 文件，可在[release](https://github.com/JefferyHcool/BiliNote/releases/tag/v1.0.1) 进行下载。**注意一定要在没有中文路径的环境下运行。**
 
 
 ## 🔧 功能特性
@@ -145,7 +145,7 @@ QWEN_API_KEY=xxx
 - BiliNote 交流QQ群：785367111
 - BiliNote 交流微信群:
   
-  <img src="./doc/wechat.png" alt="wechat" style="zoom:33%;" />
+  <img src="https://common-1304618721.cos.ap-chengdu.myqcloud.com/20250424091751.png" alt="wechat" style="zoom:33%;" />
 
 ## 📜 License
 
