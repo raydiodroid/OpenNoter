@@ -315,4 +315,5 @@ cython_debug/
 /backend/logs/
 /backend/note_results
 /backend/models
-/backend/.idea
+/backend/.idea/*
+/backend/bili_note.db

@@ -103,7 +103,7 @@ class WhisperTranscriber(Transcriber):
                 segments=segments,
                 raw=info
             )
-            self.on_finish(file_path, result)
+            # self.on_finish(file_path, result)
             return result
         except Exception as e:
             print(f"转写失败：{e}")

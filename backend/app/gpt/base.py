@@ -11,3 +11,7 @@ class GPT(ABC):
         :return:
         '''
         pass
+    def create_messages(self, segments:list,**kwargs)->list:
+        pass
+    def list_models(self):
+        pass

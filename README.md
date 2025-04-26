@@ -3,7 +3,7 @@
     <p align="center">
   <img src="./doc/icon.svg" alt="BiliNote Banner" width="50" height="50"  />
 </p>
-<h1 align="center" > BiliNote v1.0.1</h1>
+<h1 align="center" > BiliNote v1.1.0</h1>
 </div>
 
 <p align="center"><i>AI 视频笔记生成工具 让 AI 为你的视频做笔记</i></p>
@@ -119,6 +119,7 @@ docker compose up --build
 
 
 ## ⚙️ 环境变量配置
+> ⚠️ v.1.1.0 以后无需通过环境变量配置 AI
 
 后端 `.env` 示例：
 
@@ -131,15 +132,29 @@ OPENAI_API_KEY=sk-xxxxxx
 DEEP_SEEK_API_KEY=xxx
 QWEN_API_KEY=xxx
 ```
+## Changelog
+### v1.1.0
+- #### Added
+  - 新增 AI 笔记风格选择
+  - 新增 AI 笔记返回格式选择
+  - 添加 AI 自定义笔记备注 Prompt
+  - 添加任务失败重试
+  - 添加全局设置页，可在设置页进行模型设置
+
+- #### Optimize
+  - 优化前端样式，优化用户体验
+  - 增加生成中间产物，可用于失败后加快生成速度
+- #### Fix
+  - 修复视频截图视频过早删除错误
 
 ## 🧠 TODO
 
 - [ ] 支持抖音及快手等视频平台
-- [ ] 支持前端设置切换 AI 模型切换、语音转文字模型
-- [ ] AI 摘要风格自定义（学术风、口语风、重点提取等）
+- [x] 支持前端设置切换 AI 模型切换、语音转文字模型
+- [x] AI 摘要风格自定义（学术风、口语风、重点提取等）
 - [ ] 笔记导出为 PDF / Word / Notion
-- [ ] 加入更多模型支持
-- [ ] 加入更多音频转文本模型支持
+- [x] 加入更多模型支持
+- [x] 加入更多音频转文本模型支持
 
 ### Contact and Join-联系和加入社区
 - BiliNote 交流QQ群：785367111

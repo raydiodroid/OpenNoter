@@ -31,15 +31,15 @@ _transcribers = {
 
 def get_whisper_transcriber(model_size="base", device="cuda"):
     """获取 Whisper 转录器实例"""
-    if _transcribers['fast-whisper'] is None:
+    if  _transcribers['fast-whisper'] is None:
         logger.info(f'创建 Whisper 转录器实例，参数：{model_size}, {device}')
         try:
-            _transcribers['fast-whisper'] = WhisperTranscriber(model_size=model_size, device=device)
+            _transcribers['whisper'] = WhisperTranscriber(model_size=model_size, device=device)
             logger.info('Whisper 转录器创建成功')
         except Exception as e:
             logger.error(f"Whisper 转录器创建失败: {e}")
             raise
-    return _transcribers['fast-whisper']
+    return _transcribers['whisper']
 
 def get_bcut_transcriber():
     """获取 Bcut 转录器实例"""

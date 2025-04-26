@@ -125,6 +125,7 @@ class BcutTranscriber(Transcriber):
         )
         resp.raise_for_status()
         resp = resp.json()
+        print('Bili',resp)
         if resp.get("code") != 0:
             error_msg = f"上传提交失败: {resp.get('message', '未知错误')}"
             logger.error(error_msg)
@@ -234,7 +235,7 @@ class BcutTranscriber(Transcriber):
             )
             
             # 触发完成事件
-            self.on_finish(file_path, result)
+            # self.on_finish(file_path, result)
             
             return result
             
