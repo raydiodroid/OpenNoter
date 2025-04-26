@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown'
 import { Button } from '@/components/ui/button.tsx'
 import { Copy, Download, FileText, ArrowRight } from 'lucide-react'
 import { toast } from 'sonner' // 你可以换成自己的通知组件
-
+import Error from '@/components/Lottie/error.tsx'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { solarizedlight as codeStyle } from 'react-syntax-highlighter/dist/cjs/styles/prism'
 import 'github-markdown-css/github-markdown-light.css'
@@ -11,14 +11,26 @@ import { FC } from 'react'
 import Loading from '@/components/Lottie/Loading.tsx'
 import Idle from '@/components/Lottie/Idle.tsx'
 import { useTaskStore } from '@/store/taskStore'
+import StepBar from '@/pages/HomePage/components/StepBar.tsx'
 interface MarkdownViewerProps {
   content: string
-  status: 'idle' | 'loading' | 'success'
+  status: 'idle' | 'loading' | 'success' | 'failed'
 }
+
+const steps = [
+  { label: '解析链接', key: 'PARSING' },
+  { label: '下载音频', key: 'DOWNLOADING' },
+  { label: '转写文字', key: 'TRANSCRIBING' },
+  { label: '总结内容', key: 'SUMMARIZING' },
+  { label: '保存完成', key: 'SUCCESS' },
+]
 
 const MarkdownViewer: FC<MarkdownViewerProps> = ({ content, status }) => {
   const [copied, setCopied] = useState(false)
   const getCurrentTask = useTaskStore.getState().getCurrentTask
+  const currentTask = useTaskStore(state => state.getCurrentTask())
+  const taskStatus = currentTask?.status || 'PENDING'
+  const retryTask = useTaskStore.getState().retryTask
   const handleCopy = async () => {
     try {
       await navigator.clipboard.writeText(content)
@@ -34,6 +46,7 @@ const MarkdownViewer: FC<MarkdownViewerProps> = ({ content, status }) => {
   const handleDownload = () => {
     const currentTask = getCurrentTask()
     const currentTaskName = currentTask?.audioMeta.title
+
     const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' })
     const link = document.createElement('a')
     link.href = URL.createObjectURL(blob)
@@ -45,6 +58,7 @@ const MarkdownViewer: FC<MarkdownViewerProps> = ({ content, status }) => {
   if (status === 'loading') {
     return (
       <div className="flex h-screen w-full flex-col items-center justify-center space-y-4 text-neutral-500">
+        <StepBar steps={steps} currentStep={taskStatus} />
         <Loading className="h-5 w-5" />
         <div className="text-center text-sm">
           <p className="text-lg font-bold">正在生成笔记，请稍候…</p>
@@ -60,6 +74,24 @@ const MarkdownViewer: FC<MarkdownViewerProps> = ({ content, status }) => {
         <div className="text-center">
           <p className="text-lg font-bold">输入视频链接并点击“生成笔记”</p>
           <p className="mt-2 text-xs text-neutral-500">支持哔哩哔哩、YouTube 等视频平台</p>
+        </div>
+      </div>
+    )
+  } else if (status === 'failed') {
+    return (
+      <div className="flex h-screen w-full flex-col items-center justify-center gap-4 space-y-3">
+        <Error /> {/* 你可以换成 Failed 动画 */}
+        <div className="text-center">
+          <p className="text-lg font-bold text-red-500">笔记生成失败</p>
+          <p className="mt-2 mb-2 text-xs text-red-400">请检查后台或稍后再试</p>
+          <Button
+            onClick={() => {
+              retryTask(currentTask.id)
+            }}
+            size="lg"
+          >
+            重试
+          </Button>
         </div>
       </div>
     )

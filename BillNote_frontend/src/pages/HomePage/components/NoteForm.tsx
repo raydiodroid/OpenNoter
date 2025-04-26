@@ -6,6 +6,7 @@ import {
   FormLabel,
   FormMessage,
 } from '@/components/ui/form.tsx'
+import { useEffect } from 'react'
 import { Input } from '@/components/ui/input.tsx'
 import {
   Select,
@@ -30,7 +31,9 @@ import {
 import { generateNote } from '@/services/note.ts'
 import { useTaskStore } from '@/store/taskStore'
 import NoteHistory from '@/pages/HomePage/components/NoteHistory.tsx'
-
+import { useModelStore } from '@/store/modelStore'
+import { Alert } from 'antd'
+import { Textarea } from '@/components/ui/textarea.tsx'
 // ✅ 定义表单 schema
 const formSchema = z.object({
   video_url: z.string().url('请输入正确的视频链接'),
@@ -40,15 +43,70 @@ const formSchema = z.object({
   }),
   screenshot: z.boolean().optional(),
   link: z.boolean().optional(),
+  model_name: z.string().nonempty('请选择模型'),
+  format: z.array(z.string()).default([]), // ✨ 确保默认是空数组
+  style: z.string().nonempty('请选择笔记生成风格'),
+  extras: z.string().optional(),
 })
 
 type NoteFormValues = z.infer<typeof formSchema>
+const noteFormats = [
+  {
+    label: '目录',
+    value: 'toc',
+  },
+  { label: '原片跳转', value: 'link' },
+  { label: '原片截图', value: 'screenshot' },
+  { label: 'AI总结', value: 'summary' },
+]
+const noteStyles = [
+  {
+    label: '精简',
+    value: 'minimal', // 简洁、快速呈现要点
+  },
+  {
+    label: '详细',
+    value: 'detailed', // 详细记录，包含时间戳、关键点
+  },
+  {
+    label: '教程',
+    value: 'tutorial', // 详细记录，包含时间戳、关键点
+  },
+  {
+    label: '学术',
+    value: 'academic', // 适合学术报告，正式且结构化
+  },
+  {
+    label: '小红书',
+    value: 'xiaohongshu', // 适合社交平台分享，亲切、口语化
+  },
+  {
+    label: '生活向',
+    value: 'life_journal', // 记录个人生活感悟，情感化表达
+  },
+  {
+    label: '任务导向',
+    value: 'task_oriented', // 强调任务、目标，适合工作和待办事项
+  },
+  {
+    label: '商业风格',
+    value: 'business', // 适合商业报告、会议纪要，正式且精准
+  },
+  {
+    label: '会议纪要',
+    value: 'meeting_minutes', // 适合商业报告、会议纪要，正式且精准
+  },
+]
 
 const NoteForm = () => {
   useTaskStore(state => state.tasks)
   const setCurrentTask = useTaskStore(state => state.setCurrentTask)
   const currentTaskId = useTaskStore(state => state.currentTaskId)
   const getCurrentTask = useTaskStore(state => state.getCurrentTask)
+  const loadEnabledModels = useModelStore(state => state.loadEnabledModels)
+  const modelList = useModelStore(state => state.modelList)
+  const showFeatureHint = useModelStore(state => state.showFeatureHint)
+  const setShowFeatureHint = useModelStore(state => state.setShowFeatureHint)
   const form = useForm<NoteFormValues>({
     resolver: zodResolver(formSchema),
     defaultValues: {
@@ -56,9 +114,16 @@ const NoteForm = () => {
       platform: 'bilibili',
       quality: 'medium', // 默认中等质量
       screenshot: false,
+      model_name: modelList[0]?.model_name || '', // 确保有值
+      format: [], // 初始化为空数组
+      style: 'minimal', // 默认选择精简风格
+      extras: '', // 初始化为空字符串
     },
   })
 
+  const onClose = () => {
+    setShowFeatureHint(false)
+  }
   const isGenerating = () => {
     console.log('🚀 isGenerating', getCurrentTask()?.status)
     return getCurrentTask()?.status === 'PENDING'
@@ -66,14 +131,23 @@ const NoteForm = () => {
 
   const onSubmit = async (data: NoteFormValues) => {
     console.log('🎯 提交内容：', data)
-    await generateNote({
+    const payload = {
       video_url: data.video_url,
       platform: data.platform,
       quality: data.quality,
-      screenshot: data.screenshot,
-      link: data.link,
-    })
+      model_name: data.model_name,
+      provider_id: modelList.find(model => model.model_name === data.model_name).provider_id,
+      format: data.format,
+      style: data.style,
+      extras: data.extras,
+    }
+    const res = await generateNote(payload)
+    const taskId = res.data.task_id
+    useTaskStore.getState().addPendingTask(taskId, data.platform, payload)
   }
+  useEffect(() => {
+    loadEnabledModels()
+  }, [])
 
   return (
     <div className="flex h-full flex-col">
@@ -173,48 +247,157 @@ const NoteForm = () => {
                 </FormItem>
               )}
             />
+
+            <FormField
+              control={form.control}
+              name="model_name"
+              render={({ field }) => (
+                <FormItem>
+                  <div className="my-3 flex items-center justify-between">
+                    <h2 className="block">模型选择</h2>
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Info className="hover:text-primary h-4 w-4 cursor-pointer text-neutral-400" />
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p className="max-w-[200px] text-xs">不同模型返回质量不同，可自行测试</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  </div>
+                  <Select onValueChange={field.onChange} defaultValue={field.value}>
+                    <FormControl>
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder="选择配置好的模型" />
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent>
+                      {modelList.map(item => {
+                        return <SelectItem value={item.model_name}>{item.model_name}</SelectItem>
+                      })}
+                    </SelectContent>
+                  </Select>
+                  {/*<FormDescription className="text-xs text-neutral-500">*/}
+                  {/*    质量越高，下载体积越大，速度越慢*/}
+                  {/*</FormDescription>*/}
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
           </div>
 
-          {/* 是否需要原片位置 */}
           <FormField
             control={form.control}
-            name="link"
+            name="style"
             render={({ field }) => (
-              <FormItem className="flex items-center space-x-2">
-                {/* Tooltip 部分 */}
+              <FormItem>
+                <div className="my-3 flex items-center justify-between">
+                  <h2 className="block">笔记风格</h2>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Info className="hover:text-primary h-4 w-4 cursor-pointer text-neutral-400" />
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p className="max-w-[200px] text-xs">选择你希望生成的笔记风格</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                </div>
 
-                <FormControl>
-                  <Checkbox checked={field.value} onCheckedChange={field.onChange} id="link" />
-                </FormControl>
+                <Select onValueChange={field.onChange} defaultValue={field.value}>
+                  <FormControl>
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="选择笔记风格" />
+                    </SelectTrigger>
+                  </FormControl>
+                  <SelectContent>
+                    {noteStyles.map(item => (
+                      <SelectItem key={item.value} value={item.value}>
+                        {item.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
 
-                <FormLabel htmlFor="link" className="text-sm leading-none font-medium">
-                  是否插入内容跳转链接
-                </FormLabel>
+                <FormMessage />
               </FormItem>
             )}
           />
-          {/* 是否需要下载 */}
+
           <FormField
             control={form.control}
-            name="screenshot"
+            name="format"
             render={({ field }) => (
-              <FormItem className="flex items-center space-x-2">
-                {/* Tooltip 部分 */}
+              <FormItem>
+                <div className="my-3 flex items-center justify-between">
+                  <h2 className="block">笔记格式</h2>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Info className="hover:text-primary h-4 w-4 cursor-pointer text-neutral-400" />
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p className="text-xs">选择要包含的笔记元素，比如时间戳、截图提示或总结</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                </div>
 
                 <FormControl>
-                  <Checkbox
-                    checked={field.value}
-                    onCheckedChange={field.onChange}
-                    id="screenshot"
-                  />
+                  <div className="flex space-x-1.5">
+                    {noteFormats.map(item => (
+                      <label key={item.value} className="flex items-center space-x-2">
+                        <Checkbox
+                          checked={field.value?.includes(item.value)}
+                          onCheckedChange={checked => {
+                            const currentValue = field.value ?? [] // ✨ 保底是数组
+                            if (checked) {
+                              field.onChange([...currentValue, item.value])
+                            } else {
+                              field.onChange(currentValue.filter(v => v !== item.value))
+                            }
+                          }}
+                        />
+                        <span>{item.label}</span>
+                      </label>
+                    ))}
+                  </div>
                 </FormControl>
+                <FormField
+                  control={form.control}
+                  name="extras"
+                  render={({ field }) => (
+                    <FormItem>
+                      <div className="my-3 flex items-center justify-between">
+                        <h2 className="block">备注</h2>
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Info className="hover:text-primary h-4 w-4 cursor-pointer text-neutral-400" />
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <p className="text-xs">会把这段加入到Prompt最后 可自行测试</p>
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      </div>
+                      <Textarea placeholder={'笔记需要罗列出 xxx 关键点'} />
 
-                <FormLabel htmlFor="screenshot" className="text-sm leading-none font-medium">
-                  是否插入视频截图
-                </FormLabel>
+                      {/*<FormDescription className="text-xs text-neutral-500">*/}
+                      {/*    质量越高，下载体积越大，速度越慢*/}
+                      {/*</FormDescription>*/}
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormMessage />
               </FormItem>
             )}
           />
+
           <div className={'flex w-full items-center gap-2 py-1.5'}>
             {/* 提交按钮 */}
             <Button type="submit" className="bg-primary w-full" disabled={isGenerating()}>
@@ -235,27 +418,35 @@ const NoteForm = () => {
       </div>
 
       {/* 添加一些额外的说明或功能介绍 */}
-      <div className="bg-primary-light mt-6 rounded-lg p-4">
-        <h3 className="text-primary mb-2 font-medium">功能介绍</h3>
-        <ul className="space-y-2 text-sm text-neutral-600">
-          <li className="flex items-start gap-2">
-            <span className="text-primary font-bold">•</span>
-            <span>自动提取视频内容，生成结构化笔记</span>
-          </li>
-          <li className="flex items-start gap-2">
-            <span className="text-primary font-bold">•</span>
-            <span>支持多个视频平台，包括哔哩哔哩、YouTube等</span>
-          </li>
-          <li className="flex items-start gap-2">
-            <span className="text-primary font-bold">•</span>
-            <span>一键复制笔记，支持Markdown格式</span>
-          </li>
-          <li className="flex items-start gap-2">
-            <span className="text-primary font-bold">•</span>
-            <span>可选择是否插入图片</span>
-          </li>
-        </ul>
-      </div>
+      {showFeatureHint && (
+        <Alert
+          message="功能介绍 v2.0.0"
+          description={
+            <ul className="space-y-2 text-sm text-neutral-600">
+              <li className="flex items-start gap-2">
+                <span className="text-primary font-bold">•</span>
+                <span>自动提取视频内容，生成结构化笔记</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="text-primary font-bold">•</span>
+                <span>支持多个视频平台，包括哔哩哔哩、YouTube等</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="text-primary font-bold">•</span>
+                <span>一键复制笔记，支持Markdown格式</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="text-primary font-bold">•</span>
+                <span>可选择是否插入图片</span>
+              </li>
+            </ul>
+          }
+          type="info"
+          onClose={onClose}
+          closable
+        />
+      )}
+      {/*<div className="bg-primary-light mt-6 rounded-lg p-4"></div>*/}
     </div>
   )
 }

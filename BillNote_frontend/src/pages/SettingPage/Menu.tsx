@@ -9,26 +9,27 @@ const Menu = () => {
       icon: <BotMessageSquare />,
       path: '/settings/model',
     },
-    {
-      id: ' transcriber',
-      name: '音频转译配置',
-      icon: <Captions />,
-      path: '/settings/transcriber',
-    },
-    //下载配置
-    {
-      id: 'download',
-      name: '下载配置',
-      icon: <HardDriveDownload />,
-      path: '/settings/download',
-    },
-    //其他配置
-    {
-      id: 'other',
-      name: '其他配置',
-      icon: <Wrench />,
-      path: '/settings/other',
-    },
+    // TODO ：下一版本升级优化
+    // {
+    //   id: ' transcriber',
+    //   name: '音频转译配置',
+    //   icon: <Captions />,
+    //   path: '/settings/transcriber',
+    // },
+    // //下载配置
+    // {
+    //   id: 'download',
+    //   name: '下载配置',
+    //   icon: <HardDriveDownload />,
+    //   path: '/settings/download',
+    // },
+    // //其他配置
+    // {
+    //   id: 'other',
+    //   name: '其他配置',
+    //   icon: <Wrench />,
+    //   path: '/settings/other',
+    // },
   ]
   return (
     <div className="flex h-full flex-col">

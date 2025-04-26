@@ -1,0 +1,42 @@
+[
+  {
+    "id": "openai",
+    "name": "OpenAI",
+    "type": "built-in",
+    "logo": "OpenAI",
+    "api_key": "",
+    "base_url": "https://api.openai.com/v1"
+  },
+  {
+    "id": "deepseek",
+    "name": "DeepSeek",
+    "type": "built-in",
+    "logo": "DeepSeek",
+    "api_key": "",
+    "base_url": "https://api.deepseek.com"
+  },
+  {
+    "id": "qwen",
+    "name": "Qwen",
+    "type": "built-in",
+    "logo": "Qwen",
+    "api_key": "",
+    "base_url": "https://qwen.aliyun.com/api"
+  },
+  {
+    "id": "doubao",
+    "name": "豆包 (Doubao)",
+    "type": "built-in",
+    "logo": "Doubao",
+    "api_key": "",
+    "base_url": "https://open.doubao.com/api"
+  },
+    {
+    "id": "Claude",
+    "name": "Claude",
+    "type": "built-in",
+    "logo": "Claude",
+    "api_key": "",
+    "base_url": "https://"
+  }
+]

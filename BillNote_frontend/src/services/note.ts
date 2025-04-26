@@ -4,10 +4,14 @@ import { useTaskStore } from '@/store/taskStore'
 import request from '@/utils/request'
 export const generateNote = async (data: {
   video_url: string
-  link: undefined | boolean
-  screenshot: undefined | boolean
   platform: string
   quality: string
+  model_name: string
+  provider_id: string
+  task_id?: string
+  format: Array<string>
+  style: string
+  extras?: string
 }) => {
   try {
     const response = await request.post('/generate_note', data)
@@ -20,11 +24,8 @@ export const generateNote = async (data: {
     }
     toast.success('笔记生成任务已提交！')
 
-    const taskId = response.data.data.task_id
-
     console.log('res', response)
     // 成功提示
-    useTaskStore.getState().addPendingTask(taskId, data.platform)
 
     return response.data
   } catch (e: any) {

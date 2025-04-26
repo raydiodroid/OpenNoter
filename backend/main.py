@@ -4,6 +4,7 @@ import uvicorn
 from starlette.staticfiles import StaticFiles
 from dotenv import load_dotenv
 
+from app.db.model_dao import init_model_table
 from app.db.provider_dao import init_provider_table
 from app.utils.logger import get_logger
 from app import create_app
@@ -39,6 +40,7 @@ async def startup_event():
     get_transcriber(transcriber_type=os.getenv("TRANSCRIBER_TYPE","fast-whisper"))
     init_video_task_table()
     init_provider_table()
+    init_model_table()
 
 if __name__ == "__main__":
     port = int(os.getenv("BACKEND_PORT", 8000))

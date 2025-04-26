@@ -1,4 +1,5 @@
 from app.gpt.base import GPT
+from app.gpt.prompt_builder import generate_base_prompt
 from app.models.gpt_model import GPTSource
 from app.gpt.prompt import BASE_PROMPT, AI_SUM, SCREENSHOT, LINK
 from app.gpt.utils import fix_markdown
@@ -28,29 +29,35 @@ class UniversalGPT(GPT):
         return [TranscriptSegment(**seg) if isinstance(seg, dict) else seg for seg in segments]
 
     def create_messages(self, segments: List[TranscriptSegment],**kwargs):
-        content = BASE_PROMPT.format(
-            video_title=kwargs.get('title'),
+        print("UniversalGPT",kwargs)
+        content =generate_base_prompt(
+            title=kwargs.get('title'),
             segment_text=self._build_segment_text(segments),
-            tags=kwargs.get('tags')
+            tags=kwargs.get('tags'),
+            _format=kwargs.get('_format'),
+            style=kwargs.get('style'),
+            extras=kwargs.get('extras')
         )
-        if self.screenshot:
-            print(":需要截图")
-            content += SCREENSHOT
-        if self.link:
-            print(":需要链接")
-            content += LINK
 
-        print(content)
-        return [{"role": "user", "content": content + AI_SUM}]
+        return [{"role": "user", "content": content }]
 
     def list_models(self):
-        return self.client.list_models()
+        return self.client.models.list()
     def summarize(self, source: GPTSource) -> str:
         self.screenshot = source.screenshot
         self.link = source.link
         source.segment = self.ensure_segments_type(source.segment)
-        messages = self.create_messages(source.segment, source.title,source.tags)
-        response = self.client.chat(
+
+        messages = self.create_messages(
+            source.segment,
+            title=source.title,
+            tags=source.tags
+            ,
+            _format=source._format,
+            style=source.style,
+            extras=source.extras
+        )
+        response = self.client.chat.completions.create(
             model=self.model,
             messages=messages,
             temperature=0.7

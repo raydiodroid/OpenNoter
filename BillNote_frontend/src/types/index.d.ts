@@ -5,4 +5,5 @@ export interface IProvider {
   type: string
   apiKey: string
   baseUrl: string
+  enabled: number
 }

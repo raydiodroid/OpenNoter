@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { delete_task } from '@/services/note.ts'
+import { delete_task, generateNote } from '@/services/note.ts'
 
 export type TaskStatus = 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILD'
 
@@ -34,6 +34,15 @@ export interface Task {
   status: TaskStatus
   audioMeta: AudioMeta
   createdAt: string
+  formData: {
+    video_url: string
+    link: undefined | boolean
+    screenshot: undefined | boolean
+    platform: string
+    quality: string
+    model_name: string
+    provider_id: string
+  }
 }
 
 interface TaskStore {
@@ -45,6 +54,7 @@ interface TaskStore {
   clearTasks: () => void
   setCurrentTask: (taskId: string | null) => void
   getCurrentTask: () => Task | null
+  retryTask: (id: string) => void
 }
 
 export const useTaskStore = create<TaskStore>()(
@@ -53,10 +63,11 @@ export const useTaskStore = create<TaskStore>()(
       tasks: [],
       currentTaskId: null,
 
-      addPendingTask: (taskId: string, platform: string) =>
+      addPendingTask: (taskId: string, platform: string, formData: any) =>
         set(state => ({
           tasks: [
             {
+              formData: formData,
               id: taskId,
               status: 'PENDING',
               markdown: '',
@@ -91,6 +102,17 @@ export const useTaskStore = create<TaskStore>()(
         const currentTaskId = get().currentTaskId
         return get().tasks.find(task => task.id === currentTaskId) || null
       },
+      retryTask: async (id: string) => {
+        const task = get().tasks.find(task => task.id === id).formData
+        await generateNote({
+          task_id: id,
+          ...task,
+        })
+        set(state => ({
+          tasks: state.tasks.map(task => (task.id === id ? { ...task, status: 'PENDING' } : task)),
+        }))
+      },
+
       removeTask: async id => {
         const task = get().tasks.find(t => t.id === id)
 

@@ -1,3 +1,5 @@
+from kombu import uuid
+
 from app.db.provider_dao import (
     insert_provider,
     init_provider_table,
@@ -5,50 +7,65 @@ from app.db.provider_dao import (
     get_provider_by_name,
     get_provider_by_id,
     update_provider,
-    delete_provider,
+    delete_provider, get_enabled_providers,
 )
+from app.gpt.gpt_factory import GPTFactory
+from app.models.model_config import ModelConfig
+
 
 class ProviderService:
+    @staticmethod
+    def serialize_provider(row: tuple) -> dict:
+        if not row:
+            return None
+        return {
+            "id": row[0],
+            "name": row[1],
+            "logo": row[2],
+            "type": row[3],
+            "api_key": row[4],
+            "base_url": row[5],
+            "enabled": row[6],
+            "created_at": row[7],
+        }
 
     @staticmethod
-    def add_provider(name: str, api_key: str, base_url: str, logo: str, type_: str):
-        return insert_provider(name, api_key, base_url, logo, type_)
+    def add_provider( name: str, api_key: str, base_url: str, logo: str, type_: str, enabled: int = 1):
+        try:
+            id = uuid().lower()
+            logo='custom'
+            return insert_provider(id, name, api_key, base_url, logo, type_, enabled)
+        except Exception as  e:
+            print('创建模式失败',e)
 
     @staticmethod
     def get_all_providers():
-        provider_list = []
-        provider = get_all_providers()
-
-        for i in provider:
-            provider_list.append({
-                "id": i[0],
-                "name": i[1],
-                "logo": i[2],
-                "type": i[3],         # ✅ 加上类型
-                "api_key": i[4],
-                "base_url": i[5],
-            })
-        return provider_list
+        rows = get_all_providers()
+        return [ProviderService.serialize_provider(row) for row in rows] if rows else []
 
     @staticmethod
     def get_provider_by_name(name: str):
-        return get_provider_by_name(name)
+        row = get_provider_by_name(name)
+        return ProviderService.serialize_provider(row)
 
     @staticmethod
-    def get_provider_by_id(id: int):
-        return get_provider_by_id(id)
+    def get_provider_by_id(id: str):  # 已改为 str 类型
+        row = get_provider_by_id(id)
+        return ProviderService.serialize_provider(row)
+
+            # all_models.extend(provider['models'])
 
     @staticmethod
-    def update_provider(
-        id: int,
-        name: str,
-        api_key: str,
-        base_url: str,
-        logo: str,
-        type_: str
-    ):
-        return update_provider(id, name, api_key, base_url, logo, type_)
+    def update_provider(id: str, data: dict):
+        try:
+        # 过滤掉空值
+            filtered_data = {k: v for k, v in data.items() if v is not None and k != 'id'}
+            print('更新模型供应商',filtered_data)
+            return update_provider(id, **filtered_data)
+
+        except Exception as e:
+            print('更新模型供应商失败：',e)
 
     @staticmethod
-    def delete_provider(id: int):
+    def delete_provider(id: str):
         return delete_provider(id)

@@ -1,6 +1,9 @@
 from typing import Optional
 from fastapi import APIRouter
 from pydantic import BaseModel
+
+from app.models.model_config import ModelConfig
+from app.services.model import ModelService
 from app.utils.response import ResponseWrapper as R
 from app.services.provider import ProviderService
 
@@ -11,16 +14,21 @@ class ProviderRequest(BaseModel):
     name: str
     api_key: str
     base_url: str
-    logo: str
+    logo: Optional[str] = None
     type: str
 
+class TestRequest(BaseModel):
+
+    api_key: str
+    base_url:str
 class ProviderUpdateRequest(BaseModel):
-    id: int
+    id: str
     name: Optional[str] = None
     api_key: Optional[str] = None
     base_url: Optional[str] = None
     logo: Optional[str] = None
     type: Optional[str] = None
+    enabled:Optional[int] = None
 
 @router.post("/add_provider")
 def add_provider(data: ProviderRequest):
@@ -45,7 +53,7 @@ def get_all_providers():
         return R.error(msg=e)
 
 @router.get("/get_provider_by_id/{id}")
-def get_provider_by_id(id: int):
+def get_provider_by_id(id: str):
     try:
         res = ProviderService.get_provider_by_id(id)
         return R.success(data=res)
@@ -60,23 +68,33 @@ def get_provider_by_name(name: str):
     except Exception as e:
         return R.error(msg=e)
 
-@router.post("/update_provider/")
+
+@router.post("/update_provider")
 def update_provider(data: ProviderUpdateRequest):
     try:
         if all(
             field is None
-            for field in [data.name, data.api_key, data.base_url, data.logo, data.type]
+            for field in [data.name, data.api_key, data.base_url, data.logo, data.type,data.enabled]
         ):
             return R.error(msg='请至少填写一个参数')
 
         ProviderService.update_provider(
             id=data.id,
-            name=data.name or '',
-            api_key=data.api_key or '',
-            base_url=data.base_url or '',
-            logo=data.logo or '',
-            type_=data.type or ''
+            data=dict(data)
         )
         return R.success(msg='更新模型供应商成功')
     except Exception as e:
+        print(e)
+        return R.error(msg=e)
+
+@router.post('/connect_test')
+def gpt_connect_test(data:TestRequest):
+    try:
+
+        res= ModelService().connect_test(data.api_key,data.base_url)
+        if not res:
+            return R.error(msg='连接失败')
+        return R.success(msg='连接成功')
+    except Exception as e:
+        print(e)
         return R.error(msg=e)

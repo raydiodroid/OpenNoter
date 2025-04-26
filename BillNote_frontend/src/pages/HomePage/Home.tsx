@@ -3,7 +3,7 @@ import HomeLayout from '@/layouts/HomeLayout.tsx'
 import NoteForm from '@/pages/HomePage/components/NoteForm.tsx'
 import MarkdownViewer from '@/pages/HomePage/components/MarkdownViewer.tsx'
 import { useTaskStore } from '@/store/taskStore'
-type ViewStatus = 'idle' | 'loading' | 'success'
+type ViewStatus = 'idle' | 'loading' | 'success' | 'failed'
 export const HomePage: FC = () => {
   const tasks = useTaskStore(state => state.tasks)
   const currentTaskId = useTaskStore(state => state.currentTaskId)
@@ -21,6 +21,8 @@ export const HomePage: FC = () => {
       setStatus('loading')
     } else if (currentTask.status === 'SUCCESS') {
       setStatus('success')
+    } else if (currentTask.status === 'FAILED') {
+      setStatus('failed')
     }
   }, [currentTask])
 
