@@ -31,7 +31,7 @@ const NoteHistory: FC<NoteHistoryProps> = ({ onSelect, selectedId }) => {
 
   return (
     <>
-      <div className="flex flex-col gap-2">
+      <div className="flex flex-col gap-2 overflow-hidden">
         {tasks.map(task => (
           <div
             className={cn(

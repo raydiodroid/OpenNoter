@@ -2,10 +2,10 @@
 @import 'tw-animate-css';
 
 @custom-variant dark (&:is(.dark *));
-html,body{
+html, body, #root {
   height: 100%;
-  width: 100%;
 }
+
 /* 修改滚动条轨道颜色 */
 ::-webkit-scrollbar {
   width: 8px; /* 控制滚动条的宽度 */

@@ -13,7 +13,7 @@ const History = () => {
           <Clock className="h-4 w-4 text-neutral-500" />
           <h2 className="text-base font-medium text-neutral-900">生成历史</h2>
         </div>
-        <ScrollArea className="h-[800px] w-full">
+        <ScrollArea className="w-full sm:h-[480px] md:h-[720px] lg:h-[92%]">
           {/*<div className="w-full flex-1 overflow-y-auto">*/}
           <NoteHistory onSelect={setCurrentTask} selectedId={currentTaskId} />
           {/*</div>*/}
