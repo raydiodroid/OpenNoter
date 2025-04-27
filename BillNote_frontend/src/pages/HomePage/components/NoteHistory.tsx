@@ -30,76 +30,102 @@ const NoteHistory: FC<NoteHistoryProps> = ({ onSelect, selectedId }) => {
   }
 
   return (
-    <ScrollArea className="h-auto max-h-[20vh] sm:max-h-[10vh]">
-      <div className="flex flex-col space-y-2">
+    <>
+      <div className="flex flex-col gap-2">
         {tasks.map(task => (
           <div
-            key={task.id}
             className={cn(
-              'flex cursor-pointer items-center gap-4 rounded-md border p-3 transition hover:bg-neutral-50',
+              'flex cursor-pointer flex-col rounded-md border border-neutral-200 p-3',
               selectedId === task.id && 'border-primary bg-primary-light'
             )}
-            onClick={() => onSelect(task.id)}
           >
-            {/* 封面图 */}
-            <img
-              src={
-                task.audioMeta.cover_url
-                  ? `/api/image_proxy?url=${encodeURIComponent(task.audioMeta.cover_url)}`
-                  : '/placeholder.png'
-              }
-              alt="封面"
-              className="h-10 w-16 rounded-md object-cover"
-            />
+            <div
+              key={task.id}
+              className={cn('flex items-center gap-4')}
+              onClick={() => onSelect(task.id)}
+            >
+              {/* 封面图 */}
+              <img
+                src={
+                  task.audioMeta.cover_url
+                    ? `/api/image_proxy?url=${encodeURIComponent(task.audioMeta.cover_url)}`
+                    : '/placeholder.png'
+                }
+                alt="封面"
+                className="h-10 w-12 rounded-md object-cover"
+              />
 
-            {/* 标题 + 状态 */}
+              {/* 标题 + 状态 */}
 
-            <div className="flex w-full min-w-0 items-center justify-between gap-2">
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <div className="max-w-[120px] flex-1 truncate font-medium">
-                      {task.audioMeta.title || '未命名笔记'}
-                    </div>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p>{task.audioMeta.title || '未命名笔记'}</p>
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-              <div className="shrink-0">
-                {task.status === 'SUCCESS' && <Badge variant="default">已完成</Badge>}
-                {task.status === 'PENDING' && <Badge variant="outline">等待中</Badge>}
-                {task.status === 'FAILED' && <Badge variant="destructive">失败</Badge>}
+              <div className="flex w-full items-center justify-between gap-2">
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <div className="line-clamp-2 max-w-[180px] flex-1 overflow-hidden text-sm text-ellipsis">
+                        {task.audioMeta.title || '未命名笔记'}
+                      </div>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>{task.audioMeta.title || '未命名笔记'}</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
               </div>
             </div>
+            <div className={'mt-2 flex items-center justify-between text-[10px]'}>
+              <div className="shrink-0">
+                {task.status === 'SUCCESS' && (
+                  <div className={'bg-primary w-10 rounded p-0.5 text-center text-white'}>
+                    已完成
+                  </div>
+                )}
+                {task.status !== 'SUCCESS' && task.status !== 'FAILED' ? (
+                  <div className={'w-10 rounded bg-green-500 p-0.5 text-center text-white'}>
+                    等待中
+                  </div>
+                ) : (
+                  <></>
+                )}
+                {task.status === 'FAILED' && (
+                  <div className={'w-10 rounded bg-red-500 p-0.5 text-center text-white'}>失败</div>
+                )}
+              </div>
 
-            {/* 删除按钮 */}
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    type="button"
-                    size="icon"
-                    variant="ghost"
-                    onClick={e => {
-                      e.stopPropagation()
-                      removeTask(task.id)
-                    }}
-                    className="shrink-0"
-                  >
-                    <Trash className="text-muted-foreground h-4 w-4" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <p>删除</p>
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
+              <div>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        type="button"
+                        size="small"
+                        variant="ghost"
+                        onClick={e => {
+                          e.stopPropagation()
+                          removeTask(task.id)
+                        }}
+                        className="shrink-0"
+                      >
+                        <Trash className="text-muted-foreground h-4 w-4" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>删除</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              </div>
+              {/*<div className="shrink-0">*/}
+              {/*  {task.status === 'SUCCESS' && <Badge variant="default">已完成</Badge>}*/}
+              {/*  {task.status !== 'SUCCESS' && task.status === 'FAILED' && (*/}
+              {/*    <Badge variant="outline">等待中</Badge>*/}
+              {/*  )}*/}
+              {/*  {task.status === 'FAILED' && <Badge variant="destructive">失败</Badge>}*/}
+              {/*</div>*/}
+            </div>
           </div>
         ))}
       </div>
-    </ScrollArea>
+    </>
   )
 }
 
