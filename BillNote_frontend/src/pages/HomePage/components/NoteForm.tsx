@@ -152,15 +152,16 @@ const NoteForm = () => {
 
   return (
     <div className="flex h-full w-full flex-col overflow-hidden p-4">
-      <div className="flex w-full items-center gap-2 py-1.5">
-        <Button type="submit" className="bg-primary w-full sm:w-full" disabled={isGenerating()}>
-          {isGenerating() && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-          {isGenerating() ? '正在生成…' : '生成笔记'}
-        </Button>
-      </div>
+
       <ScrollArea className="sm:h-[400px] md:h-[800px]">
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-2">
+            <div className="flex w-full items-center gap-2 py-1.5">
+              <Button type="submit" className="bg-primary w-full sm:w-full" disabled={isGenerating()}>
+                {isGenerating() && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                {isGenerating() ? '正在生成…' : '生成笔记'}
+              </Button>
+            </div>
             <div className="space-y-2">
               <div className="my-3 flex items-center justify-between">
                 <h2 className="block">视频链接</h2>
