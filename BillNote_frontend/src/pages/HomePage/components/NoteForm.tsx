@@ -34,6 +34,7 @@ import NoteHistory from '@/pages/HomePage/components/NoteHistory.tsx'
 import { useModelStore } from '@/store/modelStore'
 import { Alert } from 'antd'
 import { Textarea } from '@/components/ui/textarea.tsx'
+import { ScrollArea } from '@/components/ui/scroll-area.tsx'
 // ✅ 定义表单 schema
 const formSchema = z.object({
   video_url: z.string().url('请输入正确的视频链接'),
@@ -150,263 +151,269 @@ const NoteForm = () => {
   }, [])
 
   return (
-    <div className="flex h-full flex-col">
-      <Form {...form}>
-        <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
-          <div className="space-y-2">
-            <div className="my-3 flex items-center justify-between">
-              <h2 className="block">视频链接</h2>
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Info className="hover:text-primary h-4 w-4 cursor-pointer text-neutral-400" />
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p className="text-xs">输入视频链接，支持哔哩哔哩、YouTube等平台</p>
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-            </div>
+    <div className="flex h-full w-full flex-col overflow-hidden p-4">
+      <div className="flex w-full items-center gap-2 py-1.5">
+        <Button type="submit" className="bg-primary w-full sm:w-full" disabled={isGenerating()}>
+          {isGenerating() && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+          {isGenerating() ? '正在生成…' : '生成笔记'}
+        </Button>
+      </div>
+      <ScrollArea className="sm:h-[400px] md:h-[800px]">
+        <Form {...form}>
+          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-2">
+            <div className="space-y-2">
+              <div className="my-3 flex items-center justify-between">
+                <h2 className="block">视频链接</h2>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Info className="hover:text-primary h-4 w-4 cursor-pointer text-neutral-400" />
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p className="text-xs">输入视频链接，支持哔哩哔哩、YouTube等平台</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              </div>
 
-            <div className="flex gap-2">
-              {/* 平台选择 */}
-              <FormField
-                control={form.control}
-                name="platform"
-                render={({ field }) => (
-                  <FormItem>
-                    <Select onValueChange={field.onChange} defaultValue={field.value}>
-                      <FormControl>
-                        <SelectTrigger className="w-32">
-                          <SelectValue placeholder="选择平台" />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        <SelectItem value="bilibili">哔哩哔哩</SelectItem>
-                        <SelectItem value="youtube">Youtube</SelectItem>
-                        {/*<SelectItem value="local">本地视频</SelectItem>*/}
-                      </SelectContent>
-                    </Select>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
-              {/* 视频地址 */}
-              <FormField
-                control={form.control}
-                name="video_url"
-                render={({ field }) => (
-                  <FormItem className="flex-1">
-                    <FormControl>
-                      <Input placeholder="视频链接" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            </div>
-            {/*<p className="text-xs text-neutral-500">*/}
-            {/*    支持哔哩哔哩视频链接，例如：*/}
-            {/*    https://www.bilibili.com/video/BV1vc25YQE9X/*/}
-            {/*</p>*/}
-            <FormField
-              control={form.control}
-              name="quality"
-              render={({ field }) => (
-                <FormItem>
-                  <div className="my-3 flex items-center justify-between">
-                    <h2 className="block">音频质量</h2>
-                    <TooltipProvider>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Info className="hover:text-primary h-4 w-4 cursor-pointer text-neutral-400" />
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          <p className="max-w-[200px] text-xs">质量越高，下载体积越大，速度越慢</p>
-                        </TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
-                  </div>
-                  <Select onValueChange={field.onChange} defaultValue={field.value}>
-                    <FormControl>
-                      <SelectTrigger className="w-full">
-                        <SelectValue placeholder="选择质量" />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      <SelectItem value="fast">快速（压缩）</SelectItem>
-                      <SelectItem value="medium">中等（推荐）</SelectItem>
-                      <SelectItem value="slow">高质量（清晰）</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  {/*<FormDescription className="text-xs text-neutral-500">*/}
-                  {/*    质量越高，下载体积越大，速度越慢*/}
-                  {/*</FormDescription>*/}
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
-            <FormField
-              control={form.control}
-              name="model_name"
-              render={({ field }) => (
-                <FormItem>
-                  <div className="my-3 flex items-center justify-between">
-                    <h2 className="block">模型选择</h2>
-                    <TooltipProvider>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Info className="hover:text-primary h-4 w-4 cursor-pointer text-neutral-400" />
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          <p className="max-w-[200px] text-xs">不同模型返回质量不同，可自行测试</p>
-                        </TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
-                  </div>
-                  <Select onValueChange={field.onChange} defaultValue={field.value}>
-                    <FormControl>
-                      <SelectTrigger className="w-full">
-                        <SelectValue placeholder="选择配置好的模型" />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      {modelList.map(item => {
-                        return <SelectItem value={item.model_name}>{item.model_name}</SelectItem>
-                      })}
-                    </SelectContent>
-                  </Select>
-                  {/*<FormDescription className="text-xs text-neutral-500">*/}
-                  {/*    质量越高，下载体积越大，速度越慢*/}
-                  {/*</FormDescription>*/}
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-          </div>
-
-          <FormField
-            control={form.control}
-            name="style"
-            render={({ field }) => (
-              <FormItem>
-                <div className="my-3 flex items-center justify-between">
-                  <h2 className="block">笔记风格</h2>
-                  <TooltipProvider>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Info className="hover:text-primary h-4 w-4 cursor-pointer text-neutral-400" />
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p className="max-w-[200px] text-xs">选择你希望生成的笔记风格</p>
-                      </TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
-                </div>
-
-                <Select onValueChange={field.onChange} defaultValue={field.value}>
-                  <FormControl>
-                    <SelectTrigger className="w-full">
-                      <SelectValue placeholder="选择笔记风格" />
-                    </SelectTrigger>
-                  </FormControl>
-                  <SelectContent>
-                    {noteStyles.map(item => (
-                      <SelectItem key={item.value} value={item.value}>
-                        {item.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-
-                <FormMessage />
-              </FormItem>
-            )}
-          />
-
-          <FormField
-            control={form.control}
-            name="format"
-            render={({ field }) => (
-              <FormItem>
-                <div className="my-3 flex items-center justify-between">
-                  <h2 className="block">笔记格式</h2>
-                  <TooltipProvider>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Info className="hover:text-primary h-4 w-4 cursor-pointer text-neutral-400" />
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p className="text-xs">选择要包含的笔记元素，比如时间戳、截图提示或总结</p>
-                      </TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
-                </div>
-
-                <FormControl>
-                  <div className="flex flex-wrap space-x-1.5">
-                    {noteFormats.map(item => (
-                      <label key={item.value} className="flex items-center space-x-2">
-                        <Checkbox
-                          checked={field.value?.includes(item.value)}
-                          onCheckedChange={checked => {
-                            const currentValue = field.value ?? [] // ✨ 保底是数组
-                            if (checked) {
-                              field.onChange([...currentValue, item.value])
-                            } else {
-                              field.onChange(currentValue.filter(v => v !== item.value))
-                            }
-                          }}
-                        />
-                        <span>{item.label}</span>
-                      </label>
-                    ))}
-                  </div>
-                </FormControl>
+              <div className="flex gap-2">
+                {/* 平台选择 */}
                 <FormField
                   control={form.control}
-                  name="extras"
+                  name="platform"
                   render={({ field }) => (
                     <FormItem>
-                      <div className="my-3 flex items-center justify-between">
-                        <h2 className="block">备注</h2>
-                        <TooltipProvider>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Info className="hover:text-primary h-4 w-4 cursor-pointer text-neutral-400" />
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              <p className="text-xs">会把这段加入到Prompt最后 可自行测试</p>
-                            </TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
-                      </div>
-                      <Textarea placeholder={'笔记需要罗列出 xxx 关键点'} {...field} />
-
-                      {/*<FormDescription className="text-xs text-neutral-500">*/}
-                      {/*    质量越高，下载体积越大，速度越慢*/}
-                      {/*</FormDescription>*/}
+                      <Select onValueChange={field.onChange} defaultValue={field.value}>
+                        <FormControl>
+                          <SelectTrigger className="w-32">
+                            <SelectValue placeholder="选择平台" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          <SelectItem value="bilibili">哔哩哔哩</SelectItem>
+                          <SelectItem value="youtube">Youtube</SelectItem>
+                          {/*<SelectItem value="local">本地视频</SelectItem>*/}
+                        </SelectContent>
+                      </Select>
                       <FormMessage />
                     </FormItem>
                   )}
                 />
 
-                <FormMessage />
-              </FormItem>
-            )}
-          />
+                {/* 视频地址 */}
+                <FormField
+                  control={form.control}
+                  name="video_url"
+                  render={({ field }) => (
+                    <FormItem className="flex-1">
+                      <FormControl>
+                        <Input placeholder="视频链接" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
+              {/*<p className="text-xs text-neutral-500">*/}
+              {/*    支持哔哩哔哩视频链接，例如：*/}
+              {/*    https://www.bilibili.com/video/BV1vc25YQE9X/*/}
+              {/*</p>*/}
+              <FormField
+                control={form.control}
+                name="quality"
+                render={({ field }) => (
+                  <FormItem>
+                    <div className="my-3 flex items-center justify-between">
+                      <h2 className="block">音频质量</h2>
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Info className="hover:text-primary h-4 w-4 cursor-pointer text-neutral-400" />
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p className="max-w-[200px] text-xs">
+                              质量越高，下载体积越大，速度越慢
+                            </p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    </div>
+                    <Select onValueChange={field.onChange} defaultValue={field.value}>
+                      <FormControl>
+                        <SelectTrigger className="w-full">
+                          <SelectValue placeholder="选择质量" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectItem value="fast">快速（压缩）</SelectItem>
+                        <SelectItem value="medium">中等（推荐）</SelectItem>
+                        <SelectItem value="slow">高质量（清晰）</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    {/*<FormDescription className="text-xs text-neutral-500">*/}
+                    {/*    质量越高，下载体积越大，速度越慢*/}
+                    {/*</FormDescription>*/}
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
 
-          <div className={'flex w-full items-center gap-2 py-1.5'}>
-            {/* 提交按钮 */}
-            <Button type="submit" className="bg-primary w-full" disabled={isGenerating()}>
-              {isGenerating() && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              {isGenerating() ? '正在生成…' : '生成笔记'}
-            </Button>
-          </div>
-        </form>
-      </Form>
+              <FormField
+                control={form.control}
+                name="model_name"
+                render={({ field }) => (
+                  <FormItem>
+                    <div className="my-3 flex items-center justify-between">
+                      <h2 className="block">模型选择</h2>
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Info className="hover:text-primary h-4 w-4 cursor-pointer text-neutral-400" />
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p className="max-w-[200px] text-xs">
+                              不同模型返回质量不同，可自行测试
+                            </p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    </div>
+                    <Select onValueChange={field.onChange} defaultValue={field.value}>
+                      <FormControl>
+                        <SelectTrigger className="w-full">
+                          <SelectValue placeholder="选择配置好的模型" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        {modelList.map(item => {
+                          return <SelectItem value={item.model_name}>{item.model_name}</SelectItem>
+                        })}
+                      </SelectContent>
+                    </Select>
+                    {/*<FormDescription className="text-xs text-neutral-500">*/}
+                    {/*    质量越高，下载体积越大，速度越慢*/}
+                    {/*</FormDescription>*/}
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
+
+            <FormField
+              control={form.control}
+              name="style"
+              render={({ field }) => (
+                <FormItem>
+                  <div className="my-3 flex items-center justify-between">
+                    <h2 className="block">笔记风格</h2>
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Info className="hover:text-primary h-4 w-4 cursor-pointer text-neutral-400" />
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p className="max-w-[200px] text-xs">选择你希望生成的笔记风格</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  </div>
+
+                  <Select onValueChange={field.onChange} defaultValue={field.value}>
+                    <FormControl>
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder="选择笔记风格" />
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent>
+                      {noteStyles.map(item => (
+                        <SelectItem key={item.value} value={item.value}>
+                          {item.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name="format"
+              render={({ field }) => (
+                <FormItem>
+                  <div className="my-3 flex items-center justify-between">
+                    <h2 className="block">笔记格式</h2>
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Info className="hover:text-primary h-4 w-4 cursor-pointer text-neutral-400" />
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p className="text-xs">
+                            选择要包含的笔记元素，比如时间戳、截图提示或总结
+                          </p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  </div>
+
+                  <FormControl>
+                    <div className="flex flex-wrap space-x-1.5">
+                      {noteFormats.map(item => (
+                        <label key={item.value} className="flex items-center space-x-2">
+                          <Checkbox
+                            checked={field.value?.includes(item.value)}
+                            onCheckedChange={checked => {
+                              const currentValue = field.value ?? [] // ✨ 保底是数组
+                              if (checked) {
+                                field.onChange([...currentValue, item.value])
+                              } else {
+                                field.onChange(currentValue.filter(v => v !== item.value))
+                              }
+                            }}
+                          />
+                          <span>{item.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </FormControl>
+                  <FormField
+                    control={form.control}
+                    name="extras"
+                    render={({ field }) => (
+                      <FormItem>
+                        <div className="my-3 flex items-center justify-between">
+                          <h2 className="block">备注</h2>
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Info className="hover:text-primary h-4 w-4 cursor-pointer text-neutral-400" />
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p className="text-xs">会把这段加入到Prompt最后 可自行测试</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        </div>
+                        <Textarea placeholder={'笔记需要罗列出 xxx 关键点'} {...field} />
+
+                        {/*<FormDescription className="text-xs text-neutral-500">*/}
+                        {/*    质量越高，下载体积越大，速度越慢*/}
+                        {/*</FormDescription>*/}
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          </form>
+        </Form>
+      </ScrollArea>
 
       {/* 添加一些额外的说明或功能介绍 */}
 
