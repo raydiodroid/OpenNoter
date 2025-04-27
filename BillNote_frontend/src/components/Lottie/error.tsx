@@ -1,6 +1,6 @@
 import { FC } from 'react'
 import Lottie from 'lottie-react'
-import error from '@/assets/Lottie/error.json'
+import error from '@/assets/Lottie/Error.json'
 
 const Error: FC = () => {
   return (
