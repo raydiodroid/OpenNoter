@@ -52,6 +52,8 @@ export const useModelStore = create<ModelStore>()(
         const res = await fetchModels(providerId)
         if (res.data.code === 0 && res.data.data.models.data.length > 0) {
           set({ models: res.data.data.models.data })
+        } else if (res.data.code === 0 && res.data.data.models.length > 0) {
+          set({ models: res.data.data.models.data })
         } else {
           set({ models: [] })
           console.error('模型列表加载失败')
