@@ -13,15 +13,16 @@ import { Link } from 'react-router-dom'
 interface IProps {
   NoteForm: React.ReactNode
   Preview: React.ReactNode
+  History: React.ReactNode
 }
-const HomeLayout: FC<IProps> = ({ NoteForm, Preview }) => {
+const HomeLayout: FC<IProps> = ({ NoteForm, Preview, History }) => {
   const [, setShowSettings] = useState(false)
 
   return (
-    <div className="flex min-h-screen flex-col bg-white">
+    <div className="flex h-screen flex-col overflow-hidden bg-white">
       <div className="flex flex-1">
         {/* 左侧部分：Header + 表单 */}
-        <aside className="flex w-[400px] flex-col border-r border-neutral-200 bg-white">
+        <aside className="flex w-[340px] flex-col border-r border-neutral-200 bg-white">
           {/* Header */}
           <header className="flex h-16 items-center justify-between px-6">
             <div className="flex items-center gap-2">
@@ -51,6 +52,13 @@ const HomeLayout: FC<IProps> = ({ NoteForm, Preview }) => {
             {/*<NoteForm />*/}
             {NoteForm}
           </div>
+        </aside>
+        <aside className="flex h-full w-[300px] flex-col border-r border-neutral-200 bg-white">
+          {/* Header */}
+
+          {/* 表单内容 */}
+          {/*<NoteForm />*/}
+          {History}
         </aside>
 
         {/* 右侧预览区域 */}

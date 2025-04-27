@@ -41,8 +41,10 @@ from events import transcription_finished
 
 logger = get_logger(__name__)
 load_dotenv()
-BACKEND_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
+api_path = os.getenv("API_BASE_URL", "http://localhost")
+BACKEND_PORT= os.getenv("BACKEND_PORT", 8000)
 
+BACKEND_BASE_URL = f"{api_path}:{BACKEND_PORT}"
 output_dir = os.getenv('OUT_DIR')
 image_base_url = os.getenv('IMAGE_BASE_URL')
 logger.info("starting up")
@@ -129,6 +131,7 @@ class NoteGenerator:
         """
         matches = self.extract_screenshot_timestamps(markdown)
         new_markdown = markdown
+        print(f"匹配到的截图：{matches}")
         logger.info(f"开始为笔记生成截图")
         try:
             for idx, (marker, ts) in enumerate(matches):
@@ -137,6 +140,7 @@ class NoteGenerator:
                 image_url = f"{BACKEND_BASE_URL.rstrip('/')}/{image_relative_path.lstrip('/')}"
                 replacement = f"![]({image_url})"
                 new_markdown = new_markdown.replace(marker, replacement, 1)
+            print(f"替换后的 markdown：{new_markdown}")
 
             return new_markdown
         except Exception as e:
@@ -214,7 +218,7 @@ class NoteGenerator:
                     )
                     _path=audio.raw_info.get('path')
                     with open(audio_cache_path, "w", encoding="utf-8") as f:
-                        json.dump(audio.__dict__, f, ensure_ascii=False, indent=2)
+                        json.dump(asdict(audio), f, ensure_ascii=False, indent=2)
                     logger.info(f"音频下载并缓存成功，task_id={task_id}")
             except Exception as e:
                 logger.error(f"❌ 下载音频失败，task_id={task_id}，错误信息：{e}")
@@ -226,13 +230,19 @@ class NoteGenerator:
                 self.update_task_status(task_id, TaskStatus.TRANSCRIBING)
                 if os.path.exists(transcript_cache_path):
                     logger.info(f"检测到已有转写缓存，直接读取，task_id={task_id}")
-                    with open(transcript_cache_path, "r", encoding="utf-8") as f:
-                        transcript_data = json.load(f)
-                    transcript = TranscriptResult(
-                        language=transcript_data["language"],
-                        full_text=transcript_data["full_text"],
-                        segments=[TranscriptSegment(**seg) for seg in transcript_data["segments"]]
-                    )
+                    try:
+                        with open(transcript_cache_path, "r", encoding="utf-8") as f:
+                            transcript_data = json.load(f)
+                        transcript = TranscriptResult(
+                            language=transcript_data["language"],
+                            full_text=transcript_data["full_text"],
+                            segments=[TranscriptSegment(**seg) for seg in transcript_data["segments"]]
+                        )
+                    except (json.JSONDecodeError, KeyError) as e:
+                        logger.warning(f"⚠️ 读取转录缓存失败，重新转录，task_id={task_id}，错误信息：{e}")
+                        transcript: TranscriptResult = self.transcriber.transcript(file_path=audio.file_path)
+                        with open(transcript_cache_path, "w", encoding="utf-8") as f:
+                            json.dump(asdict(transcript), f, ensure_ascii=False, indent=2)
                 else:
                     transcript: TranscriptResult = self.transcriber.transcript(file_path=audio.file_path)
                     with open(transcript_cache_path, "w", encoding="utf-8") as f:

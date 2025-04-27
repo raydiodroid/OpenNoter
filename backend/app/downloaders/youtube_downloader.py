@@ -42,7 +42,9 @@ class YoutubeDownloader(Downloader, ABC):
             title = info.get("title")
             duration = info.get("duration", 0)
             cover_url = info.get("thumbnail")
-            audio_path = os.path.join(output_dir, f"{video_id}.m4a")
+            ext = info.get("ext", "m4a")  # 兜底用 m4a
+            audio_path = os.path.join(output_dir, f"{video_id}.{ext}")
+        print('os.path.join(output_dir, f"{video_id}.{ext}")',os.path.join(output_dir, f"{video_id}.{ext}"))
 
         return AudioDownloadResult(
             file_path=audio_path,

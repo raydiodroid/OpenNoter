@@ -346,7 +346,7 @@ const NoteForm = () => {
                 </div>
 
                 <FormControl>
-                  <div className="flex space-x-1.5">
+                  <div className="flex flex-wrap space-x-1.5">
                     {noteFormats.map(item => (
                       <label key={item.value} className="flex items-center space-x-2">
                         <Checkbox
@@ -383,7 +383,7 @@ const NoteForm = () => {
                           </Tooltip>
                         </TooltipProvider>
                       </div>
-                      <Textarea placeholder={'笔记需要罗列出 xxx 关键点'} />
+                      <Textarea placeholder={'笔记需要罗列出 xxx 关键点'} {...field} />
 
                       {/*<FormDescription className="text-xs text-neutral-500">*/}
                       {/*    质量越高，下载体积越大，速度越慢*/}
@@ -408,44 +408,8 @@ const NoteForm = () => {
         </form>
       </Form>
 
-      {/*生成历史    */}
-      <div className="my-4 flex items-center gap-2">
-        <Clock className="h-4 w-4 text-neutral-500" />
-        <h2 className="text-base font-medium text-neutral-900">生成历史</h2>
-      </div>
-      <div className="min-h-0 flex-1 overflow-auto">
-        <NoteHistory onSelect={setCurrentTask} selectedId={currentTaskId} />
-      </div>
-
       {/* 添加一些额外的说明或功能介绍 */}
-      {showFeatureHint && (
-        <Alert
-          message="功能介绍 v2.0.0"
-          description={
-            <ul className="space-y-2 text-sm text-neutral-600">
-              <li className="flex items-start gap-2">
-                <span className="text-primary font-bold">•</span>
-                <span>自动提取视频内容，生成结构化笔记</span>
-              </li>
-              <li className="flex items-start gap-2">
-                <span className="text-primary font-bold">•</span>
-                <span>支持多个视频平台，包括哔哩哔哩、YouTube等</span>
-              </li>
-              <li className="flex items-start gap-2">
-                <span className="text-primary font-bold">•</span>
-                <span>一键复制笔记，支持Markdown格式</span>
-              </li>
-              <li className="flex items-start gap-2">
-                <span className="text-primary font-bold">•</span>
-                <span>可选择是否插入图片</span>
-              </li>
-            </ul>
-          }
-          type="info"
-          onClose={onClose}
-          closable
-        />
-      )}
+
       {/*<div className="bg-primary-light mt-6 rounded-lg p-4"></div>*/}
     </div>
   )

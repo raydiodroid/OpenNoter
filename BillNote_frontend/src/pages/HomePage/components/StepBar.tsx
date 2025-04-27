@@ -41,9 +41,8 @@ const StepBar: FC<StepBarProps> = ({ steps, currentStep }) => {
             <div className="mt-4 text-center text-xs text-gray-700">{step.label}</div>
 
             {/* 连接线 */}
-            {!isLast && (
-              <div className={`h-1 w-full ${isActive ? 'bg-primary' : 'bg-gray-300'}`}></div>
-            )}
+
+            <div className={`h-1 w-full ${isActive ? 'bg-primary' : 'bg-gray-300'}`}></div>
           </div>
         )
       })}

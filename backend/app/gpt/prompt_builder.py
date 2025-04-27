@@ -40,7 +40,7 @@ def generate_base_prompt(title, segment_text, tags, _format=None, style=None, ex
     # 添加额外内容
     if extras:
         prompt += f"\n{extras}"
-
+    print(prompt)
     return prompt
 
 
