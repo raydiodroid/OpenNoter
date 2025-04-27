@@ -74,7 +74,7 @@ class MLXWhisperTranscriber(Transcriber):
                 raw=result
             )
             
-            self.on_finish(file_path, transcript_result)
+            # self.on_finish(file_path, transcript_result)
             return transcript_result
             
         except Exception as e:
