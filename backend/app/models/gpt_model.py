@@ -11,4 +11,7 @@ class GPTSource:
     tags:str
     screenshot: Optional[bool] = False
     link: Optional[bool] = False
+    style: Optional[str] = None
+    extras: Optional[str] = None
+    _format: Optional[list] = None
 
