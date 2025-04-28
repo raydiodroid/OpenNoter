@@ -34,7 +34,9 @@ BiliNote 是一个开源的 AI 视频笔记助手，支持通过哔哩哔哩、Y
 
 ## 🔧 功能特性
 
-- 支持多平台：Bilibili、YouTube（后续会加入更多平台）
+- 支持多平台：Bilibili、YouTube、本地视频（后续会加入更多平台）
+- 支持返回笔记格式选择
+- 支持笔记风格选择
 - 本地模型音频转写（支持 Fast-Whisper）
 - GPT 大模型总结视频内容（支持 OpenAI、DeepSeek、Qwen）
 - 自动生成结构化 Markdown 笔记
