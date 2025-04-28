@@ -44,10 +44,10 @@ BiliNote 是一个开源的 AI 视频笔记助手，支持通过哔哩哔哩、Y
 
 ## 📸 截图预览
 ![screenshot](./doc/image1.png)
-![screenshot](./doc/image2.png)
 ![screenshot](./doc/image3.png)
 ![screenshot](./doc/image.png)
 ![screenshot](./doc/image4.png)
+![screenshot](./doc/image5.png)
 
 ## 🚀 快速开始
 

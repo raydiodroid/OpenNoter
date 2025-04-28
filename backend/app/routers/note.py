@@ -3,8 +3,9 @@ import json
 import os
 import uuid
 from typing import Optional
+from urllib.parse import urlparse
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, UploadFile, File
 from pydantic import BaseModel, validator
 from dataclasses import asdict
 
@@ -46,14 +47,21 @@ class VideoRequest(BaseModel):
     @validator("video_url")
     def validate_supported_url(cls, v):
         url = str(v)
-        # 支持平台校验
-        if not is_supported_video_url(url):
-            raise ValueError("暂不支持该视频平台或链接格式无效")
+        parsed = urlparse(url)
+        if parsed.scheme in ("http", "https"):
+            # 是网络链接，继续用原有平台校验
+            if not is_supported_video_url(url):
+                raise ValueError("暂不支持该视频平台或链接格式无效")
+        else:
+            # 是本地路径，检测一下文件是否存在
+
+            if not url.startswith('/uploads') and not os.path.exists(url):
+                raise ValueError("本地文件路径不存在")
         return v
 
 
 NOTE_OUTPUT_DIR = "note_results"
-
+UPLOAD_DIR = "uploads"
 
 def save_note_to_file(task_id: str, note):
     os.makedirs(NOTE_OUTPUT_DIR, exist_ok=True)
@@ -96,6 +104,19 @@ def delete_task(data:RecordRequest):
     except Exception as e:
         return R.error(msg=e)
 
+
+
+
+@router.post("/upload")
+async def upload(file: UploadFile = File(...)):
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    file_location = os.path.join(UPLOAD_DIR, file.filename)
+
+    with open(file_location, "wb+") as f:
+        f.write(await file.read())
+
+    # 假设你静态目录挂载了 /uploads
+    return R.success({"url": f"/uploads/{file.filename}"})
 
 @router.post("/generate_note")
 def generate_note(data: VideoRequest, background_tasks: BackgroundTasks):

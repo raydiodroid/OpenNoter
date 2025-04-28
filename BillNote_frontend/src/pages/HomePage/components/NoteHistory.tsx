@@ -45,15 +45,25 @@ const NoteHistory: FC<NoteHistoryProps> = ({ onSelect, selectedId }) => {
               onClick={() => onSelect(task.id)}
             >
               {/* 封面图 */}
-              <img
-                src={
-                  task.audioMeta.cover_url
-                    ? `/api/image_proxy?url=${encodeURIComponent(task.audioMeta.cover_url)}`
-                    : '/placeholder.png'
-                }
-                alt="封面"
-                className="h-10 w-12 rounded-md object-cover"
-              />
+              {task.platform === 'local' ? (
+                <img
+                  src={
+                    task.audioMeta.cover_url ? `${task.audioMeta.cover_url}` : '/placeholder.png'
+                  }
+                  alt="封面"
+                  className="h-10 w-12 rounded-md object-cover"
+                />
+              ) : (
+                <img
+                  src={
+                    task.audioMeta.cover_url
+                      ? `/api/image_proxy?url=${encodeURIComponent(task.audioMeta.cover_url)}`
+                      : '/placeholder.png'
+                  }
+                  alt="封面"
+                  className="h-10 w-12 rounded-md object-cover"
+                />
+              )}
 
               {/* 标题 + 状态 */}
 

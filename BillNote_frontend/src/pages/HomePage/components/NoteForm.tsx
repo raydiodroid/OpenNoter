@@ -35,20 +35,48 @@ import { useModelStore } from '@/store/modelStore'
 import { Alert } from 'antd'
 import { Textarea } from '@/components/ui/textarea.tsx'
 import { ScrollArea } from '@/components/ui/scroll-area.tsx'
+import { uploadFile } from '@/services/upload.ts'
 // ✅ 定义表单 schema
-const formSchema = z.object({
-  video_url: z.string().url('请输入正确的视频链接'),
-  platform: z.string().nonempty('请选择平台'),
-  quality: z.enum(['fast', 'medium', 'slow'], {
-    required_error: '请选择音频质量',
-  }),
-  screenshot: z.boolean().optional(),
-  link: z.boolean().optional(),
-  model_name: z.string().nonempty('请选择模型'),
-  format: z.array(z.string()).default([]), // ✨ 确保默认是空数组
-  style: z.string().nonempty('请选择笔记生成风格'),
-  extras: z.string().optional(),
-})
+const formSchema = z
+  .object({
+    video_url: z.string(),
+    platform: z.string().nonempty('请选择平台'),
+    quality: z.enum(['fast', 'medium', 'slow'], {
+      required_error: '请选择音频质量',
+    }),
+    screenshot: z.boolean().optional(),
+    link: z.boolean().optional(),
+    model_name: z.string().nonempty('请选择模型'),
+    format: z.array(z.string()).default([]),
+    style: z.string().nonempty('请选择笔记生成风格'),
+    extras: z.string().optional(),
+  })
+  .superRefine((data, ctx) => {
+    const { video_url, platform } = data
+
+    if (platform === 'local') {
+      if (!video_url || typeof video_url !== 'string') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: '本地视频路径不能为空',
+          path: ['video_url'],
+        })
+      }
+    } else {
+      try {
+        const url = new URL(video_url)
+        if (!(url.protocol === 'http:' || url.protocol === 'https:')) {
+          throw new Error()
+        }
+      } catch {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: '请输入正确的视频链接',
+          path: ['video_url'],
+        })
+      }
+    }
+  })
 
 type NoteFormValues = z.infer<typeof formSchema>
 const noteFormats = [
@@ -121,6 +149,7 @@ const NoteForm = () => {
       extras: '', // 初始化为空字符串
     },
   })
+  const platform = form.watch('platform')
 
   const onClose = () => {
     setShowFeatureHint(false)
@@ -129,7 +158,25 @@ const NoteForm = () => {
     console.log('🚀 isGenerating', getCurrentTask()?.status)
     return getCurrentTask()?.status === 'PENDING'
   }
+  const handleFileUpload = async (file: File, onSuccess: (url: string) => void) => {
+    if (!file) return
+    const formData = new FormData()
+    formData.append('file', file)
 
+    try {
+      const res = await uploadFile(formData)
+      if (res.data.code === 0) {
+        const uploadedUrl = res.data.data.url
+        console.log('✅ 上传成功', uploadedUrl)
+
+        onSuccess(uploadedUrl)
+      }
+    } catch (error) {
+      console.error('上传失败', error)
+      // 可以弹个 toast 或者提示上传失败
+    }
+  }
+  // TODO 修复选择其他视频平台以后再选择本地视频还可以选择 Link 的问题
   const onSubmit = async (data: NoteFormValues) => {
     console.log('🎯 提交内容：', data)
     const payload = {
@@ -151,13 +198,16 @@ const NoteForm = () => {
   }, [])
 
   return (
-    <div className="flex h-full w-full flex-col overflow-hidden p-4">
-
+    <>
       <ScrollArea className="sm:h-[400px] md:h-[800px]">
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-2">
             <div className="flex w-full items-center gap-2 py-1.5">
-              <Button type="submit" className="bg-primary w-full sm:w-full" disabled={isGenerating()}>
+              <Button
+                type="submit"
+                className="bg-primary w-full sm:w-full"
+                disabled={isGenerating()}
+              >
                 {isGenerating() && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 {isGenerating() ? '正在生成…' : '生成笔记'}
               </Button>
@@ -193,7 +243,7 @@ const NoteForm = () => {
                         <SelectContent>
                           <SelectItem value="bilibili">哔哩哔哩</SelectItem>
                           <SelectItem value="youtube">Youtube</SelectItem>
-                          {/*<SelectItem value="local">本地视频</SelectItem>*/}
+                          <SelectItem value="local">本地视频</SelectItem>
                         </SelectContent>
                       </Select>
                       <FormMessage />
@@ -208,13 +258,72 @@ const NoteForm = () => {
                   render={({ field }) => (
                     <FormItem className="flex-1">
                       <FormControl>
-                        <Input placeholder="视频链接" {...field} />
+                        {form.watch('platform') === 'local' ? (
+                          <div className="flex flex-col gap-2">
+                            {/* 第一行：本地路径输入框 */}
+                            <Input placeholder="请输入本地视频路径" {...field} className="w-full" />
+                          </div>
+                        ) : (
+                          <Input placeholder="请输入视频网站链接" {...field} />
+                        )}
                       </FormControl>
                       <FormMessage />
                     </FormItem>
                   )}
                 />
               </div>
+
+              <FormField
+                control={form.control}
+                name="video_url"
+                render={({ field }) => (
+                  <FormItem className="w-full">
+                    <FormControl>
+                      {form.watch('platform') === 'local' ? (
+                        <div
+                          className="hover:border-primary flex h-40 w-full cursor-pointer items-center justify-center rounded-md border-2 border-dashed border-gray-300 transition-colors"
+                          onDragOver={e => {
+                            e.preventDefault()
+                            e.stopPropagation()
+                          }}
+                          onDrop={e => {
+                            e.preventDefault()
+                            e.stopPropagation()
+                            const file = e.dataTransfer.files?.[0]
+                            if (file) {
+                              handleFileUpload(file, uploadedUrl => {
+                                field.onChange(uploadedUrl)
+                              })
+                            }
+                          }}
+                          onClick={() => {
+                            const input = document.createElement('input')
+                            input.type = 'file'
+                            input.accept = 'video/*'
+                            input.onchange = (e: any) => {
+                              const file = e.target.files?.[0]
+                              if (file) {
+                                handleFileUpload(file, uploadedUrl => {
+                                  field.onChange(uploadedUrl)
+                                })
+                              }
+                            }
+                            input.click()
+                          }}
+                        >
+                          <div className="text-center text-sm text-gray-500">
+                            <p className="mb-2">拖拽文件到这里上传</p>
+                            <p className="text-xs text-gray-400">或点击选择文件</p>
+                          </div>
+                        </div>
+                      ) : (
+                        <></>
+                      )}
+                    </FormControl>
+                    {/* ❗可以不要FormMessage，不然重复两次报错提示 */}
+                  </FormItem>
+                )}
+              />
               {/*<p className="text-xs text-neutral-500">*/}
               {/*    支持哔哩哔哩视频链接，例如：*/}
               {/*    https://www.bilibili.com/video/BV1vc25YQE9X/*/}
@@ -366,6 +475,7 @@ const NoteForm = () => {
                         <label key={item.value} className="flex items-center space-x-2">
                           <Checkbox
                             checked={field.value?.includes(item.value)}
+                            disabled={item.value === 'link' && platform === 'local'}
                             onCheckedChange={checked => {
                               const currentValue = field.value ?? [] // ✨ 保底是数组
                               if (checked) {
@@ -419,7 +529,7 @@ const NoteForm = () => {
       {/* 添加一些额外的说明或功能介绍 */}
 
       {/*<div className="bg-primary-light mt-6 rounded-lg p-4"></div>*/}
-    </div>
+    </>
   )
 }
 
