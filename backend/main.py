@@ -22,15 +22,18 @@ out_dir = os.getenv('OUT_DIR', './static/screenshots')
 
 # 自动创建本地目录（static 和 static/screenshots）
 static_dir = "static"
+uploads_dir = "uploads"
 if not os.path.exists(static_dir):
     os.makedirs(static_dir)
+if not os.path.exists(uploads_dir):
+    os.makedirs(uploads_dir)
 
 if not os.path.exists(out_dir):
     os.makedirs(out_dir)
 
 app = create_app()
 app.mount(static_path, StaticFiles(directory=static_dir), name="static")
-
+app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
 async def startup_event():
     register_handler()
 @app.on_event("startup")

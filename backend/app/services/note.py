@@ -1,6 +1,7 @@
 import json
 from dataclasses import asdict
 
+from app.downloaders.local_downloader import LocalDownloader
 from app.enmus.task_status_enums import TaskStatus
 import os
 from typing import Union, Optional
@@ -23,6 +24,7 @@ from app.models.notes_model import NoteResult
 from app.models.notes_model import AudioDownloadResult
 from app.enmus.note_enums import DownloadQuality
 from app.models.transcriber_model import TranscriptResult, TranscriptSegment
+from app.services.constant import SUPPORT_PLATFORM_MAP
 
 from app.services.provider import ProviderService
 from app.transcriber.base import Transcriber
@@ -92,15 +94,10 @@ class NoteGenerator:
         return gpt
 
     def get_downloader(self, platform: str) -> Downloader:
-        if platform == "bilibili":
-            logger.info("下载 Bilibili 平台视频")
-            return BilibiliDownloader()
-        elif platform == "youtube":
-            logger.info("下载 YouTube 平台视频")
-            return YoutubeDownloader()
-        elif platform == 'douyin':
-            logger.info("下载 Douyin 平台视频")
-            return DouyinDownloader()
+        downloader =SUPPORT_PLATFORM_MAP[platform]
+        if downloader:
+            logger.info(f"使用{downloader}下载器")
+            return downloader
         else:
             logger.warning("不支持的平台")
             raise ValueError(f"不支持的平台：{platform}")
@@ -217,6 +214,7 @@ class NoteGenerator:
                         need_video=screenshot
                     )
                     _path=audio.raw_info.get('path')
+                    print('_path',_path)
                     with open(audio_cache_path, "w", encoding="utf-8") as f:
                         json.dump(asdict(audio), f, ensure_ascii=False, indent=2)
                     logger.info(f"音频下载并缓存成功，task_id={task_id}")
@@ -301,9 +299,10 @@ class NoteGenerator:
             # -------- 6. 完成 --------
             self.update_task_status(task_id, TaskStatus.SUCCESS)
             logger.info(f"✅ 笔记生成成功，task_id={task_id}")
-            transcription_finished.send({
-                "file_path": audio.file_path,
-            })
+            if  platform != 'local':
+                transcription_finished.send({
+                    "file_path": audio.file_path,
+                })
             return NoteResult(
                 markdown=markdown,
                 transcript=transcript,
