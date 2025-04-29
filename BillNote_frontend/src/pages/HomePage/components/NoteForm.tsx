@@ -156,7 +156,7 @@ const NoteForm = () => {
   }
   const isGenerating = () => {
     console.log('🚀 isGenerating', getCurrentTask()?.status)
-    return getCurrentTask()?.status === 'PENDING'
+    return getCurrentTask()?.status != 'SUCCESS' && getCurrentTask()?.status != 'FAILED' && getCurrentTask()?.status != undefined
   }
   const handleFileUpload = async (file: File, onSuccess: (url: string) => void) => {
     if (!file) return
@@ -179,6 +179,8 @@ const NoteForm = () => {
   // TODO 修复选择其他视频平台以后再选择本地视频还可以选择 Link 的问题
   const onSubmit = async (data: NoteFormValues) => {
     console.log('🎯 提交内容：', data)
+    message.success('提交任务')
+
     const payload = {
       video_url: data.video_url,
       platform: data.platform,
