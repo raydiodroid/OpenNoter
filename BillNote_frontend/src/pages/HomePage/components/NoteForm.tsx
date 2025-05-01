@@ -21,7 +21,7 @@ import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Info, Clock, Loader2 } from 'lucide-react'
-
+import { message } from 'antd'
 import {
   Tooltip,
   TooltipContent,
@@ -156,7 +156,11 @@ const NoteForm = () => {
   }
   const isGenerating = () => {
     console.log('🚀 isGenerating', getCurrentTask()?.status)
-    return getCurrentTask()?.status != 'SUCCESS' && getCurrentTask()?.status != 'FAILED' && getCurrentTask()?.status != undefined
+    return (
+      getCurrentTask()?.status != 'SUCCESS' &&
+      getCurrentTask()?.status != 'FAILED' &&
+      getCurrentTask()?.status != undefined
+    )
   }
   const handleFileUpload = async (file: File, onSuccess: (url: string) => void) => {
     if (!file) return
@@ -245,6 +249,7 @@ const NoteForm = () => {
                         <SelectContent>
                           <SelectItem value="bilibili">哔哩哔哩</SelectItem>
                           <SelectItem value="youtube">Youtube</SelectItem>
+                          {/*<SelectItem value="douyin">抖音</SelectItem>*/}
                           <SelectItem value="local">本地视频</SelectItem>
                         </SelectContent>
                       </Select>
