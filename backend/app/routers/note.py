@@ -42,7 +42,7 @@ class VideoRequest(BaseModel):
     task_id: Optional[str] = None
     format: Optional[list] = []
     style: str = None
-    extras: Optional[str]
+    extras: Optional[str]=None
     video_understanding: Optional[bool] = False
     video_interval: Optional[int] = 0
     grid_size: Optional[list] = []

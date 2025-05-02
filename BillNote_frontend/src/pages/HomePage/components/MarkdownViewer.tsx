@@ -2,16 +2,27 @@ import { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { Button } from '@/components/ui/button.tsx'
 import { Copy, Download, FileText, ArrowRight } from 'lucide-react'
-import { toast } from 'sonner' // 你可以换成自己的通知组件
+import { toast } from 'react-hot-toast' // 你可以换成自己的通知组件
 import Error from '@/components/Lottie/error.tsx'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
-import { solarizedlight as codeStyle } from 'react-syntax-highlighter/dist/cjs/styles/prism'
+import { atomDark as codeStyle } from 'react-syntax-highlighter/dist/esm/styles/prism'
+import Zoom from 'react-medium-image-zoom'
+import 'react-medium-image-zoom/dist/styles.css'
+
 import 'github-markdown-css/github-markdown-light.css'
 import { FC } from 'react'
 import Loading from '@/components/Lottie/Loading.tsx'
 import Idle from '@/components/Lottie/Idle.tsx'
 import { useTaskStore } from '@/store/taskStore'
 import StepBar from '@/pages/HomePage/components/StepBar.tsx'
+import gfm from 'remark-gfm'
+import remarkMath from 'remark-math'
+
+import 'katex/dist/katex.min.css'
+
+import rehypeKatex from 'rehype-katex'
+import 'katex/dist/katex.min.css'
+
 interface MarkdownViewerProps {
   content: string
   status: 'idle' | 'loading' | 'success' | 'failed'
@@ -31,6 +42,8 @@ const MarkdownViewer: FC<MarkdownViewerProps> = ({ content, status }) => {
   const currentTask = useTaskStore(state => state.getCurrentTask())
   const taskStatus = currentTask?.status || 'PENDING'
   const retryTask = useTaskStore.getState().retryTask
+  let firstHeadingRendered = false
+
   const handleCopy = async () => {
     try {
       await navigator.clipboard.writeText(content)
@@ -124,7 +137,58 @@ const MarkdownViewer: FC<MarkdownViewerProps> = ({ content, status }) => {
           <div className="markdown-body flex-1 bg-white">
             {' '}
             <ReactMarkdown
+                remarkPlugins={[gfm,remarkMath]}
+                rehypePlugins={[rehypeKatex]}
               components={{
+                img: ({ node, ...props }) => (
+                    <Zoom>
+                    <img
+                        {...props}
+                        className="rounded-lg shadow-md max-w-full cursor-pointer mx-auto my-4  max-h-[300px]  "
+                        alt={props.alt || ''}
+                    />
+                    </Zoom>
+                ),
+                strong({ node, children, ...props }){
+                  return <strong className="text-lg font-bold my-4 text-blue-600"  {...props}>{children}</strong>
+                },
+                li({ node, children, ...props }) {
+                  const rawText = String(children)
+
+                  // 检测是否是“加粗的编号开头项”，比如 "**2. 算法摄影的兴起**"
+                  const isFakeHeading = /^(\*\*.+\*\*)$/.test(rawText.trim())
+
+                  if (isFakeHeading) {
+                    return (
+                        <p className="text-lg  font-bold my-4 text-gray-800 text-left">
+                          {children}
+                        </p>
+                    )
+                  }
+
+                  return <li {...props}>{children}</li>
+                },
+                h1({ node, children, ...props }) {
+                  return (
+                      <h1
+                          className="text-3xl text-center font-bold my-6 text-blue-600"
+                          {...props}
+                      >
+                        {children}
+                      </h1>
+                  )
+                },
+                h2({ node, children, ...props }) {
+                  return (
+                      <h2
+                          className="text-2xl font-bold my-4 text-blue-600"
+                          {...props}
+                      >
+                        {children}
+                      </h2>
+                  )
+                },
+
                 code({ node, inline, className, children, ...props }) {
                   const match = /language-(\w+)/.exec(className || '')
                   const codeContent = String(children).replace(/\n$/, '')
@@ -133,15 +197,17 @@ const MarkdownViewer: FC<MarkdownViewerProps> = ({ content, status }) => {
                     return (
                       <div className="group relative">
                         <SyntaxHighlighter
-                          style={codeStyle}
-                          language={match[1]}
-                          PreTag="div"
-                          {...props}
+                            style={codeStyle}
+                            language={match[1]}
+                            PreTag="div"
+                            {...props}
                         >
                           {codeContent}
                         </SyntaxHighlighter>
+
                         <button
                           onClick={() => {
+                            console.log('点击负责')
                             navigator.clipboard.writeText(codeContent)
                             toast.success('代码已复制')
                           }}
