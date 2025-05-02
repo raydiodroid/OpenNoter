@@ -22,7 +22,7 @@
 
 ## ✨ 项目简介
 
-BiliNote 是一个开源的 AI 视频笔记助手，支持通过哔哩哔哩、YouTube 等视频链接，自动提取内容并生成结构清晰、重点明确的 Markdown 格式笔记。支持插入截图、原片跳转等功能。
+BiliNote 是一个开源的 AI 视频笔记助手，支持通过哔哩哔哩、YouTube、抖音等视频链接，自动提取内容并生成结构清晰、重点明确的 Markdown 格式笔记。支持插入截图、原片跳转等功能。
 
 ## 🚀 体验地址
 [https://www.bilinote.app](https://www.bilinote.app)
@@ -137,20 +137,6 @@ OPENAI_API_KEY=sk-xxxxxx
 DEEP_SEEK_API_KEY=xxx
 QWEN_API_KEY=xxx
 ```
-## Changelog
-  ### v1.1.0
-  - #### Added
-    - 新增 AI 笔记风格选择
-    - 新增 AI 笔记返回格式选择
-    - 添加 AI 自定义笔记备注 Prompt
-    - 添加任务失败重试
-    - 添加全局设置页，可在设置页进行模型设置
-
-  - #### Optimize
-    - 优化前端样式，优化用户体验
-    - 增加生成中间产物，可用于失败后加快生成速度
-  - #### Fix
-    - 修复视频截图视频过早删除错误
 
 ## 🧠 TODO
 
