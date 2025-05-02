@@ -40,7 +40,6 @@ def generate_base_prompt(title, segment_text, tags, _format=None, style=None, ex
     # 添加额外内容
     if extras:
         prompt += f"\n{extras}"
-    print(prompt)
     return prompt
 
 
@@ -104,9 +103,9 @@ def get_link_format():
 
 def get_screenshot_format():
     return '''
-    11. **原片截图**: 如果某个部分涉及**视觉演示**或任何能帮助理解的内容，插入截图提示：
-      - 格式：`*Screenshot-[mm:ss]`
-      至少插入 1-3张截图
+11. **原片截图**:你收到的截图一般是一个网格，网格的每张图片就是一个时间点，左上角会包含时间mm:ss的格式，请你结合我发你的图片插入截图提示，请你帮助用户更好的理解视频内容，请你认真的分析每个图片和对应的转写文案，插入最合适的内容来备注用户理解，请一定按照这个格式 返回否则系统无法解析：
+- 格式：`*Screenshot-[mm:ss]`
+
     '''
 
 

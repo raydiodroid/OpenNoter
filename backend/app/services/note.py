@@ -28,7 +28,7 @@ from app.services.constant import SUPPORT_PLATFORM_MAP
 
 from app.services.provider import ProviderService
 from app.transcriber.base import Transcriber
-from app.transcriber.transcriber_provider import get_transcriber,_transcribers
+from app.transcriber.transcriber_provider import get_transcriber, _transcribers
 from app.transcriber.whisper import WhisperTranscriber
 import re
 
@@ -39,12 +39,13 @@ from app.utils.video_helper import generate_screenshot
 # from app.services.gpt import summarize_text
 from dotenv import load_dotenv
 from app.utils.logger import get_logger
+from app.utils.video_reader import VideoReader
 from events import transcription_finished
 
 logger = get_logger(__name__)
 load_dotenv()
 api_path = os.getenv("API_BASE_URL", "http://localhost")
-BACKEND_PORT= os.getenv("BACKEND_PORT", 8000)
+BACKEND_PORT = os.getenv("BACKEND_PORT", 8000)
 
 BACKEND_BASE_URL = f"{api_path}:{BACKEND_PORT}"
 output_dir = os.getenv('OUT_DIR')
@@ -53,11 +54,12 @@ logger.info("starting up")
 
 NOTE_OUTPUT_DIR = "note_results"
 
+
 class NoteGenerator:
     def __init__(self):
         self.model_size: str = 'base'
         self.device: Union[str, None] = None
-        self.transcriber_type = os.getenv('TRANSCRIBER_TYPE','fast-whisper')
+        self.transcriber_type = os.getenv('TRANSCRIBER_TYPE', 'fast-whisper')
         self.transcriber = self.get_transcriber()
         self.video_path = None
         logger.info("初始化NoteGenerator")
@@ -94,7 +96,7 @@ class NoteGenerator:
         return gpt
 
     def get_downloader(self, platform: str) -> Downloader:
-        downloader =SUPPORT_PLATFORM_MAP[platform]
+        downloader = SUPPORT_PLATFORM_MAP[platform]
         if downloader:
             logger.info(f"使用{downloader}下载器")
             return downloader
@@ -120,7 +122,7 @@ class NoteGenerator:
         insert_video_task(video_id=video_id, platform=platform, task_id=task_id)
 
     def insert_screenshots_into_markdown(self, markdown: str, video_path: str, image_base_url: str,
-                                         output_dir: str,_format:list) -> str:
+                                         output_dir: str, _format: list) -> str:
         """
         扫描 markdown 中的 *Screenshot-xx:xx，生成截图并插入 markdown 图片
         :param markdown:
@@ -128,7 +130,7 @@ class NoteGenerator:
         """
         matches = self.extract_screenshot_timestamps(markdown)
         new_markdown = markdown
-        print(f"匹配到的截图：{matches}")
+
         logger.info(f"开始为笔记生成截图")
         try:
             for idx, (marker, ts) in enumerate(matches):
@@ -137,7 +139,7 @@ class NoteGenerator:
                 image_url = f"{BACKEND_BASE_URL.rstrip('/')}/{image_relative_path.lstrip('/')}"
                 replacement = f"![]({image_url})"
                 new_markdown = new_markdown.replace(marker, replacement, 1)
-            print(f"替换后的 markdown：{new_markdown}")
+
 
             return new_markdown
         except Exception as e:
@@ -180,14 +182,18 @@ class NoteGenerator:
             _format: list = None,
             style: str = None,
             extras: str = None,
-            path: Union[str, None] = None
+            path: Union[str, None] = None,
+            video_understanding: bool = False,
+            video_interval=0,
+            grid_size=[]
     ) -> NoteResult:
+
         try:
             logger.info(f"🎯 开始解析并生成笔记，task_id={task_id}")
             self.update_task_status(task_id, TaskStatus.PARSING)
             downloader = self.get_downloader(platform)
             gpt = self.get_gpt(model_name=model_name, provider_id=provider_id)
-
+            video_img_urls = []
             audio_cache_path = os.path.join(NOTE_OUTPUT_DIR, f"{task_id}_audio.json")
             transcript_cache_path = os.path.join(NOTE_OUTPUT_DIR, f"{task_id}_transcript.json")
             markdown_cache_path = os.path.join(NOTE_OUTPUT_DIR, f"{task_id}_markdown.md")
@@ -201,11 +207,20 @@ class NoteGenerator:
                         audio_data = json.load(f)
                     audio = AudioDownloadResult(**audio_data)
                 else:
-                    if 'screenshot' in _format:
+                    if 'screenshot' in _format or video_understanding:
                         video_path = downloader.download_video(video_url)
                         self.video_path = video_path
                         logger.info(f"成功下载视频文件: {video_path}")
-                    screenshot= 'screenshot' in _format
+                        video_img_urls = VideoReader(
+                            video_path=video_path,
+                            grid_size=tuple(grid_size),
+                            frame_interval=video_interval,
+                            unit_width=1280,
+                            unit_height=720,
+                            save_quality=90,
+                        ).run()
+
+                    screenshot = 'screenshot' in _format
                     audio: AudioDownloadResult = downloader.download(
                         video_url=video_url,
                         quality=quality,
@@ -261,6 +276,7 @@ class NoteGenerator:
                         segment=transcript.segments,
                         tags=audio.raw_info.get('tags'),
                         screenshot=screenshot,
+                        video_img_urls=video_img_urls,
                         link=link,
                         _format=_format,
                         style=style,
@@ -279,12 +295,13 @@ class NoteGenerator:
             # -------- 4. 插入截图 --------
             if _format and 'screenshot' in _format:
                 try:
-                    markdown = self.insert_screenshots_into_markdown(markdown, self.video_path, image_base_url, output_dir,_format)
+                    markdown = self.insert_screenshots_into_markdown(markdown, self.video_path, image_base_url,
+                                                                     output_dir, _format)
                 except Exception as e:
                     logger.warning(f"⚠️ 插入截图失败，跳过处理，task_id={task_id}，错误信息：{e}")
             if _format and 'link' in _format:
                 try:
-                    markdown = replace_content_markers(markdown, video_id=audio.video_id,platform=platform)
+                    markdown = replace_content_markers(markdown, video_id=audio.video_id, platform=platform)
                 except Exception as e:
                     logger.warning(f"⚠️ 插入链接失败，跳过处理，task_id={task_id}，错误信息：{e}")
                 # 注意：截图失败不终止整体流程
@@ -296,7 +313,7 @@ class NoteGenerator:
             # -------- 6. 完成 --------
             self.update_task_status(task_id, TaskStatus.SUCCESS)
             logger.info(f"✅ 笔记生成成功，task_id={task_id}")
-            if  platform != 'local':
+            if platform != 'local':
                 transcription_finished.send({
                     "file_path": audio.file_path,
                 })
@@ -310,7 +327,3 @@ class NoteGenerator:
             logger.error(f"❌ 笔记生成流程异常终止，task_id={task_id}，错误信息：{e}")
             self.update_task_status(task_id, TaskStatus.FAILED, message=str(e))
             raise f'❌ 笔记生成流程异常终止，task_id={task_id}，错误信息：{e}'
-
-
-
-
