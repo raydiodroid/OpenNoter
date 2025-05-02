@@ -3,7 +3,7 @@
     <p align="center">
   <img src="./doc/icon.svg" alt="BiliNote Banner" width="50" height="50"  />
 </p>
-<h1 align="center" > BiliNote v1.3.0</h1>
+<h1 align="center" > BiliNote v1.4.0</h1>
 </div>
 
 <p align="center"><i>AI 视频笔记生成工具 让 AI 为你的视频做笔记</i></p>
@@ -37,6 +37,7 @@ BiliNote 是一个开源的 AI 视频笔记助手，支持通过哔哩哔哩、Y
 - 支持多平台：Bilibili、YouTube、本地视频、抖音（后续会加入更多平台）
 - 支持返回笔记格式选择
 - 支持笔记风格选择
+- 支持多模态视频理解
 - 支持自行配置 GPT 大模型
 - 本地模型音频转写（支持 Fast-Whisper）
 - GPT 大模型总结视频内容
@@ -132,10 +133,11 @@ docker compose up --build
 API_BASE_URL=http://localhost:8000
 OUT_DIR=note_results
 IMAGE_BASE_URL=/static/screenshots
-MODEl_PROVIDER=openai
-OPENAI_API_KEY=sk-xxxxxx
-DEEP_SEEK_API_KEY=xxx
-QWEN_API_KEY=xxx
+# transcriber 相关配置
+TRANSCRIBER_TYPE=fast-whisper # fast-whisper/bcut/kuaishou/mlx-whisper(仅Apple平台)
+WHISPER_MODEL_SIZE=base
+#抖音Cookie设置
+DOUYIN_COOKIES=
 ```
 
 ## 🧠 TODO
@@ -153,6 +155,11 @@ QWEN_API_KEY=xxx
   
   <img src="https://common-1304618721.cos.ap-chengdu.myqcloud.com/20250501113553.png" alt="wechat" style="zoom:33%;" />
 
+
+
+## 🔎代码参考
+- 本项目中的 `抖音下载功能` 部分代码参考引用自：[Evil0ctal/Douyin_TikTok_Download_API](https://github.com/Evil0ctal/Douyin_TikTok_Download_API)
+
 ## 📜 License
 
 MIT License
@@ -161,3 +168,6 @@ MIT License
 
 💬 你的支持与反馈是我持续优化的动力！欢迎 PR、提 issue、Star ⭐️
 
+##⭐ Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=JefferyHcool/BiliNote&type=Date)](https://www.star-history.com/#JefferyHcool/BiliNote&Date)
