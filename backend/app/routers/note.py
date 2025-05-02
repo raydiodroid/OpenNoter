@@ -37,12 +37,15 @@ class VideoRequest(BaseModel):
     quality: DownloadQuality
     screenshot: Optional[bool] = False
     link: Optional[bool] = False
-    model_name:str
-    provider_id:str
+    model_name: str
+    provider_id: str
     task_id: Optional[str] = None
-    format:Optional[list]=[]
-    style:str=None
-    extras:Optional[str]
+    format: Optional[list] = []
+    style: str = None
+    extras: Optional[str]
+    video_understanding: Optional[bool] = False
+    video_interval: Optional[int] = 0
+    grid_size: Optional[list] = []
 
     @field_validator("video_url")
     def validate_supported_url(cls, v):
@@ -59,6 +62,7 @@ class VideoRequest(BaseModel):
 NOTE_OUTPUT_DIR = "note_results"
 UPLOAD_DIR = "uploads"
 
+
 def save_note_to_file(task_id: str, note):
     os.makedirs(NOTE_OUTPUT_DIR, exist_ok=True)
     with open(os.path.join(NOTE_OUTPUT_DIR, f"{task_id}.json"), "w", encoding="utf-8") as f:
@@ -66,8 +70,10 @@ def save_note_to_file(task_id: str, note):
 
 
 def run_note_task(task_id: str, video_url: str, platform: str, quality: DownloadQuality,
-                  link: bool = False,screenshot: bool = False,model_name:str=None,provider_id:str=None,
-                  _format:list=None,style:str=None,extras:str=None):
+                  link: bool = False, screenshot: bool = False, model_name: str = None, provider_id: str = None,
+                  _format: list = None, style: str = None, extras: str = None, video_understanding: bool = False,
+                  video_interval=0, grid_size=[]
+                  ):
     try:
         if not model_name or not provider_id:
             raise HTTPException(status_code=400, detail="请选择模型和提供者")
@@ -84,23 +90,24 @@ def run_note_task(task_id: str, video_url: str, platform: str, quality: Download
             style=style,
             extras=extras,
             screenshot=screenshot
+            , video_understanding=video_understanding,
+            video_interval=video_interval,
+            grid_size=grid_size
         )
-        print('Note 结果',note)
+        logger.info(f"Note generated: {task_id}")
         save_note_to_file(task_id, note)
     except Exception as e:
         save_note_to_file(task_id, {"error": str(e)})
 
 
 @router.post('/delete_task')
-def delete_task(data:RecordRequest):
+def delete_task(data: RecordRequest):
     try:
 
-        NoteGenerator().delete_note(video_id=data.video_id,platform=data.platform)
+        NoteGenerator().delete_note(video_id=data.video_id, platform=data.platform)
         return R.success(msg='删除成功')
     except Exception as e:
         return R.error(msg=e)
-
-
 
 
 @router.post("/upload")
@@ -113,6 +120,7 @@ async def upload(file: UploadFile = File(...)):
 
     # 假设你静态目录挂载了 /uploads
     return R.success({"url": f"/uploads/{file.filename}"})
+
 
 @router.post("/generate_note")
 def generate_note(data: VideoRequest, background_tasks: BackgroundTasks):
@@ -128,7 +136,6 @@ def generate_note(data: VideoRequest, background_tasks: BackgroundTasks):
         #
         #     )
 
-
         if data.task_id:
             # 如果传了task_id，说明是重试！
             task_id = data.task_id
@@ -139,12 +146,12 @@ def generate_note(data: VideoRequest, background_tasks: BackgroundTasks):
             # 正常新建任务
             task_id = str(uuid.uuid4())
 
-        background_tasks.add_task(run_note_task, task_id, data.video_url, data.platform, data.quality,data.link ,data.screenshot,data.model_name,data.provider_id,data.format,data.style,data.extras)
+        background_tasks.add_task(run_note_task, task_id, data.video_url, data.platform, data.quality, data.link,
+                                  data.screenshot, data.model_name, data.provider_id, data.format, data.style,
+                                  data.extras, data.video_understanding, data.video_interval, data.grid_size)
         return R.success({"task_id": task_id})
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-
 
 
 @router.get("/task_status/{task_id}")

@@ -12,6 +12,9 @@ export const generateNote = async (data: {
   format: Array<string>
   style: string
   extras?: string
+  video_understand?: boolean
+  video_interval?: number
+  grid_size:Array<number>
 }) => {
   try {
     const response = await request.post('/generate_note', data)
