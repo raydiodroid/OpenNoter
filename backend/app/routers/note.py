@@ -6,7 +6,7 @@ from typing import Optional
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks, UploadFile, File
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, validator, field_validator
 from dataclasses import asdict
 
 from app.db.video_task_dao import get_task_by_video
@@ -44,7 +44,7 @@ class VideoRequest(BaseModel):
     style:str=None
     extras:Optional[str]
 
-    @validator("video_url")
+    @field_validator("video_url")
     def validate_supported_url(cls, v):
         url = str(v)
         parsed = urlparse(url)
@@ -52,11 +52,7 @@ class VideoRequest(BaseModel):
             # 是网络链接，继续用原有平台校验
             if not is_supported_video_url(url):
                 raise ValueError("暂不支持该视频平台或链接格式无效")
-        else:
-            # 是本地路径，检测一下文件是否存在
 
-            if not url.startswith('/uploads') and not os.path.exists(url):
-                raise ValueError("本地文件路径不存在")
         return v
 
 

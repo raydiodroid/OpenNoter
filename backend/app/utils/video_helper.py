@@ -1,4 +1,6 @@
 import shutil
+from pathlib import Path
+
 from dotenv import load_dotenv
 import subprocess
 import os
@@ -14,22 +16,29 @@ def generate_screenshot(video_path: str, output_dir: str, timestamp: int, index:
     """
     使用 ffmpeg 生成截图，返回生成图片路径
     """
-    os.makedirs(output_dir, exist_ok=True)
-    ids=str(uuid.uuid4())
-    output_path = os.path.join(output_dir, f"screenshot_{str(index)+ids}.jpg")
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    filename = f"screenshot_{index:03}_{uuid.uuid4()}.jpg"
+    output_path = output_dir / filename
 
     command = [
         "ffmpeg",
         "-ss", str(timestamp),
-        "-i", video_path,
+        "-i", str(video_path),
         "-frames:v", "1",
-        "-q:v", "2",  # 图像质量
-        output_path,
-        "-y"  # 覆盖
+        "-q:v", "2",
+        str(output_path),
+        "-y"
     ]
 
-    subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    return output_path
+    print("Running command:", command)
+    result = subprocess.run(command, capture_output=True, text=True)
+
+    if result.returncode != 0:
+        print("ffmpeg failed:", result.stderr)
+
+    return str(output_path)
 
 
 

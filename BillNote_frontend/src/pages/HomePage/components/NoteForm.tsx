@@ -54,7 +54,7 @@ const formSchema = z
   .superRefine((data, ctx) => {
     const { video_url, platform } = data
 
-    if (platform === 'local') {
+    if (platform === 'local' || platform === 'douyin') {
       if (!video_url || typeof video_url !== 'string') {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
@@ -249,7 +249,7 @@ const NoteForm = () => {
                         <SelectContent>
                           <SelectItem value="bilibili">哔哩哔哩</SelectItem>
                           <SelectItem value="youtube">Youtube</SelectItem>
-                          {/*<SelectItem value="douyin">抖音</SelectItem>*/}
+                          <SelectItem value="douyin">抖音</SelectItem>
                           <SelectItem value="local">本地视频</SelectItem>
                         </SelectContent>
                       </Select>
@@ -335,45 +335,45 @@ const NoteForm = () => {
               {/*    支持哔哩哔哩视频链接，例如：*/}
               {/*    https://www.bilibili.com/video/BV1vc25YQE9X/*/}
               {/*</p>*/}
-              <FormField
-                control={form.control}
-                name="quality"
-                render={({ field }) => (
-                  <FormItem>
-                    <div className="my-3 flex items-center justify-between">
-                      <h2 className="block">音频质量</h2>
-                      <TooltipProvider>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Info className="hover:text-primary h-4 w-4 cursor-pointer text-neutral-400" />
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            <p className="max-w-[200px] text-xs">
-                              质量越高，下载体积越大，速度越慢
-                            </p>
-                          </TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                    </div>
-                    <Select onValueChange={field.onChange} defaultValue={field.value}>
-                      <FormControl>
-                        <SelectTrigger className="w-full">
-                          <SelectValue placeholder="选择质量" />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        <SelectItem value="fast">快速（压缩）</SelectItem>
-                        <SelectItem value="medium">中等（推荐）</SelectItem>
-                        <SelectItem value="slow">高质量（清晰）</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    {/*<FormDescription className="text-xs text-neutral-500">*/}
-                    {/*    质量越高，下载体积越大，速度越慢*/}
-                    {/*</FormDescription>*/}
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
+              {/*<FormField*/}
+              {/*  control={form.control}*/}
+              {/*  name="quality"*/}
+              {/*  render={({ field }) => (*/}
+              {/*    <FormItem>*/}
+              {/*      <div className="my-3 flex items-center justify-between">*/}
+              {/*        <h2 className="block">音频质量</h2>*/}
+              {/*        <TooltipProvider>*/}
+              {/*          <Tooltip>*/}
+              {/*            <TooltipTrigger asChild>*/}
+              {/*              <Info className="hover:text-primary h-4 w-4 cursor-pointer text-neutral-400" />*/}
+              {/*            </TooltipTrigger>*/}
+              {/*            <TooltipContent>*/}
+              {/*              <p className="max-w-[200px] text-xs">*/}
+              {/*                质量越高，下载体积越大，速度越慢*/}
+              {/*              </p>*/}
+              {/*            </TooltipContent>*/}
+              {/*          </Tooltip>*/}
+              {/*        </TooltipProvider>*/}
+              {/*      </div>*/}
+              {/*      <Select onValueChange={field.onChange} defaultValue={field.value}>*/}
+              {/*        <FormControl>*/}
+              {/*          <SelectTrigger className="w-full">*/}
+              {/*            <SelectValue placeholder="选择质量" />*/}
+              {/*          </SelectTrigger>*/}
+              {/*        </FormControl>*/}
+              {/*        <SelectContent>*/}
+              {/*          <SelectItem value="fast">快速（压缩）</SelectItem>*/}
+              {/*          <SelectItem value="medium">中等（推荐）</SelectItem>*/}
+              {/*          <SelectItem value="slow">高质量（清晰）</SelectItem>*/}
+              {/*        </SelectContent>*/}
+              {/*      </Select>*/}
+              {/*      /!*<FormDescription className="text-xs text-neutral-500">*!/*/}
+              {/*      /!*    质量越高，下载体积越大，速度越慢*!/*/}
+              {/*      /!*</FormDescription>*!/*/}
+              {/*      <FormMessage />*/}
+              {/*    </FormItem>*/}
+              {/*  )}*/}
+              {/*/>*/}
 
               <FormField
                 control={form.control}

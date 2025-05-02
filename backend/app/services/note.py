@@ -185,7 +185,6 @@ class NoteGenerator:
         try:
             logger.info(f"🎯 开始解析并生成笔记，task_id={task_id}")
             self.update_task_status(task_id, TaskStatus.PARSING)
-            _path=''
             downloader = self.get_downloader(platform)
             gpt = self.get_gpt(model_name=model_name, provider_id=provider_id)
 
@@ -213,8 +212,6 @@ class NoteGenerator:
                         output_dir=path,
                         need_video=screenshot
                     )
-                    _path=audio.raw_info.get('path')
-                    print('_path',_path)
                     with open(audio_cache_path, "w", encoding="utf-8") as f:
                         json.dump(asdict(audio), f, ensure_ascii=False, indent=2)
                     logger.info(f"音频下载并缓存成功，task_id={task_id}")
