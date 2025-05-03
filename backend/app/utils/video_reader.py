@@ -104,6 +104,9 @@ class VideoReader:
     def run(self)->list[str]:
         logger.info("🚀 开始提取视频帧...")
         try:
+            # 确保目录存在
+            os.makedirs(self.frame_dir, exist_ok=True)
+            os.makedirs(self.grid_dir, exist_ok=True)
             #清空帧文件夹
             for file in os.listdir(self.frame_dir):
                 if file.startswith("frame_"):
