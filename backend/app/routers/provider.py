@@ -52,13 +52,13 @@ def get_all_providers():
     except Exception as e:
         return R.error(msg=e)
 
-# @router.get("/get_provider_by_id/{id}")
-# def get_provider_by_id(id: str):
-#     try:
-#         res = ProviderService.get_provider_by_id(id)
-#         return R.success(data=res)
-#     except Exception as e:
-#         return R.error(msg=e)
+@router.get("/get_provider_by_id/{id}")
+def get_provider_by_id(id: str):
+    try:
+        res = ProviderService.get_provider_by_id_safe(id)
+        return R.success(data=res)
+    except Exception as e:
+        return R.error(msg=e)
 #
 # @router.get("/get_provider_by_name/{name}")
 # def get_provider_by_name(name: str):
