@@ -7,6 +7,7 @@ import yt_dlp
 from app.downloaders.base import Downloader, DownloadQuality
 from app.models.notes_model import AudioDownloadResult
 from app.utils.path_helper import get_data_dir
+from app.utils.url_parser import extract_video_id
 
 
 class YoutubeDownloader(Downloader, ABC):
@@ -67,12 +68,15 @@ class YoutubeDownloader(Downloader, ABC):
         """
         if output_dir is None:
             output_dir = get_data_dir()
-
+        video_id = extract_video_id(video_url, "youtube")
+        video_path = os.path.join(output_dir, f"{video_id}.mp4")
+        if os.path.exists(video_path):
+            return video_path
         os.makedirs(output_dir, exist_ok=True)
         output_path = os.path.join(output_dir, "%(id)s.%(ext)s")
 
         ydl_opts = {
-            'format': 'worst[ext=mp4]/worst',
+            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]',
             'outtmpl': output_path,
             'noplaylist': True,
             'quiet': False,

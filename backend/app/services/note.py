@@ -140,7 +140,6 @@ class NoteGenerator:
                 replacement = f"![]({image_url})"
                 new_markdown = new_markdown.replace(marker, replacement, 1)
 
-
             return new_markdown
         except Exception as e:
             logger.error(f"截图生成失败：{e}")
@@ -201,16 +200,23 @@ class NoteGenerator:
             # -------- 1. 下载音频 --------
             try:
                 self.update_task_status(task_id, TaskStatus.DOWNLOADING)
+
+                # 加载音频缓存（如果存在）
+                audio = None
                 if os.path.exists(audio_cache_path):
                     logger.info(f"检测到已有音频缓存，直接读取，task_id={task_id}")
                     with open(audio_cache_path, "r", encoding="utf-8") as f:
                         audio_data = json.load(f)
                     audio = AudioDownloadResult(**audio_data)
-                else:
-                    if 'screenshot' in _format or video_understanding:
+
+                # 需要视频的情况（截图 or 视频理解）
+                need_video = 'screenshot' in _format or video_understanding
+                if need_video:
+                    try:
                         video_path = downloader.download_video(video_url)
                         self.video_path = video_path
                         logger.info(f"成功下载视频文件: {video_path}")
+
                         video_img_urls = VideoReader(
                             video_path=video_path,
                             grid_size=tuple(grid_size),
@@ -219,13 +225,17 @@ class NoteGenerator:
                             unit_height=720,
                             save_quality=90,
                         ).run()
+                    except Exception as e:
+                        logger.error(f"❌ 下载视频失败，task_id={task_id}，错误信息：{e}")
+                        self.update_task_status(task_id, TaskStatus.FAILED, message=f"下载音频失败：{e}")
 
-                    screenshot = 'screenshot' in _format
-                    audio: AudioDownloadResult = downloader.download(
+                # 没有音频缓存就下载音频（可能同时也带上视频）
+                if audio is None:
+                    audio = downloader.download(
                         video_url=video_url,
                         quality=quality,
                         output_dir=path,
-                        need_video=screenshot
+                        need_video='screenshot' in _format,  # 注意这里只为了截图需要
                     )
                     with open(audio_cache_path, "w", encoding="utf-8") as f:
                         json.dump(asdict(audio), f, ensure_ascii=False, indent=2)
@@ -266,27 +276,27 @@ class NoteGenerator:
             # -------- 3. 总结内容 --------
             try:
                 self.update_task_status(task_id, TaskStatus.SUMMARIZING)
-                if os.path.exists(markdown_cache_path):
-                    logger.info(f"检测到已有总结缓存，直接读取，task_id={task_id}")
-                    with open(markdown_cache_path, "r", encoding="utf-8") as f:
-                        markdown = f.read()
-                else:
-                    source = GPTSource(
-                        title=audio.title,
-                        segment=transcript.segments,
-                        tags=audio.raw_info.get('tags'),
-                        screenshot=screenshot,
-                        video_img_urls=video_img_urls,
-                        link=link,
-                        _format=_format,
-                        style=style,
-                        extras=extras
-                    )
+                # if os.path.exists(markdown_cache_path):
+                #     logger.info(f"检测到已有总结缓存，直接读取，task_id={task_id}")
+                #     with open(markdown_cache_path, "r", encoding="utf-8") as f:
+                #         markdown = f.read()
+                # else:
+                source = GPTSource(
+                    title=audio.title,
+                    segment=transcript.segments,
+                    tags=audio.raw_info.get('tags'),
+                    screenshot=screenshot,
+                    video_img_urls=video_img_urls,
+                    link=link,
+                    _format=_format,
+                    style=style,
+                    extras=extras
+                )
 
-                    markdown: str = gpt.summarize(source)
-                    with open(markdown_cache_path, "w", encoding="utf-8") as f:
-                        f.write(markdown)
-                    logger.info(f"GPT总结并缓存成功，task_id={task_id}")
+                markdown: str = gpt.summarize(source)
+                with open(markdown_cache_path, "w", encoding="utf-8") as f:
+                    f.write(markdown)
+                logger.info(f"GPT总结并缓存成功，task_id={task_id}")
             except Exception as e:
                 logger.error(f"❌ 总结内容失败，task_id={task_id}，错误信息：{e}")
                 self.update_task_status(task_id, TaskStatus.FAILED, message=f"总结内容失败：{e}")
@@ -313,10 +323,11 @@ class NoteGenerator:
             # -------- 6. 完成 --------
             self.update_task_status(task_id, TaskStatus.SUCCESS)
             logger.info(f"✅ 笔记生成成功，task_id={task_id}")
-            if platform != 'local':
-                transcription_finished.send({
-                    "file_path": audio.file_path,
-                })
+            # TODO :改为前端一键清除缓存
+            # if platform != 'local':
+            #     transcription_finished.send({
+            #         "file_path": audio.file_path,
+            #     })
             return NoteResult(
                 markdown=markdown,
                 transcript=transcript,

@@ -11,6 +11,8 @@ import Transcriber from '@/pages/SettingPage/transcriber.tsx'
 import ProviderForm from '@/components/Form/modelForm/Form.tsx'
 import StepBar from '@/pages/HomePage/components/StepBar.tsx'
 import Downloading from '@/components/Lottie/download.tsx'
+import Prompt from '@/pages/SettingPage/Prompt.tsx'
+import AboutPage from '@/pages/SettingPage/about.tsx'
 function App() {
   useTaskPolling(3000) // 每 3 秒轮询一次
   const steps = [
@@ -33,7 +35,10 @@ function App() {
                 {/*<Route index element={<Navigate to="openai" replace />} />*/}
                 <Route path=":id" element={<ProviderForm />} />
               </Route>
-              <Route path="transcriber" elment={<Transcriber />}></Route>
+              {/*<Route path="transcriber" elment={<Transcriber />}></Route>*/}
+              <Route path="prompt" element={<Prompt />}></Route>
+              <Route path="about" element={<AboutPage />}></Route>
+
               <Route path="*" element={<NotFoundPage />} />
             </Route>
             <Route path="*" element={<NotFoundPage />} />

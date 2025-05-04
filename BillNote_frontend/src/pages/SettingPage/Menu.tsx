@@ -1,4 +1,11 @@
-import { BotMessageSquare, Captions, HardDriveDownload, Wrench } from 'lucide-react'
+import {
+  BotMessageSquare,
+  SquareChevronRight,
+  Captions,
+  HardDriveDownload,
+  Wrench,
+  Info,
+} from 'lucide-react'
 import MenuBar, { IMenuProps } from '@/pages/SettingPage/components/menuBar.tsx'
 
 const Menu = () => {
@@ -24,6 +31,18 @@ const Menu = () => {
     //   path: '/settings/download',
     // },
     // //其他配置
+    // {
+    //   id: 'prompt',
+    //   name: '提示词设置',
+    //   icon: <SquareChevronRight />,
+    //   path: '/settings/prompt',
+    // },
+    {
+      id: 'about',
+      name: '关于',
+      icon: <Info />,
+      path: '/settings/about',
+    },
     // {
     //   id: 'other',
     //   name: '其他配置',

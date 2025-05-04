@@ -10,6 +10,7 @@ import {
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ResizablePanel, ResizablePanelGroup, ResizableHandle } from '@/components/ui/resizable'
+import {ScrollArea} from "@/components/ui/scroll-area.tsx";
 
 interface IProps {
   NoteForm: React.ReactNode
@@ -47,7 +48,9 @@ const HomeLayout: FC<IProps> = ({ NoteForm, Preview, History }) => {
                 </TooltipProvider>
               </div>
             </header>
-            <div className="flex-1 overflow-auto p-4">{NoteForm}</div>
+            <ScrollArea className="flex-1 overflow-auto">
+              <div className=' p-4' >{NoteForm}</div>
+            </ScrollArea>
           </aside>
         </ResizablePanel>
 
@@ -56,7 +59,9 @@ const HomeLayout: FC<IProps> = ({ NoteForm, Preview, History }) => {
         {/* 中间历史 */}
         <ResizablePanel defaultSize={16} minSize={10} maxSize={30}>
           <aside className="flex h-full flex-col overflow-hidden border-r border-neutral-200 bg-white">
-            <div className="flex-1 overflow-auto p-4">{History}</div>
+            <ScrollArea className="flex-1 overflow-auto">
+            <div className="">{History}</div>
+            </ScrollArea>
           </aside>
         </ResizablePanel>
 
