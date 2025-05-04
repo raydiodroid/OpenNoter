@@ -3,7 +3,7 @@
     <p align="center">
   <img src="./doc/icon.svg" alt="BiliNote Banner" width="50" height="50"  />
 </p>
-<h1 align="center" > BiliNote v1.4.0</h1>
+<h1 align="center" > BiliNote v1.5.0</h1>
 </div>
 
 <p align="center"><i>AI 视频笔记生成工具 让 AI 为你的视频做笔记</i></p>
@@ -38,6 +38,7 @@ BiliNote 是一个开源的 AI 视频笔记助手，支持通过哔哩哔哩、Y
 - 支持返回笔记格式选择
 - 支持笔记风格选择
 - 支持多模态视频理解
+- 支持多版本记录保留
 - 支持自行配置 GPT 大模型
 - 本地模型音频转写（支持 Fast-Whisper）
 - GPT 大模型总结视频内容
@@ -74,7 +75,7 @@ python main.py
 ### 3. 启动前端（Vite + React）
 
 ```bash
-cd BiliNote_frontend
+cd BillNote_frontend
 pnpm install
 pnpm dev
 ```
