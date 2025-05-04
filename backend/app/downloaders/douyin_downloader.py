@@ -249,12 +249,20 @@ class DouyinDownloader(Downloader):
         )
 
     def download_video(self, video_url: str, output_dir: Union[str, None] = None) -> str:
+
         try:
+
             if output_dir is None:
                 output_dir = get_data_dir()
             if not output_dir:
                 output_dir = self.cache_data
             os.makedirs(output_dir, exist_ok=True)
+
+            video_id = self.extract_video_id(video_url)
+            video_path = os.path.join(output_dir, f"{video_id}.mp4")
+            if os.path.exists(video_path):
+                return video_path
+
 
             output_path = os.path.join(output_dir, "%(id)s.%(ext)s")
 

@@ -7,6 +7,7 @@ import yt_dlp
 from app.downloaders.base import Downloader, DownloadQuality, QUALITY_MAP
 from app.models.notes_model import AudioDownloadResult
 from app.utils.path_helper import get_data_dir
+from app.utils.url_parser import extract_video_id
 
 
 class BilibiliDownloader(Downloader, ABC):
@@ -69,10 +70,19 @@ class BilibiliDownloader(Downloader, ABC):
         """
         下载视频，返回视频文件路径
         """
+
         if output_dir is None:
             output_dir = get_data_dir()
-
         os.makedirs(output_dir, exist_ok=True)
+        print("video_url",video_url)
+        video_id=extract_video_id(video_url, "bilibili")
+        video_path = os.path.join(output_dir, f"{video_id}.mp4")
+        if os.path.exists(video_path):
+            return video_path
+
+        # 检查是否已经存在
+
+
         output_path = os.path.join(output_dir, "%(id)s.%(ext)s")
 
         ydl_opts = {

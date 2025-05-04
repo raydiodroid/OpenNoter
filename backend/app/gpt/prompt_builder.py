@@ -58,7 +58,7 @@ def get_format_function(format_type):
 def get_style_format(style):
     style_map = {
         'minimal': '1. **精简信息**: 仅记录最重要的内容，简洁明了。',
-        'detailed': '2. **详细记录**: 包含完整的时间戳和每个部分的详细讨论。',
+        'detailed': '2. **详细记录**: 包含完整的内容和每个部分的详细讨论。需要尽可能多的记录视频内容，最好详细的笔记',
         'academic': '3. **学术风格**: 适合学术报告，正式且结构化。',
         'xiaohongshu': '''4. **小红书风格**: 
 ### 擅长使用下面的爆款关键词：

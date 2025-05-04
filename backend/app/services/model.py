@@ -45,7 +45,16 @@ class ModelService:
         except Exception as e:
             print(f"获取所有模型失败: {e}")
             return []
-
+    @staticmethod
+    def get_all_models_safe(verbose: bool = False):
+        try:
+            raw_models = get_all_models()
+            if verbose:
+                print(f"所有模型列表: {raw_models}")
+            return ModelService._format_models(raw_models)
+        except Exception as e:
+            print(f"获取所有模型失败: {e}")
+            return []
     @staticmethod
     def _format_models(raw_models: list) -> list:
         """

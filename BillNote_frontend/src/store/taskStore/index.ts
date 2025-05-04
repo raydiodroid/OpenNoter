@@ -1,6 +1,8 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { delete_task, generateNote } from '@/services/note.ts'
+import { v4 as uuidv4 } from 'uuid'
+
 
 export type TaskStatus = 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILD'
 
@@ -26,10 +28,17 @@ export interface Transcript {
   raw: any
   segments: Segment[]
 }
+export interface Markdown {
+  ver_id: string
+  content: string
+  style: string
+  model_name: string
+  created_at: string
+}
 
 export interface Task {
   id: string
-  markdown: string
+  markdown: string|Markdown [] //为了兼容之前的笔记
   transcript: Transcript
   status: TaskStatus
   audioMeta: AudioMeta
@@ -64,6 +73,7 @@ export const useTaskStore = create<TaskStore>()(
       currentTaskId: null,
 
       addPendingTask: (taskId: string, platform: string, formData: any) =>
+
         set(state => ({
           tasks: [
             {
@@ -95,23 +105,81 @@ export const useTaskStore = create<TaskStore>()(
         })),
 
       updateTaskContent: (id, data) =>
-        set(state => ({
-          tasks: state.tasks.map(task => (task.id === id ? { ...task, ...data } : task)),
-        })),
+          set(state => ({
+            tasks: state.tasks.map(task => {
+              if (task.id !== id) return task
+
+              if (task.status === 'SUCCESS' && data.status === 'SUCCESS') return task
+
+              // 如果是 markdown 字符串，封装为版本
+              if (typeof data.markdown === 'string') {
+                const prev = task.markdown
+                const newVersion: Markdown = {
+                  ver_id: `${task.id}-${uuidv4()}`,
+                  content: data.markdown,
+                  style: task.formData.style || '',
+                  model_name: task.formData.model_name || '',
+                  created_at: new Date().toISOString(),
+                }
+
+                let updatedMarkdown: Markdown[]
+                if (Array.isArray(prev)) {
+                  updatedMarkdown = [newVersion, ...prev]
+                } else {
+                  updatedMarkdown = [
+                    newVersion,
+                    ...(typeof prev === 'string' && prev
+                        ? [{
+                          ver_id: `${task.id}-${uuidv4()}`,
+                          content: prev,
+                          style: task.formData.style || '',
+                          model_name: task.formData.model_name || '',
+                          created_at: new Date().toISOString(),
+                        }]
+                        : []),
+                  ]
+                }
+
+                return {
+                  ...task,
+                  ...data,
+                  markdown: updatedMarkdown,
+                }
+              }
+
+              return { ...task, ...data }
+            }),
+          })),
+
+
       getCurrentTask: () => {
         const currentTaskId = get().currentTaskId
         return get().tasks.find(task => task.id === currentTaskId) || null
       },
-      retryTask: async (id: string) => {
-        const task = get().tasks.find(task => task.id === id).formData
+      retryTask: async (id: string, payload?: any) => {
+        const task = get().tasks.find(task => task.id === id)
+        if (!task) return
+
+        const newFormData = payload || task.formData
+
         await generateNote({
           task_id: id,
-          ...task,
+          ...newFormData,
         })
+
         set(state => ({
-          tasks: state.tasks.map(task => (task.id === id ? { ...task, status: 'PENDING' } : task)),
+          tasks: state.tasks.map(t =>
+              t.id === id
+                  ? {
+                    ...t,
+                    formData: newFormData, // ✅ 显式更新 formData
+                    status: 'PENDING',
+                  }
+                  : t
+          ),
         }))
       },
+
 
       removeTask: async id => {
         const task = get().tasks.find(t => t.id === id)

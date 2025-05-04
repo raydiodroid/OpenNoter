@@ -47,26 +47,26 @@ def add_provider(data: ProviderRequest):
 @router.get("/get_all_providers")
 def get_all_providers():
     try:
-        res = ProviderService.get_all_providers()
+        res = ProviderService.get_all_providers_safe()
         return R.success(data=res)
     except Exception as e:
         return R.error(msg=e)
 
-@router.get("/get_provider_by_id/{id}")
-def get_provider_by_id(id: str):
-    try:
-        res = ProviderService.get_provider_by_id(id)
-        return R.success(data=res)
-    except Exception as e:
-        return R.error(msg=e)
-
-@router.get("/get_provider_by_name/{name}")
-def get_provider_by_name(name: str):
-    try:
-        res = ProviderService.get_provider_by_name(name)
-        return R.success(data=res)
-    except Exception as e:
-        return R.error(msg=e)
+# @router.get("/get_provider_by_id/{id}")
+# def get_provider_by_id(id: str):
+#     try:
+#         res = ProviderService.get_provider_by_id(id)
+#         return R.success(data=res)
+#     except Exception as e:
+#         return R.error(msg=e)
+#
+# @router.get("/get_provider_by_name/{name}")
+# def get_provider_by_name(name: str):
+#     try:
+#         res = ProviderService.get_provider_by_name(name)
+#         return R.success(data=res)
+#     except Exception as e:
+#         return R.error(msg=e)
 
 
 @router.post("/update_provider")

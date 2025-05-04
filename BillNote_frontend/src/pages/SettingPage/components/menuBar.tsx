@@ -13,10 +13,10 @@ interface IMenuItem {
   menuItem: IMenuProps
 }
 
-const MenuBar: FC<IMenuItem> = ({ menuItem }) => {
+const MenuBar: ({ menuItem }: { menuItem: any }) => JSX.Element = ({ menuItem }) => {
   const location = useLocation()
-  const isActive = location.pathname.startsWith(menuItem.path + '/')
-      || location.pathname === menuItem.path
+  const isActive =
+    location.pathname.startsWith(menuItem.path + '/') || location.pathname === menuItem.path
 
   return (
     <Link to={menuItem.path} className="w-full">
