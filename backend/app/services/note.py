@@ -136,7 +136,7 @@ class NoteGenerator:
             for idx, (marker, ts) in enumerate(matches):
                 image_path = generate_screenshot(video_path, output_dir, ts, idx)
                 image_relative_path = os.path.join(image_base_url, os.path.basename(image_path)).replace("\\", "/")
-                image_url = f"{BACKEND_BASE_URL.rstrip('/')}/{image_relative_path.lstrip('/')}"
+                image_url = f"/static/screenshots/{os.path.basename(image_path)}"
                 replacement = f"![]({image_url})"
                 new_markdown = new_markdown.replace(marker, replacement, 1)
 
