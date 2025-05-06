@@ -106,37 +106,7 @@ sudo apt install ffmpeg
 
 确保你已安装 Docker 和 Docker Compose：
 
-#### 1. 克隆本项目
-```bash
-git clone https://github.com/JefferyHcool/BiliNote.git
-cd BiliNote
-mv .env.example .env #修改对应的环境变量
-```
-#### 2. 启动 Docker Compose
-``` bash
-docker compose up --build
-```
-默认端口：80
-可进行访问 http://localhost:80
-
-.env 文件中可自定义端口与环境配置。
-
-
-## ⚙️ 环境变量配置
-> ⚠️ v.1.1.0 以后无需通过环境变量配置 AI
-
-后端 `.env` 示例：
-
-```ini
-API_BASE_URL=http://localhost:8000
-OUT_DIR=note_results
-IMAGE_BASE_URL=/static/screenshots
-# transcriber 相关配置
-TRANSCRIBER_TYPE=fast-whisper # fast-whisper/bcut/kuaishou/mlx-whisper(仅Apple平台)
-WHISPER_MODEL_SIZE=base
-#抖音Cookie设置
-DOUYIN_COOKIES=
-```
+[docker 部署](https://github.com/JefferyHcool/bilinote-deploy/blob/master/README.md)
 
 ## 🧠 TODO
 
