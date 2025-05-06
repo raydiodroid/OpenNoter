@@ -110,17 +110,14 @@ sudo apt install ffmpeg
 ```bash
 git clone https://github.com/JefferyHcool/BiliNote.git
 cd BiliNote
-mv .env.example .env
+mv .env.example .env #修改对应的环境变量
 ```
 #### 2. 启动 Docker Compose
 ``` bash
 docker compose up --build
 ```
-默认端口：
-
-前端：http://localhost:${FRONTEND_PORT}
-
-后端：http://localhost:${BACKEND_PORT}
+默认端口：80
+可进行访问 http://localhost:80
 
 .env 文件中可自定义端口与环境配置。
 
