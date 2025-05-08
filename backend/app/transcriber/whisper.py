@@ -11,12 +11,24 @@ from events import transcription_finished
 from pathlib import Path
 import os
 from tqdm import tqdm
-from huggingface_hub import snapshot_download
+from modelscope import snapshot_download
+
 
 '''
  Size of the model to use (tiny, tiny.en, base, base.en, small, small.en, distil-small.en, medium, medium.en, distil-medium.en, large-v1, large-v2, large-v3, large, distil-large-v2, distil-large-v3, large-v3-turbo, or turbo
 '''
 logger=get_logger(__name__)
+
+MODEL_MAP={
+    "tiny": "pengzhendong/faster-whisper-tiny",
+    'base':'pengzhendong/faster-whisper-base',
+    'small':'pengzhendong/faster-whisper-small',
+    'medium':'pengzhendong/faster-whisper-medium',
+    'large-v1':'pengzhendong/faster-whisper-large-v1',
+    'large-v2':'pengzhendong/faster-whisper-large-v2',
+    'large-v3':'pengzhendong/faster-whisper-large-v3',
+    'large-v3-turbo':'pengzhendong/faster-whisper-large-v3-turbo',
+}
 
 class WhisperTranscriber(Transcriber):
     # TODO:修改为可配置
@@ -40,16 +52,16 @@ class WhisperTranscriber(Transcriber):
         model_path = os.path.join(model_dir, f"whisper-{model_size}")
         if not Path(model_path).exists():
             logger.info(f"模型 whisper-{model_size} 不存在，开始下载...")
-            repo_id = f"guillaumekln/faster-whisper-{model_size}"
-            snapshot_download(
+            repo_id = MODEL_MAP[model_size]
+            model_path = snapshot_download(
                 repo_id,
+
                 local_dir=model_path,
-                local_dir_use_symlinks=False,
             )
             logger.info("模型下载完成")
 
         self.model = WhisperModel(
-            model_size,
+            model_size_or_path=model_path,
             device=self.device,
             compute_type=self.compute_type,
             cpu_threads=cpu_threads,
