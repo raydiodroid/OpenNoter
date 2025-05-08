@@ -24,12 +24,12 @@ const Menu = () => {
     //   path: '/settings/transcriber',
     // },
     // //下载配置
-    // {
-    //   id: 'download',
-    //   name: '下载配置',
-    //   icon: <HardDriveDownload />,
-    //   path: '/settings/download',
-    // },
+    {
+      id: 'download',
+      name: '下载配置',
+      icon: <HardDriveDownload />,
+      path: '/settings/download',
+    },
     // //其他配置
     // {
     //   id: 'prompt',
