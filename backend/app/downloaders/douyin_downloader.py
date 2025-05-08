@@ -13,13 +13,14 @@ from app.downloaders.base import Downloader
 from app.downloaders.douyin_helper.abogus import ABogus
 from app.enmus.note_enums import DownloadQuality
 from app.models.audio_model import AudioDownloadResult
+from app.services.cookie_manager import CookieConfigManager
 from app.utils.path_helper import get_data_dir
 from dotenv import load_dotenv
 
 load_dotenv()
 DOUYIN_DOMAIN = "https://www.douyin.com"
 
-
+cfm=CookieConfigManager()
 def get_timestamp(unit: str = "milli"):
     """
     根据给定的单位获取当前时间 (Get the current time based on the given unit)
@@ -112,7 +113,7 @@ class DouyinDownloader(Downloader):
     def __init__(self, cookie=None):
         super().__init__()
         self.headers_config = DouyinConfig.HEADERS.copy()
-        self.headers_config["Cookie"] = os.getenv('DOUYIN_COOKIES')
+        self.headers_config["Cookie"] = cfm.get('douyin')
         print(self.headers_config)
         self.proxies_config = DouyinConfig.PROXIES.copy()
         self.ttwid_config = DouyinConfig.TTWID.copy()
