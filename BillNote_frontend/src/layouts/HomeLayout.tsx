@@ -11,7 +11,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ResizablePanel, ResizablePanelGroup, ResizableHandle } from '@/components/ui/resizable'
 import {ScrollArea} from "@/components/ui/scroll-area.tsx";
-
+import logo from '@/assets/icon.svg'
 interface IProps {
   NoteForm: React.ReactNode
   Preview: React.ReactNode
@@ -29,7 +29,7 @@ const HomeLayout: FC<IProps> = ({ NoteForm, Preview, History }) => {
             <header className="flex h-16 items-center justify-between px-6">
               <div className="flex items-center gap-2">
                 <div className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-2xl">
-                  <img src="/icon.svg" alt="logo" className="h-full w-full object-contain" />
+                  <img src={logo} alt="logo" className="h-full w-full object-contain" />
                 </div>
                 <div className="text-2xl font-bold text-gray-800">BiliNote</div>
               </div>

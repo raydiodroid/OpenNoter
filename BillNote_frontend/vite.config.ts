@@ -11,6 +11,7 @@ export default defineConfig(({ mode }) => {
   const port = env.FRONTEND_PORT || 3015
 
   return {
+    base: './',
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {

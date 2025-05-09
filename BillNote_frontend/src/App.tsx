@@ -2,7 +2,7 @@ import './App.css'
 import { HomePage } from './pages/HomePage/Home.tsx'
 import { useTaskPolling } from '@/hooks/useTaskPolling.ts'
 import SettingPage from './pages/SettingPage/index.tsx'
-import { BrowserRouter, Navigate, Routes } from 'react-router-dom'
+import { BrowserRouter,HashRouter, Navigate, Routes } from 'react-router-dom'
 import { Route } from 'react-router-dom'
 import Index from '@/pages/Index.tsx'
 import NotFoundPage from '@/pages/NotFoundPage' //
@@ -26,7 +26,7 @@ function App() {
   ]
   return (
     <>
-      <BrowserRouter>
+      <HashRouter>
         <Routes>
           <Route path="/" element={<Index />}>
             <Route index element={<HomePage />} />
@@ -49,7 +49,7 @@ function App() {
             <Route path="*" element={<NotFoundPage />} />
           </Route>
         </Routes>
-      </BrowserRouter>
+      </HashRouter>
     </>
   )
 }
