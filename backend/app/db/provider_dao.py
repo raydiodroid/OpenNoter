@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 
 from app.db.sqlite_client import get_connection
 from app.utils.logger import get_logger
@@ -7,6 +8,13 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+
+def get_builtin_providers_path():
+    if getattr(sys, 'frozen', False):
+        base_path = sys._MEIPASS
+    else:
+        base_path = os.path.dirname(__file__)
+    return os.path.join(base_path, 'builtin_providers.json')
 
 def seed_default_providers():
     conn = get_connection()
@@ -24,7 +32,7 @@ def seed_default_providers():
         conn.close()
         return
 
-    json_path = os.path.join(os.path.dirname(__file__), 'builtin_providers.json')
+    json_path = get_builtin_providers_path()
     try:
         with open(json_path, 'r', encoding='utf-8') as f:
             providers = json.load(f)
@@ -47,7 +55,6 @@ def seed_default_providers():
                 p['type'],
                 p.get('enabled', 1)
             ))
-
         conn.commit()
         logger.info("Default providers seeded successfully.")
     except Exception as e:
