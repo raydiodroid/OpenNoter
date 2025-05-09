@@ -4,6 +4,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Github, Star, ExternalLink, Download } from 'lucide-react'
 import { ScrollArea } from '@/components/ui/scroll-area.tsx'
+import logo from '@/assets/icon.svg'
 
 export default function AboutPage() {
   const images = [
@@ -19,7 +20,7 @@ export default function AboutPage() {
         <div className="mb-16 flex flex-col items-center justify-center text-center">
           <div className="mb-4 flex items-center gap-4">
             <img
-              src="/public/icon.svg"
+              src={logo}
               alt="BiliNote Logo"
               width={50}
               height={50}
