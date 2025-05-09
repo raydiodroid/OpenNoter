@@ -6,6 +6,7 @@ import ffmpeg
 from PIL import Image, ImageDraw, ImageFont
 
 from app.utils.logger import get_logger
+from app.utils.path_helper import get_app_dir
 
 logger = get_logger(__name__)
 class VideoReader:
@@ -17,16 +18,17 @@ class VideoReader:
                  unit_height=540,
                  save_quality=90,
                  font_path="fonts/arial.ttf",
-                 frame_dir="data/output_frames",
-                 grid_dir="data/grid_output"):
+                 frame_dir=None,
+                 grid_dir=None):
         self.video_path = video_path
         self.grid_size = grid_size
         self.frame_interval = frame_interval
         self.unit_width = unit_width
         self.unit_height = unit_height
         self.save_quality = save_quality
+        self.frame_dir = frame_dir or get_app_dir("output_frames")
+        self.grid_dir = grid_dir or get_app_dir("grid_output")
         self.font_path = font_path
-        self.frame_dir = frame_dir
         self.grid_dir = grid_dir
 
     def format_time(self, seconds: float) -> str:
