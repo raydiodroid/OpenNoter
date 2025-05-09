@@ -319,4 +319,5 @@ cython_debug/
 /backend/bili_note.db
 /backend/uploads/*
 /backend/.idea/*
+/backend/config/*
 /BiliNote_frontend/.idea/*

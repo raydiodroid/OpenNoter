@@ -8,6 +8,7 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd() + '/../')
 
   const apiBaseUrl = env.VITE_API_BASE_URL
+  const port = env.FRONTEND_PORT || 3015
 
   return {
     plugins: [react(), tailwindcss()],
@@ -18,7 +19,7 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       host: '0.0.0.0',
-      port: 5173,
+      port: port,
       proxy: {
         '/api': {
           target: apiBaseUrl,
