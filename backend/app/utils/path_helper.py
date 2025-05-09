@@ -7,10 +7,10 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")
 
 def get_data_dir():
     if getattr(sys, 'frozen', False):
-        # ✅ 打包后使用可写的运行目录
+
         base_dir = os.path.dirname(sys.executable)
     else:
-        # ✅ 开发时使用项目根目录下的 data 目录
+
         base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../data"))
 
     data_path = os.path.join(base_dir, "data")
