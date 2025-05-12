@@ -21,15 +21,7 @@
     "type": "built-in",
     "logo": "Qwen",
     "api_key": "",
-    "base_url": "https://qwen.aliyun.com/api"
-  },
-  {
-    "id": "doubao",
-    "name": "豆包 (Doubao)",
-    "type": "built-in",
-    "logo": "Doubao",
-    "api_key": "",
-    "base_url": "https://open.doubao.com/api"
+    "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1"
   },
     {
     "id": "Claude",
@@ -38,5 +30,13 @@
     "logo": "Claude",
     "api_key": "",
     "base_url": "https://"
+  },
+  {
+    "id": "gemini",
+    "name": "Gemini",
+    "type": "built-in",
+    "logo": "Gemini",
+    "api_key": "",
+    "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/"
   }
 ]
