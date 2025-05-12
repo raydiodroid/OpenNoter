@@ -1,6 +1,8 @@
 import json
 from dataclasses import asdict
 
+from fastapi import HTTPException
+
 from app.downloaders.local_downloader import LocalDownloader
 from app.enmus.task_status_enums import TaskStatus
 import os
@@ -33,6 +35,7 @@ from app.transcriber.whisper import WhisperTranscriber
 import re
 
 from app.utils.note_helper import replace_content_markers
+from app.utils.status_code import StatusCode
 from app.utils.video_helper import generate_screenshot
 
 # from app.services.whisperer import transcribe_audio
@@ -143,7 +146,15 @@ class NoteGenerator:
             return new_markdown
         except Exception as e:
             logger.error(f"截图生成失败：{e}")
-            raise e
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "code": StatusCode.DOWNLOAD_ERROR,
+                    "msg": f"截图生成失败",
+                    "error": str(e)
+                }
+            )
+
 
     @staticmethod
     def delete_note(video_id: str, platform: str):
@@ -226,8 +237,16 @@ class NoteGenerator:
                             save_quality=90,
                         ).run()
                     except Exception as e:
-                        logger.error(f"❌ 下载视频失败，task_id={task_id}，错误信息：{e}")
+                        logger.error(f"Error 下载视频失败，task_id={task_id}，错误信息：{e}")
                         self.update_task_status(task_id, TaskStatus.FAILED, message=f"下载音频失败：{e}")
+                        raise HTTPException(
+                            status_code=500,
+                            detail={
+                                "code": StatusCode.DOWNLOAD_ERROR,
+                                "msg": f"下载视频失败，task_id={task_id}",
+                                "error": str(e)
+                            }
+                        )
 
                 # 没有音频缓存就下载音频（可能同时也带上视频）
                 if audio is None:
@@ -241,9 +260,17 @@ class NoteGenerator:
                         json.dump(asdict(audio), f, ensure_ascii=False, indent=2)
                     logger.info(f"音频下载并缓存成功，task_id={task_id}")
             except Exception as e:
-                logger.error(f"❌ 下载音频失败，task_id={task_id}，错误信息：{e}")
+                logger.error(f"Error 下载音频失败，task_id={task_id}，错误信息：{e}")
                 self.update_task_status(task_id, TaskStatus.FAILED, message=f"下载音频失败：{e}")
-                raise e
+
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "code": StatusCode.DOWNLOAD_ERROR,
+                        "msg": f"下载音频失败，task_id={task_id}",
+                        "error": str(e)
+                    }
+                )
 
             # -------- 2. 转写文字 --------
             try:
@@ -259,7 +286,7 @@ class NoteGenerator:
                             segments=[TranscriptSegment(**seg) for seg in transcript_data["segments"]]
                         )
                     except (json.JSONDecodeError, KeyError) as e:
-                        logger.warning(f"⚠️ 读取转录缓存失败，重新转录，task_id={task_id}，错误信息：{e}")
+                        logger.warning(f"Warning 读取转录缓存失败，重新转录，task_id={task_id}，错误信息：{e}")
                         transcript: TranscriptResult = self.transcriber.transcript(file_path=audio.file_path)
                         with open(transcript_cache_path, "w", encoding="utf-8") as f:
                             json.dump(asdict(transcript), f, ensure_ascii=False, indent=2)
@@ -269,9 +296,16 @@ class NoteGenerator:
                         json.dump(asdict(transcript), f, ensure_ascii=False, indent=2)
                     logger.info(f"文字转写并缓存成功，task_id={task_id}")
             except Exception as e:
-                logger.error(f"❌ 转写文字失败，task_id={task_id}，错误信息：{e}")
+                logger.error(f"Error 转写文字失败，task_id={task_id}，错误信息：{e}")
                 self.update_task_status(task_id, TaskStatus.FAILED, message=f"转写文字失败：{e}")
-                raise e
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "code": StatusCode.GENERATE_ERROR,  # =1003
+                        "msg": f"转写文字失败，task_id={task_id}",
+                        "error": str(e)
+                    }
+                )
 
             # -------- 3. 总结内容 --------
             try:
@@ -298,9 +332,16 @@ class NoteGenerator:
                     f.write(markdown)
                 logger.info(f"GPT总结并缓存成功，task_id={task_id}")
             except Exception as e:
-                logger.error(f"❌ 总结内容失败，task_id={task_id}，错误信息：{e}")
+                logger.error(f"Error 总结内容失败，task_id={task_id}，错误信息：{e}")
                 self.update_task_status(task_id, TaskStatus.FAILED, message=f"总结内容失败：{e}")
-                raise e
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "code": StatusCode.GENERATE_ERROR,  # =1003
+                        "msg": f"总结内容失败，task_id={task_id}",
+                        "error": str(e)
+                    }
+                )
 
             # -------- 4. 插入截图 --------
             if _format and 'screenshot' in _format:
@@ -308,12 +349,12 @@ class NoteGenerator:
                     markdown = self.insert_screenshots_into_markdown(markdown, self.video_path, image_base_url,
                                                                      output_dir, _format)
                 except Exception as e:
-                    logger.warning(f"⚠️ 插入截图失败，跳过处理，task_id={task_id}，错误信息：{e}")
+                    logger.warning(f"Warning 插入截图失败，跳过处理，task_id={task_id}，错误信息：{e}")
             if _format and 'link' in _format:
                 try:
                     markdown = replace_content_markers(markdown, video_id=audio.video_id, platform=platform)
                 except Exception as e:
-                    logger.warning(f"⚠️ 插入链接失败，跳过处理，task_id={task_id}，错误信息：{e}")
+                    logger.warning(f"Warning 插入链接失败，跳过处理，task_id={task_id}，错误信息：{e}")
                 # 注意：截图失败不终止整体流程
 
             # -------- 5. 保存数据库记录 --------
@@ -322,7 +363,7 @@ class NoteGenerator:
 
             # -------- 6. 完成 --------
             self.update_task_status(task_id, TaskStatus.SUCCESS)
-            logger.info(f"✅ 笔记生成成功，task_id={task_id}")
+            logger.info(f"succeed 笔记生成成功，task_id={task_id}")
             # TODO :改为前端一键清除缓存
             # if platform != 'local':
             #     transcription_finished.send({
@@ -335,6 +376,15 @@ class NoteGenerator:
             )
 
         except Exception as e:
-            logger.error(f"❌ 笔记生成流程异常终止，task_id={task_id}，错误信息：{e}")
+            logger.error(f"Error 笔记生成流程异常终止，task_id={task_id}，错误信息：{e}")
             self.update_task_status(task_id, TaskStatus.FAILED, message=str(e))
-            raise f'❌ 笔记生成流程异常终止，task_id={task_id}，错误信息：{e}'
+
+            # 返回结构化错误信息给前端（可以用于日志 + 显示 + 错误定位）
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "code": StatusCode.FAIL,
+                    "msg": f"笔记生成流程异常终止，task_id={task_id}",
+                    "error": str(e)
+                }
+            )

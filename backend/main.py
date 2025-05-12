@@ -4,6 +4,7 @@ import uvicorn
 from starlette.staticfiles import StaticFiles
 from dotenv import load_dotenv
 
+from app.core.exception_handlers import register_exception_handlers
 from app.db.model_dao import init_model_table
 from app.db.provider_dao import init_provider_table
 from app.utils.logger import get_logger
@@ -34,12 +35,12 @@ if not os.path.exists(out_dir):
 app = create_app()
 app.mount(static_path, StaticFiles(directory=static_dir), name="static")
 app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
-async def startup_event():
-    register_handler()
 @app.on_event("startup")
 async def startup_event():
+    register_exception_handlers(app)
     register_handler()
     ensure_ffmpeg_or_raise()
+    register_handler()
     get_transcriber(transcriber_type=os.getenv("TRANSCRIBER_TYPE","fast-whisper"))
     init_video_task_table()
     init_provider_table()
