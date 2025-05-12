@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Copy, Download } from 'lucide-react'
+import { Copy, Download, BrainCircuit } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/ui/select'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
@@ -43,6 +43,8 @@ export function MarkdownHeader({
   createAt,
   showTranscribe,
   setShowTranscribe,
+  viewMode,
+  setViewMode,
 }: NoteHeaderProps) {
   const [copied, setCopied] = useState(false)
 
@@ -122,6 +124,24 @@ export function MarkdownHeader({
 
       {/* 右侧操作按钮 */}
       <div className="flex items-center gap-1">
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                onClick={() => {
+                  setViewMode(viewMode == 'preview' ? 'map' : 'preview')
+                }}
+                variant="ghost"
+                size="sm"
+                className="h-8 px-2"
+              >
+                <BrainCircuit className="mr-1.5 h-4 w-4" />
+                <span className="text-sm">{viewMode == 'preview' ? '思维导图' : 'markdown'}</span>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>思维导图</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
         <TooltipProvider>
           <Tooltip>
             <TooltipTrigger asChild>

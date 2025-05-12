@@ -150,14 +150,33 @@ const NoteForm = () => {
     return
   }, [])
   useEffect(() => {
-    const currentTask = getCurrentTask()
-    const { formData } = currentTask || {}
     if (!currentTask) return
+    const { formData } = currentTask
+
+    console.log('currentTask.formData.platform:', formData.platform)
+
     form.reset({
-      ...formData,
-      extras: formData?.extras || '',
+      platform: formData.platform || 'bilibili',
+      video_url: formData.video_url || '',
+      model_name: formData.model_name || modelList[0]?.model_name || '',
+      style: formData.style || 'minimal',
+      quality: formData.quality || 'medium',
+      extras: formData.extras || '',
+      screenshot: formData.screenshot ?? false,
+      link: formData.link ?? false,
+      video_understanding: formData.video_understanding ?? false,
+      video_interval: formData.video_interval ?? 4,
+      grid_size: formData.grid_size ?? [3, 3],
+      format: formData.format ?? [],
     })
-  }, [currentTaskId])
+  }, [
+    // 当下面任意一个变了，就重新 reset
+    currentTaskId,
+    // modelList 用来兜底 model_name
+    modelList.length,
+    // 还要加上 formData 的各字段，或者直接 currentTask
+    currentTask?.formData,
+  ])
 
   /* ---- 帮助函数 ---- */
   const isGenerating = () => !['SUCCESS', 'FAILED', undefined].includes(getCurrentTask()?.status)
@@ -175,6 +194,7 @@ const NoteForm = () => {
   }
 
   const onSubmit = async (values: NoteFormValues) => {
+    console.log('Not even go here')
     const payload: NoteFormValues = {
       ...values,
       provider_id: modelList.find(m => m.model_name === values.model_name)!.provider_id,
@@ -188,6 +208,10 @@ const NoteForm = () => {
     message.success('已提交任务')
     const { data } = await generateNote(payload)
     addPendingTask(data.task_id, values.platform, payload)
+  }
+  const onInvalid = (errors: FieldErrors<NoteFormValues>) => {
+    console.warn('表单校验失败：', errors)
+    message.error('请完善所有必填项后再提交')
   }
   const handleCreateNew = () => {
     // 🔁 这里清空当前任务状态
@@ -222,7 +246,7 @@ const NoteForm = () => {
   return (
     <div className="h-full w-full">
       <Form {...form}>
-        <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+        <form onSubmit={form.handleSubmit(onSubmit, onInvalid)} className="space-y-4">
           {/* 顶部按钮 */}
           <FormButton></FormButton>
 
