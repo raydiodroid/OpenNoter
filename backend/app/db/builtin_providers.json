@@ -46,5 +46,13 @@
     "logo": "Groq",
     "api_key": "",
     "base_url": "https://api.groq.com/openai/v1"
+  },
+      {
+    "id": "ollama",
+    "name": "ollama",
+    "type": "built-in",
+    "logo": "Ollama",
+    "api_key": "",
+    "base_url": "http://127.0.0.1:11434/v1"
   }
 ]
