@@ -16,7 +16,6 @@ class OpenAICompatibleProvider:
         print(api_key)
         try:
             client = OpenAI(api_key=api_key, base_url=base_url)
-
             client.models.list()
             return True
         except Exception as e:
