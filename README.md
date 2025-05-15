@@ -26,9 +26,7 @@ BiliNote 是一个开源的 AI 视频笔记助手，支持通过哔哩哔哩、Y
 ## 📝 使用文档
 详细文档可以查看[这里](https://docs.bilinote.app/)
 
-## 🚀 体验地址
-[https://www.bilinote.app](https://www.bilinote.app)
-注意：由于 项目部署在 Cloudflare Pages，访问速度可能存在一些问题，请耐心等待。
+
 
 ## 📦 Windows 打包版
 本项目提供了 Windows 系统的 exe 文件，可在[release](https://github.com/JefferyHcool/BiliNote/releases/tag/v1.1.1)进行下载。**注意一定要在没有中文路径的环境下运行。**
