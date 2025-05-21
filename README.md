@@ -121,7 +121,7 @@ sudo apt install ffmpeg
 - BiliNote 交流QQ群：785367111
 - BiliNote 交流微信群:
   
-  <img src="https://common-1304618721.cos.ap-chengdu.myqcloud.com/20250514212449.png" alt="wechat" style="zoom:33%;" />
+  <img src="https://common-1304618721.cos.ap-chengdu.myqcloud.com/20250521090930.png" alt="wechat" style="zoom:33%;" />
 
 
 
