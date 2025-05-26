@@ -14,6 +14,15 @@ def init_model_table():
     conn.commit()
     conn.close()
 
+
+def get_model_by_provider_and_name(provider_id: int, model_name: str):
+    conn = get_connection()
+    cursor = conn.execute(
+        "SELECT * FROM models WHERE provider_id = ? AND model_name = ?",
+        (provider_id, model_name)
+    )
+    row = cursor.fetchone()
+    return row
 # 插入模型
 def insert_model(provider_id: int, model_name: str):
     conn = get_connection()
