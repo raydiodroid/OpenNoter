@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { devtools } from 'zustand/middleware'
-import { fetchModels, addModel, fetchEnableModels } from '@/services/model.ts'
+import { fetchModels, addModel, fetchEnableModels, fetchEnableModelById, deleteModelById } from '@/services/model.ts'
 
 interface IModel {
   id: string
@@ -18,8 +18,10 @@ interface ModelStore {
   selectedModel: string
   loadModels: (providerId: string) => Promise<void>
   loadEnabledModels: () => Promise<void>
+  loadModelsById : (providerId: string) => Promise<void>
   addNewModel: (providerId: string, modelId: string) => Promise<void>
   setSelectedModel: (modelId: string) => void
+  deleteModel: (modelId: number) => Promise<void>
   clearModels: () => void
 }
 
@@ -45,6 +47,10 @@ export const useModelStore = create<ModelStore>()(
         console.error('加载模型出错', error)
       }
     },
+
+    deleteModel: async  (modelId: number) => {
+      await deleteModelById( modelId)
+    },
     // 加载模型列表
     loadModels: async (providerId: string) => {
       try {
@@ -65,7 +71,13 @@ export const useModelStore = create<ModelStore>()(
         set({ loading: false })
       }
     },
-
+    loadModelsById: async (providerId: string)=>{
+      const models  = await fetchEnableModelById(providerId)
+      if (models.data.code === 0) {
+        console.log('模型列表加载成功:', models.data)
+        return models.data.data
+      }
+  },
     // 新增模型
     addNewModel: async (providerId: string, modelId: string) => {
       try {

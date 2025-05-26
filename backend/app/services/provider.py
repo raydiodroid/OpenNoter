@@ -82,15 +82,17 @@ class ProviderService:
             # all_models.extend(provider['models'])
 
     @staticmethod
-    def update_provider(id: str, data: dict):
+    def update_provider(id: str, data: dict)->str | None:
         try:
         # 过滤掉空值
             filtered_data = {k: v for k, v in data.items() if v is not None and k != 'id'}
             print('更新模型供应商',filtered_data)
-            return update_provider(id, **filtered_data)
+            update_provider(id, **filtered_data)
+            return id
 
         except Exception as e:
             print('更新模型供应商失败：',e)
+            return None
 
     @staticmethod
     def delete_provider(id: str):

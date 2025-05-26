@@ -76,8 +76,8 @@ export function ModelSelector({ providerId }: ModelSelectorProps) {
               className="h-8"
             />
           </div>
-          {filteredModels.map(model => (
-            <SelectItem key={model.id} value={model.id}>
+          {filteredModels.map((model, index) => (
+            <SelectItem key={`${model.id}-${index}`} value={model.id}>
               {model.id}
             </SelectItem>
           ))}

@@ -18,8 +18,12 @@ export const testConnection = async (data: any) => {
   return await request.post('/connect_test', data)
 }
 
-export const fetchModels = async (providerId: any) => {
+export const fetchModels = async (providerId: string) => {
   return await request.get('/model_list/' + providerId)
+}
+
+export const fetchEnableModelById = async (id: string) => {
+  return await request.get('/model_enable/' + id)
 }
 
 export async function addModel(data: { provider_id: string; model_name: string }) {
@@ -28,4 +32,8 @@ export async function addModel(data: { provider_id: string; model_name: string }
 
 export const fetchEnableModels = async () => {
   return await request.get('/model_list')
+}
+
+export const deleteModelById = async (modelId: number) => {
+  return await request.get(`/models/delete/${modelId}`)
 }

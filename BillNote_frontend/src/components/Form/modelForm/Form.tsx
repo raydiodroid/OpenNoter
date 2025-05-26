@@ -16,7 +16,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useProviderStore } from '@/store/providerStore'
 import { useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
-import { testConnection, fetchModels } from '@/services/model.ts'
+import { testConnection, fetchModels, deleteModelById } from '@/services/model.ts'
 import {
   Select,
   SelectContent,
@@ -26,6 +26,9 @@ import {
 } from '@/components/ui/select.tsx' // ⚡新增 fetchModels
 import { ModelSelector } from '@/components/Form/modelForm/ModelSelector.tsx'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert.tsx'
+import { Tags } from 'lucide-react'
+import { Tag } from 'antd'
+import { useModelStore } from '@/store/modelStore'
 
 // ✅ Provider表单schema
 const ProviderSchema = z.object({
@@ -52,7 +55,7 @@ interface IModel {
   root: string
 }
 const ProviderForm = ({ isCreate = false }: { isCreate?: boolean }) => {
-  const { id } = useParams()
+  let { id } = useParams()
   const navigate = useNavigate()
   const isEditMode = !isCreate
 
@@ -60,12 +63,16 @@ const ProviderForm = ({ isCreate = false }: { isCreate?: boolean }) => {
   const loadProviderById = useProviderStore(state => state.loadProviderById)
   const updateProvider = useProviderStore(state => state.updateProvider)
   const addNewProvider = useProviderStore(state => state.addNewProvider)
-
   const [loading, setLoading] = useState(true)
   const [testing, setTesting] = useState(false)
   const [isBuiltIn, setIsBuiltIn] = useState(false)
+  const loadModelsById= useModelStore(state => state.loadModelsById)
   const [modelOptions, setModelOptions] = useState<IModel[]>([]) // ⚡新增，保存模型列表
+  const [models, setModels]= useState([])
   const [modelLoading, setModelLoading] = useState(false)
+  const randomColor = ()=>{
+    return '#' + Math.floor(Math.random() * 16777215).toString(16)
+  }
 
   const [search, setSearch] = useState('')
   const providerForm = useForm<ProviderFormValues>({
@@ -91,8 +98,10 @@ const ProviderForm = ({ isCreate = false }: { isCreate?: boolean }) => {
   })
 
   useEffect(() => {
+
     const load = async () => {
       if (isEditMode) {
+
         const data = await loadProviderById(id!)
         providerForm.reset(data)
         setIsBuiltIn(data.type === 'built-in')
@@ -105,11 +114,30 @@ const ProviderForm = ({ isCreate = false }: { isCreate?: boolean }) => {
         })
         setIsBuiltIn(false)
       }
+      const models = await loadModelsById(id!)
+      if(models){
+        console.log('🔧 模型列表:', models)
+        setModels(models)
+
+      }
       setLoading(false)
     }
     load()
   }, [id])
+  const handelDelete=async (modelId)=>{
+    if (!window.confirm('确定要删除这个模型吗？')) return
 
+    try {
+      const res = await deleteModelById(modelId)
+      if (res.data.code === 0) {
+        toast.success('删除成功')
+      } else {
+        toast.error(res.data.msg || '删除失败')
+      }
+    } catch (e) {
+      toast.error('删除异常')
+    }
+  }
   // 测试连通性
   const handleTest = async () => {
     const values = providerForm.getValues()
@@ -118,10 +146,13 @@ const ProviderForm = ({ isCreate = false }: { isCreate?: boolean }) => {
       return
     }
     try {
+      if (!id){
+        toast.error('请先保存供应商信息')
+        return
+      }
       setTesting(true)
       const data = await testConnection({
-        api_key: values.apiKey,
-        base_url: values.baseUrl,
+         id
       })
       if (data.data.code === 0) {
         toast.success('测试连通性成功 🎉')
@@ -162,18 +193,21 @@ const ProviderForm = ({ isCreate = false }: { isCreate?: boolean }) => {
   // 保存Provider信息
   const onProviderSubmit = async (values: ProviderFormValues) => {
     if (isEditMode) {
-      updateProvider({ ...values, id: id! })
+      await updateProvider({ ...values, id: id! })
       toast.success('更新供应商成功')
     } else {
-      addNewProvider({ ...values })
+       id = await addNewProvider({ ...values })
+
       toast.success('新增供应商成功')
     }
+    // 刷新页面
+
   }
 
   // 保存Model信息
   const onModelSubmit = async (values: ModelFormValues) => {
-    console.log('🔧 选择的模型:', values.modelName)
     toast.success(`保存模型: ${values.modelName}`)
+    await loadModelsById(id!)
   }
 
   if (loading) return <div className="p-4">加载中...</div>
@@ -266,6 +300,32 @@ const ProviderForm = ({ isCreate = false }: { isCreate?: boolean }) => {
             <span>请确保已经保存供应商信息,以及通过测试连通性.</span>
           </div>
           <ModelSelector providerId={id!} />
+
+          {/*<datalist id="model-options">*/}
+          {/*  {modelOptions.map(model => (*/}
+          {/*    <option key={model.id + '1'} value={model.id} />*/}
+          {/*  ))}*/}
+          {/*</datalist>*/}
+        </div>
+        <div className="flex flex-col gap-2">
+          <span className="font-bold">已启用模型</span>
+          <div className={'flex flex-wrap gap-2 rounded  p-2.5'}>
+            {
+              models && models.map(model => {
+                return (
+                  <>
+                    <Tag onClose={()=>{
+                      handelDelete(model.id)
+                    }} key={model.id} closable color={'blue'}>
+                      {model.model_name}
+                    </Tag></>
+
+                )
+              })
+            }
+
+          </div>
+          {/*<ModelSelector providerId={id!} />*/}
 
           {/*<datalist id="model-options">*/}
           {/*  {modelOptions.map(model => (*/}

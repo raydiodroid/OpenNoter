@@ -66,7 +66,9 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
       if (res.data.code === 0) {
         const item = res.data.data
         console.log('Provider ', item)
+
         await get().fetchProviderList()
+        return  item
       }
     } catch (error) {
       console.error('Error fetching provider:', error)

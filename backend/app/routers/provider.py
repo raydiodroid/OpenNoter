@@ -2,6 +2,7 @@ from typing import Optional
 from fastapi import APIRouter
 from pydantic import BaseModel
 
+from app.exceptions.provider import ConnectionTestError
 from app.models.model_config import ModelConfig
 from app.services.model import ModelService
 from app.utils.response import ResponseWrapper as R
@@ -18,9 +19,7 @@ class ProviderRequest(BaseModel):
     type: str
 
 class TestRequest(BaseModel):
-
-    api_key: str
-    base_url:str
+    id: str
 class ProviderUpdateRequest(BaseModel):
     id: str
     name: Optional[str] = None
@@ -33,14 +32,14 @@ class ProviderUpdateRequest(BaseModel):
 @router.post("/add_provider")
 def add_provider(data: ProviderRequest):
     try:
-        ProviderService.add_provider(
+        res = ProviderService.add_provider(
             name=data.name,
             api_key=data.api_key,
             base_url=data.base_url,
             logo=data.logo,
             type_=data.type
         )
-        return R.success(msg='添加模型供应商成功')
+        return R.success(msg='添加模型供应商成功',data=res)
     except Exception as e:
         return R.error(msg=e)
 
@@ -78,23 +77,20 @@ def update_provider(data: ProviderUpdateRequest):
         ):
             return R.error(msg='请至少填写一个参数')
 
-        ProviderService.update_provider(
+        provider_id =ProviderService.update_provider(
             id=data.id,
             data=dict(data)
         )
-        return R.success(msg='更新模型供应商成功')
+        return R.success(msg='更新模型供应商成功',data={'id': provider_id})
     except Exception as e:
         print(e)
-        return R.error(msg=e)
+        return R.error(msg=str(e))
 
 @router.post('/connect_test')
-def gpt_connect_test(data:TestRequest):
+def gpt_connect_test(data: TestRequest):
     try:
-
-        res= ModelService().connect_test(data.api_key,data.base_url)
-        if not res:
-            return R.error(msg='连接失败')
+        ModelService().connect_test(data.id)
         return R.success(msg='连接成功')
     except Exception as e:
-        print(e)
-        return R.error(msg=e)
+        print("捕获到异常类型:", type(e))
+        return R.error(msg=str(e))
