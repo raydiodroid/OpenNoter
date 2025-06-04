@@ -40,7 +40,6 @@ async def startup_event():
     register_exception_handlers(app)
     register_handler()
     ensure_ffmpeg_or_raise()
-    register_handler()
     get_transcriber(transcriber_type=os.getenv("TRANSCRIBER_TYPE","fast-whisper"))
     init_video_task_table()
     init_provider_table()
