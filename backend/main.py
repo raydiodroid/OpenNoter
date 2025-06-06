@@ -4,7 +4,7 @@ import uvicorn
 from starlette.staticfiles import StaticFiles
 from dotenv import load_dotenv
 
-from app.core.exception_handlers import register_exception_handlers
+from app.exceptions.exception_handlers import register_exception_handlers
 from app.db.model_dao import init_model_table
 from app.db.provider_dao import init_provider_table
 from app.utils.logger import get_logger
@@ -33,11 +33,14 @@ if not os.path.exists(out_dir):
     os.makedirs(out_dir)
 
 app = create_app()
+register_exception_handlers(app)
 app.mount(static_path, StaticFiles(directory=static_dir), name="static")
 app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
 @app.on_event("startup")
 async def startup_event():
-    register_exception_handlers(app)
+
+
+
     register_handler()
     ensure_ffmpeg_or_raise()
     register_handler()
@@ -46,8 +49,9 @@ async def startup_event():
     init_provider_table()
     init_model_table()
 
+
 if __name__ == "__main__":
     port = int(os.getenv("BACKEND_PORT", 8000))
     host = os.getenv("BACKEND_HOST", "0.0.0.0")
     logger.info(f"Starting server on {host}:{port}")
-    uvicorn.run("main:app", host=host, port=port, reload=False)
+    uvicorn.run(app, host=host, port=port, reload=False)

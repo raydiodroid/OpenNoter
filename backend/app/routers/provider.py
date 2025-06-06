@@ -2,7 +2,7 @@ from typing import Optional
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from app.exceptions.provider import ConnectionTestError
+from app.exceptions.provider import ProviderError
 from app.models.model_config import ModelConfig
 from app.services.model import ModelService
 from app.utils.response import ResponseWrapper as R
@@ -88,9 +88,5 @@ def update_provider(data: ProviderUpdateRequest):
 
 @router.post('/connect_test')
 def gpt_connect_test(data: TestRequest):
-    try:
-        ModelService().connect_test(data.id)
-        return R.success(msg='连接成功')
-    except Exception as e:
-        print("捕获到异常类型:", type(e))
-        return R.error(msg=str(e))
+    ModelService().connect_test(data.id)
+    return R.success(msg='连接成功')

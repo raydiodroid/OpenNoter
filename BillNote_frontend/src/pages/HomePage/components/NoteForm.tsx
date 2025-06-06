@@ -37,6 +37,7 @@ import {
 import { Input } from '@/components/ui/input.tsx'
 import { Textarea } from '@/components/ui/textarea.tsx'
 import { noteStyles, noteFormats, videoPlatforms } from '@/constant/note.ts'
+import { fetchModels } from '@/services/model.ts'
 
 /* -------------------- 校验 Schema -------------------- */
 const formSchema = z
@@ -206,7 +207,7 @@ const NoteForm = () => {
     }
 
     message.success('已提交任务')
-    const { data } = await generateNote(payload)
+    const  data  = await generateNote(payload)
     addPendingTask(data.task_id, values.platform, payload)
   }
   const onInvalid = (errors: FieldErrors<NoteFormValues>) => {
@@ -355,6 +356,9 @@ const NoteForm = () => {
                 <FormItem>
                   <SectionHeader title="模型选择" tip="不同模型效果不同，建议自行测试" />
                   <Select
+                    onOpenChange={()=>{
+                      loadEnabledModels()
+                    }}
                     value={field.value}
                     onValueChange={field.onChange}
                     defaultValue={field.value}

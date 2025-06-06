@@ -26,11 +26,11 @@ export const useTaskPolling = (interval = 3000) => {
         try {
           console.log('🔄 正在轮询任务：', task.id)
           const res = await get_task_status(task.id)
-          const { status } = res.data
+          const { status } = res
 
           if (status && status !== task.status) {
             if (status === 'SUCCESS') {
-              const { markdown, transcript, audio_meta } = res.data.result
+              const { markdown, transcript, audio_meta } = res.result
               toast.success('笔记生成成功')
               updateTaskContent(task.id, {
                 status,
@@ -47,7 +47,7 @@ export const useTaskPolling = (interval = 3000) => {
           }
         } catch (e) {
           console.error('❌ 任务轮询失败：', e)
-          toast.error(`生成失败 ${e.message || e}`)
+          // toast.error(`生成失败 ${e.message || e}`)
           updateTaskContent(task.id, { status: 'FAILED' })
           // removeTask(task.id)
         }

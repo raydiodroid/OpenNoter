@@ -7,3 +7,8 @@ export interface IProvider {
   baseUrl: string
   enabled: number
 }
+export interface IResponse<T> {
+  code: number
+  data:T
+  msg: string
+}

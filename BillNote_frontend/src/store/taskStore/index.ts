@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { delete_task, generateNote } from '@/services/note.ts'
 import { v4 as uuidv4 } from 'uuid'
+import toast from 'react-hot-toast'
 
 
 export type TaskStatus = 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILD'
@@ -157,14 +158,19 @@ export const useTaskStore = create<TaskStore>()(
         return get().tasks.find(task => task.id === currentTaskId) || null
       },
       retryTask: async (id: string, payload?: any) => {
+
+        if (!id){
+          toast.error('任务不存在')
+          return
+        }
         const task = get().tasks.find(task => task.id === id)
+        console.log('retry',task)
         if (!task) return
 
         const newFormData = payload || task.formData
-
         await generateNote({
-          task_id: id,
           ...newFormData,
+          task_id: id,
         })
 
         set(state => ({

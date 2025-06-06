@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { IProvider } from '@/types'
+import { IProvider, IResponse } from '@/types'
 import {
   addProvider,
   getProviderById,
@@ -38,10 +38,9 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
   // 设置整个 provider 列表
   setAllProviders: providers => set({ provider: providers }),
   loadProviderById: async (id: string) => {
-    const res = await getProviderById(id)
-    if (res.data.code === 0) {
-      const item = res.data.data
-      console.log('Provider ', item)
+    const res:IResponse<IProvider> = await getProviderById(id)
+
+      const item = res
       return {
         id: item.id,
         name: item.name,
@@ -51,9 +50,7 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
         type: item.type,
         enabled: item.enabled,
       }
-    } else {
-      console.log('Provider not found')
-    }
+
   },
   addNewProvider: async (provider: IProvider) => {
     const payload = {
@@ -96,16 +93,18 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
   getProviderList: () => get().provider,
   fetchProviderList: async () => {
     try {
-      const res = await getProviderList()
-      if (res.data.code === 0) {
+      const res  = await getProviderList()
+
         set({
-          provider: res.data.data.map(
+          provider: res.map(
             (item: {
               id: string
               name: string
               logo: string
               api_key: string
               base_url: string
+              type: string
+              enabled: number
             }) => {
               return {
                 id: item.id,
@@ -119,7 +118,6 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
             }
           ),
         })
-      }
     } catch (error) {
       console.error('Error fetching provider list:', error)
     }

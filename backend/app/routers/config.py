@@ -27,4 +27,6 @@ def get_cookie(platform: str):
 @router.post("/update_downloader_cookie")
 def update_cookie(data: CookieUpdateRequest):
     cookie_manager.set(data.platform, data.cookie)
-    return {"message": "Cookie updated successfully"}
+    return R.success(
+
+    )

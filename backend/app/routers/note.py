@@ -2,6 +2,7 @@
 import json
 import os
 import uuid
+from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -10,7 +11,9 @@ from pydantic import BaseModel, validator, field_validator
 from dataclasses import asdict
 
 from app.db.video_task_dao import get_task_by_video
+from app.enmus.exception import NoteErrorEnum
 from app.enmus.note_enums import DownloadQuality
+from app.exceptions.note import NoteError
 from app.services.note import NoteGenerator, logger
 from app.utils.response import ResponseWrapper as R
 from app.utils.url_parser import extract_video_id
@@ -54,12 +57,13 @@ class VideoRequest(BaseModel):
         if parsed.scheme in ("http", "https"):
             # 是网络链接，继续用原有平台校验
             if not is_supported_video_url(url):
-                raise ValueError("暂不支持该视频平台或链接格式无效")
+                raise NoteError(code=NoteErrorEnum.PLATFORM_NOT_SUPPORTED.code,
+                                message=NoteErrorEnum.PLATFORM_NOT_SUPPORTED.message)
 
         return v
 
 
-NOTE_OUTPUT_DIR = "note_results"
+NOTE_OUTPUT_DIR = os.getenv("NOTE_OUTPUT_DIR", "note_results")
 UPLOAD_DIR = "uploads"
 
 
@@ -74,30 +78,32 @@ def run_note_task(task_id: str, video_url: str, platform: str, quality: Download
                   _format: list = None, style: str = None, extras: str = None, video_understanding: bool = False,
                   video_interval=0, grid_size=[]
                   ):
-    try:
-        if not model_name or not provider_id:
-            raise HTTPException(status_code=400, detail="请选择模型和提供者")
 
-        note = NoteGenerator().generate(
-            video_url=video_url,
-            platform=platform,
-            quality=quality,
-            task_id=task_id,
-            model_name=model_name,
-            provider_id=provider_id,
-            link=link,
-            _format=_format,
-            style=style,
-            extras=extras,
-            screenshot=screenshot
-            , video_understanding=video_understanding,
-            video_interval=video_interval,
-            grid_size=grid_size
-        )
-        logger.info(f"Note generated: {task_id}")
-        save_note_to_file(task_id, note)
-    except Exception as e:
-        save_note_to_file(task_id, {"error": str(e)})
+    if not model_name or not provider_id:
+        raise HTTPException(status_code=400, detail="请选择模型和提供者")
+
+    note = NoteGenerator().generate(
+        video_url=video_url,
+        platform=platform,
+        quality=quality,
+        task_id=task_id,
+        model_name=model_name,
+        provider_id=provider_id,
+        link=link,
+        _format=_format,
+        style=style,
+        extras=extras,
+        screenshot=screenshot
+        , video_understanding=video_understanding,
+        video_interval=video_interval,
+        grid_size=grid_size
+    )
+    logger.info(f"Note generated: {task_id}")
+    if not note or not note.markdown:
+        logger.warning(f"任务 {task_id} 执行失败，跳过保存")
+        return
+    save_note_to_file(task_id, note)
+
 
 
 @router.post('/delete_task')
@@ -135,7 +141,6 @@ def generate_note(data: VideoRequest, background_tasks: BackgroundTasks):
         #         msg='笔记已生成，请勿重复发起',
         #
         #     )
-
         if data.task_id:
             # 如果传了task_id，说明是重试！
             task_id = data.task_id

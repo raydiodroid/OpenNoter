@@ -31,10 +31,9 @@ def delete_model(model_id: int):
         return R.error(f"删除模型失败: {e}")
 @router.get("/model_list/{provider_id}")
 def model_list(provider_id):
-    try:
-        return R.success(modelService.get_all_models_by_id(provider_id))
-    except Exception as e:
-        return R.error(e)
+
+    return R.success(modelService.get_all_models_by_id(provider_id))
+
 
 @router.post("/models")
 def create_model(data: CreateModelRequest):

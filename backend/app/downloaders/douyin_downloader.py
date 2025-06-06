@@ -145,52 +145,58 @@ class DouyinDownloader(Downloader):
         return ""
 
     def gen_real_msToken(self) -> str:
-        payload = json.dumps(
-            {
-                "magic": self.ms_token_config["magic"],
-                "version": self.ms_token_config["version"],
-                "dataType": self.ms_token_config["dataType"],
-                "strData": self.ms_token_config["strData"],
-                "tspFromClient": get_timestamp(),
+        try:
+            payload = json.dumps(
+                {
+                    "magic": self.ms_token_config["magic"],
+                    "version": self.ms_token_config["version"],
+                    "dataType": self.ms_token_config["dataType"],
+                    "strData": self.ms_token_config["strData"],
+                    "tspFromClient": get_timestamp(),
+                }
+            )
+            headers = {
+                "User-Agent": self.headers_config["User-Agent"],
+                "Content-Type": "application/json",
             }
-        )
-        headers = {
-            "User-Agent": self.headers_config["User-Agent"],
-            "Content-Type": "application/json",
-        }
-        transport = httpx.HTTPTransport(retries=5)
-        with httpx.Client(transport=transport) as client:
-            try:
-                response = client.post(
-                    self.ms_token_config["url"], content=payload, headers=headers
-                )
-                response.raise_for_status()
+            transport = httpx.HTTPTransport(retries=5)
+            with httpx.Client(transport=transport) as client:
+                try:
+                    response = client.post(
+                        self.ms_token_config["url"], content=payload, headers=headers
+                    )
+                    response.raise_for_status()
 
-                msToken = str(httpx.Cookies(response.cookies).get("msToken"))
-                if len(msToken) not in [120, 128]:
-                    raise ValueError("响应内容：{0}， Douyin msToken API 的响应内容不符合要求。".format(msToken))
+                    msToken = str(httpx.Cookies(response.cookies).get("msToken"))
+                    if len(msToken) not in [120, 128]:
+                        raise ValueError("响应内容：{0}， Douyin msToken API 的响应内容不符合要求。".format(msToken))
 
-                return msToken
-            except Exception as e:
-                raise ValueError("Douyin msToken API 请求失败：{0}".format(e))
+                    return msToken
+                except Exception as e:
+                    raise ValueError("Douyin msToken API 请求失败：{0}".format(e))
+        except Exception as e:
+            raise ValueError("Douyin msToken API{0}".format(e))
 
     def fetch_video_info(self, video_url: str) -> json:
-        aweme_id = self.extract_video_id(video_url)
-        kwargs = self.headers_config
-        print("kwargs:", kwargs)
-        base_params = BaseRequestModel().model_dump()
-        base_params["msToken"] = self.gen_real_msToken()
-        base_params["aweme_id"] = aweme_id
-        bogus = ABogus()
-        ab_value = bogus.get_value(base_params)
-        a_bogus = quote(ab_value, safe='')
-        print(base_params)
-        query_str = urlencode(base_params)
-        full_url = f"{DOUYIN_DOMAIN}/aweme/v1/web/aweme/detail/?{query_str}&a_bogus={a_bogus}"
-
-        print("Request URL:", full_url)
-
         try:
+
+            aweme_id = self.extract_video_id(video_url)
+            kwargs = self.headers_config
+            print("@kwargs:", kwargs)
+            base_params = BaseRequestModel().model_dump()
+            base_params["msToken"] = self.gen_real_msToken()
+
+            base_params["aweme_id"] = aweme_id
+            bogus = ABogus()
+            ab_value = bogus.get_value(base_params)
+            a_bogus = quote(ab_value, safe='')
+            print("@a_bogus:", a_bogus)
+            print(base_params)
+            query_str = urlencode(base_params)
+            full_url = f"{DOUYIN_DOMAIN}/aweme/v1/web/aweme/detail/?{query_str}&a_bogus={a_bogus}"
+
+            print("Request URL:", full_url)
+
 
             response = requests.get(full_url, headers=kwargs)
 
@@ -208,46 +214,49 @@ class DouyinDownloader(Downloader):
             quality: DownloadQuality = "fast",
             need_video: Optional[bool] = False
     ) -> AudioDownloadResult:
-        print(
-            f"正在下载视频: {video_url}，保存路径: {output_dir}，质量: {quality}"
-        )
-        if output_dir is None:
-            output_dir = get_data_dir()
-        if not output_dir:
-            output_dir = self.cache_data
-        os.makedirs(output_dir, exist_ok=True)
+        try:
+            print(
+                f"正在下载视频: {video_url}，保存路径: {output_dir}，质量: {quality}"
+            )
+            if output_dir is None:
+                output_dir = get_data_dir()
+            if not output_dir:
+                output_dir = self.cache_data
+            os.makedirs(output_dir, exist_ok=True)
 
-        output_path = os.path.join(output_dir, "%(id)s.%(ext)s")
+            output_path = os.path.join(output_dir, "%(id)s.%(ext)s")
 
-        video_data = self.fetch_video_info(video_url)
-        output_path = output_path % {
-            "id": video_data['aweme_detail']['aweme_id'],
-            "ext": "mp3",
-        }
-        url = video_data['aweme_detail']['music']['play_url']['uri']
-        # 下载音频
-        audio_data = requests.get(url)
-        with open(output_path, 'wb') as f:
-            f.write(audio_data.content)
-        print(url)
-        tags = []
-        for tag in video_data['aweme_detail']['video_tag']:
-            if tag['tag_name']:
-                tags.append(tag['tag_name'])
+            video_data = self.fetch_video_info(video_url)
+            output_path = output_path % {
+                "id": video_data['aweme_detail']['aweme_id'],
+                "ext": "mp3",
+            }
+            url = video_data['aweme_detail']['music']['play_url']['uri']
+            # 下载音频
+            audio_data = requests.get(url)
+            with open(output_path, 'wb') as f:
+                f.write(audio_data.content)
+            print(url)
+            tags = []
+            for tag in video_data['aweme_detail']['video_tag']:
+                if tag['tag_name']:
+                    tags.append(tag['tag_name'])
 
-        return AudioDownloadResult(
-            file_path=output_path,
-            title=video_data['aweme_detail']['item_title'],
-            duration=video_data['aweme_detail']['video']['duration'],
-            cover_url=video_data['aweme_detail']['video']['cover_original_scale']['url_list'][0] if
-            video_data['aweme_detail']['video']['cover'] else video_data['video']['big_thumbs']['img_url'],
-            platform="douyin",
-            video_id=video_data['aweme_detail']['aweme_id'],
-            raw_info={
-                'tags': video_data['aweme_detail']['caption'] + ''.join(tags),
-            },
-            video_path=None  # ❗音频下载不包含视频路径
-        )
+            return AudioDownloadResult(
+                file_path=output_path,
+                title=video_data['aweme_detail']['item_title'],
+                duration=video_data['aweme_detail']['video']['duration'],
+                cover_url=video_data['aweme_detail']['video']['cover_original_scale']['url_list'][0] if
+                video_data['aweme_detail']['video']['cover'] else video_data['video']['big_thumbs']['img_url'],
+                platform="douyin",
+                video_id=video_data['aweme_detail']['aweme_id'],
+                raw_info={
+                    'tags': video_data['aweme_detail']['caption'] + ''.join(tags),
+                },
+                video_path=None  # ❗音频下载不包含视频路径
+            )
+        except Exception as e:
+            raise e
 
     def download_video(self, video_url: str, output_dir: Union[str, None] = None) -> str:
 
