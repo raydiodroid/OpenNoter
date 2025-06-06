@@ -145,7 +145,7 @@ def generate_note(data: VideoRequest, background_tasks: BackgroundTasks):
             # 如果传了task_id，说明是重试！
             task_id = data.task_id
             # 更新之前的状态
-            NoteGenerator.update_task_status(task_id, TaskStatus.PENDING)
+            NoteGenerator()._update_status(task_id, TaskStatus.PENDING)
             logger.info(f"重试模式，复用已有 task_id={task_id}")
         else:
             # 正常新建任务
