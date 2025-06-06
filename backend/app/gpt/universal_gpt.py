@@ -14,7 +14,6 @@ class UniversalGPT(GPT):
         self.model = model
         self.temperature = temperature
         self.screenshot = False
-        self.screenshot = False
         self.link = False
 
     def _format_time(self, seconds: float) -> str:
