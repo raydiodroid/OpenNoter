@@ -7,7 +7,7 @@ import {
   FormLabel,
   FormMessage,
 } from '@/components/ui/form.tsx'
-import { useEffect } from 'react'
+import { useEffect,useState } from 'react'
 import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -119,6 +119,9 @@ const CheckboxGroup = ({
 
 /* -------------------- 主组件 -------------------- */
 const NoteForm = () => {
+
+  const [isUploading, setIsUploading] = useState(false)
+  const [uploadSuccess, setUploadSuccess] = useState(false)
   /* ---- 全局状态 ---- */
   const { addPendingTask, currentTaskId, setCurrentTask, getCurrentTask, retryTask } =
     useTaskStore()
@@ -185,12 +188,18 @@ const NoteForm = () => {
   const handleFileUpload = async (file: File, cb: (url: string) => void) => {
     const formData = new FormData()
     formData.append('file', file)
+    setIsUploading(true)
+    setUploadSuccess(false)
+
     try {
-      const { data } = await uploadFile(formData)
-      if (data.code === 0) cb(data.data.url)
+      const  data  = await uploadFile(formData)
+        cb(data.url)
+        setUploadSuccess(true)
     } catch (err) {
       console.error('上传失败:', err)
       message.error('上传失败，请重试')
+    } finally {
+      setIsUploading(false)
     }
   }
 
@@ -335,10 +344,16 @@ const NoteForm = () => {
                         input.click()
                       }}
                     >
-                      <p className="text-center text-sm text-gray-500">
-                        拖拽文件到这里上传 <br />
-                        <span className="text-xs text-gray-400">或点击选择文件</span>
-                      </p>
+                      {isUploading ? (
+                        <p className="text-center text-sm text-blue-500">上传中，请稍候…</p>
+                      ) : uploadSuccess ? (
+                        <p className="text-center text-sm text-green-500">上传成功！</p>
+                      ) : (
+                        <p className="text-center text-sm text-gray-500">
+                          拖拽文件到这里上传 <br />
+                          <span className="text-xs text-gray-400">或点击选择文件</span>
+                        </p>
+                      )}
                     </div>
                   </>
                 )}
