@@ -136,7 +136,8 @@ def get_provider_by_name(name: str):
         if row is None:
             logger.info(f"Provider not found: {name}")
             return None
-        logger.info(f"Provider found: {row}")
+        logger.info(f"Provider found: {row[0]}")
+
         return row
     except Exception as e:
         logger.error(f"Failed to get provider by name: {e}")
@@ -155,7 +156,7 @@ def get_provider_by_id(id: int):
         if row is None:
             logger.info(f"Provider not found: {id}")
             return None
-        logger.info(f"Provider found: {row}")
+        logger.info(f"Provider found: {row[0]}")
         return row
     except Exception as e:
         logger.error(f"Failed to get provider by id: {e}")
@@ -173,7 +174,7 @@ def get_all_providers():
         if rows is None:
             logger.info("No providers found")
             return None
-        logger.info(f"Providers found: {rows}")
+        logger.info(f"Providers found total  {len(rows) }")
         return rows
     except Exception as e:
         logger.error(f"Failed to get all providers: {e}")

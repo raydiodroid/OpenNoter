@@ -1,12 +1,16 @@
+
+
 from app.db.model_dao import insert_model, get_all_models, get_model_by_provider_and_name, delete_model
 from app.db.provider_dao import get_enabled_providers
-from app.exceptions.provider import ConnectionTestError
+from app.enmus.exception import ProviderErrorEnum
+from app.exceptions.provider import ProviderError
 from app.gpt.gpt_factory import GPTFactory
 from app.gpt.provider.OpenAI_compatible_provider import OpenAICompatibleProvider
 from app.models.model_config import ModelConfig
 from app.services.provider import ProviderService
+from app.utils.logger import get_logger
 
-
+logger=get_logger(__name__)
 class ModelService:
 
     @staticmethod
@@ -83,37 +87,38 @@ class ModelService:
             provider = ProviderService.get_provider_by_id(provider_id)
 
             models = ModelService.get_model_list(provider["id"], verbose=verbose)
-
-            model_list={
-
-                "models": models
+            print(type(models))
+            serializable_models = [m.dict() for m in models.data]
+            model_list = {
+                "models": serializable_models
             }
 
+            logger.info(f"[{provider['name']}] 获取模型成功")
             return model_list
         except Exception as e:
-            print(f"[{provider_id}] 获取模型失败: {e}")
+            # print(f"[{provider_id}] 获取模型失败: {e}")
+            logger.error(f"[{provider_id}] 获取模型失败: {e}")
             return []
     @staticmethod
     def connect_test(id: str) -> bool:
-        try:
-            provider = ProviderService.get_provider_by_id(id)
 
-            if provider:
-                if not provider.get('api_key'):
-                    raise ConnectionTestError(f"供应商信息未找到，请先保存重试")
-                result =  OpenAICompatibleProvider.test_connection(
-                    api_key=provider.get('api_key'),
-                    base_url=provider.get('base_url')
-                )
-                if result:
-                    return True
-                else:
-                    raise ConnectionTestError("请检查API Key 和 API 地址是否正确")
+        provider = ProviderService.get_provider_by_id(id)
 
-            raise ConnectionTestError("供应商信息未找到，请先保存重试")
-        except Exception as e:
-            # 抛出业务异常，交由 Controller 处理
-            raise ConnectionTestError(f"{str(e)}") from e
+        if provider:
+            if not provider.get('api_key'):
+                raise ProviderError(code=ProviderErrorEnum.NOT_FOUND.code, message=ProviderErrorEnum.NOT_FOUND.message)
+            result =  OpenAICompatibleProvider.test_connection(
+                api_key=provider.get('api_key'),
+                base_url=provider.get('base_url')
+            )
+            if result:
+                return True
+            else:
+                raise ProviderError(code=ProviderErrorEnum.WRONG_PARAMETER.code,message=ProviderErrorEnum.WRONG_PARAMETER.message)
+
+        raise ProviderError(code=ProviderErrorEnum.NOT_FOUND.code, message=ProviderErrorEnum.NOT_FOUND.message)
+
+
 
     @staticmethod
     def delete_model_by_id( model_id: int) -> bool:

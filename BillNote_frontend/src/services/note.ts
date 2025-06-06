@@ -1,7 +1,6 @@
 import request from '@/utils/request'
 import toast from 'react-hot-toast'
-import { useTaskStore } from '@/store/taskStore'
-import request from '@/utils/request'
+
 export const generateNote = async (data: {
   video_url: string
   platform: string
@@ -14,12 +13,13 @@ export const generateNote = async (data: {
   extras?: string
   video_understand?: boolean
   video_interval?: number
-  grid_size:Array<number>
+  grid_size: Array<number>
 }) => {
   try {
+    console.log('generateNote', data)
     const response = await request.post('/generate_note', data)
 
-    if (response.data.code != 0) {
+    if (!response) {
       if (response.data.msg) {
         toast.error(response.data.msg)
       }
@@ -30,12 +30,12 @@ export const generateNote = async (data: {
     console.log('res', response)
     // 成功提示
 
-    return response.data
+    return response
   } catch (e: any) {
     console.error('❌ 请求出错', e)
 
     // 错误提示
-    toast.error('笔记生成失败，请稍后重试')
+    // toast.error('笔记生成失败，请稍后重试')
 
     throw e // 抛出错误以便调用方处理
   }
@@ -65,15 +65,9 @@ export const delete_task = async ({ video_id, platform }) => {
 
 export const get_task_status = async (task_id: string) => {
   try {
-    const response = await request.get('/task_status/' + task_id)
-
-    if (response.data.code == 0 && response.data.status == 'SUCCESS') {
-      // toast.success("笔记生成成功")
-    }
-    console.log('res', response)
     // 成功提示
 
-    return response.data
+    return await request.get('/task_status/' + task_id)
   } catch (e) {
     console.error('❌ 请求出错', e)
 

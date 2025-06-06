@@ -1,6 +1,12 @@
 import { create } from 'zustand'
 import { devtools } from 'zustand/middleware'
-import { fetchModels, addModel, fetchEnableModels, fetchEnableModelById, deleteModelById } from '@/services/model.ts'
+import {
+  fetchModels,
+  addModel,
+  fetchEnableModels,
+  fetchEnableModelById,
+  deleteModelById
+} from '@/services/model'
 
 interface IModel {
   id: string
@@ -11,81 +17,93 @@ interface IModel {
   root: string
 }
 
+interface IModelListItem {
+  id: string
+  provider_id: string
+  model_name: string
+  created_at?: string
+}
+
 interface ModelStore {
   models: IModel[]
-  modelList: []
+  modelList: IModelListItem[]
   loading: boolean
   selectedModel: string
+
   loadModels: (providerId: string) => Promise<void>
+  loadModelsById: (providerId: string) => Promise<IModelListItem[]>
   loadEnabledModels: () => Promise<void>
-  loadModelsById : (providerId: string) => Promise<void>
   addNewModel: (providerId: string, modelId: string) => Promise<void>
-  setSelectedModel: (modelId: string) => void
   deleteModel: (modelId: number) => Promise<void>
+  setSelectedModel: (modelId: string) => void
   clearModels: () => void
 }
 
 export const useModelStore = create<ModelStore>()(
-  devtools(set => ({
+  devtools((set) => ({
     models: [],
+    modelList: [],
     loading: false,
     selectedModel: '',
-    modelList: [],
 
+    //  获取所有可用模型 (全局可用模型列表)
     loadEnabledModels: async () => {
       try {
         set({ loading: true })
-        const res = await fetchEnableModels()
-        if (res.data.code === 0 && res.data.data.length > 0) {
-          set({ modelList: res.data.data })
-        } else {
-          set({ modelList: [] })
-          console.error('模型列表加载失败')
-        }
+        const list = await fetchEnableModels()
+        set({ modelList: list })
       } catch (error) {
         set({ modelList: [] })
-        console.error('加载模型出错', error)
-      }
-    },
-
-    deleteModel: async  (modelId: number) => {
-      await deleteModelById( modelId)
-    },
-    // 加载模型列表
-    loadModels: async (providerId: string) => {
-      try {
-        set({ loading: true })
-        const res = await fetchModels(providerId)
-        if (res.data.code === 0 && res.data.data.models.data.length > 0) {
-          set({ models: res.data.data.models.data })
-        } else if (res.data.code === 0 && res.data.data.models.length > 0) {
-          set({ models: res.data.data.models.data })
-        } else {
-          set({ models: [] })
-          console.error('模型列表加载失败')
-        }
-      } catch (error) {
-        set({ models: [] })
-        console.error('加载模型出错', error)
+        console.error('加载可用模型失败', error)
       } finally {
         set({ loading: false })
       }
     },
-    loadModelsById: async (providerId: string)=>{
-      const models  = await fetchEnableModelById(providerId)
-      if (models.data.code === 0) {
-        console.log('模型列表加载成功:', models.data)
-        return models.data.data
+
+    //  通过 provider 获取该供应商的模型列表
+    loadModels: async (providerId: string) => {
+      try {
+        set({ loading: true })
+        const res = await fetchModels(providerId)
+
+        let models: IModel[] = []
+
+        // 兼容 SyncPage 分页对象与普通数组两种格式
+        if (Array.isArray(res.models)) {
+          models = res.models
+        } else if (res.models?.data && Array.isArray(res.models.data)) {
+          models = res.models.data
+        }
+
+        set({ models })
+      } catch (error) {
+        set({ models: [] })
+        console.error('加载模型列表失败', error)
+      } finally {
+        set({ loading: false })
       }
-  },
-    // 新增模型
+    },
+
+    //  单独获取某个供应商下已启用模型
+    loadModelsById: async (providerId: string) => {
+      try {
+        const models = await fetchEnableModelById(providerId)
+        console.log('获取供应商模型成功:', models)
+        return models
+      } catch (error) {
+        console.error('加载供应商模型失败', error)
+        return []
+      }
+    },
+
+    //  新增模型逻辑
     addNewModel: async (providerId: string, modelId: string) => {
       try {
         const res = await addModel({ provider_id: providerId, model_name: modelId })
+
         if (res.code === 0) {
           console.log('新增模型成功:', modelId)
-          // ✅ 新增成功以后，前端直接追加一条到 models 列表
-          set(state => ({
+          set((state) => ({
             models: [
               ...state.models,
               {
@@ -99,17 +117,30 @@ export const useModelStore = create<ModelStore>()(
             ],
           }))
         } else {
-          console.error('新增模型失败')
+          console.error('新增模型失败', res.msg)
         }
       } catch (error) {
         console.error('添加模型出错', error)
       }
     },
 
-    // 设置选中的模型
-    setSelectedModel: modelId => set({ selectedModel: modelId }),
+    //  删除模型
+    deleteModel: async (modelId: number) => {
+      try {
+        await deleteModelById(modelId)
+        //  删除后更新本地状态（可选）
+        set((state) => ({
+          models: state.models.filter((model) => model.id !== modelId.toString())
+        }))
+      } catch (error) {
+        console.error('删除模型失败', error)
+      }
+    },
 
-    // 清空
-    clearModels: () => set({ models: [], selectedModel: '' }),
+    //  切换选中模型
+    setSelectedModel: (modelId: string) => set({ selectedModel: modelId }),
+
+    //  清空
+    clearModels: () => set({ models: [], selectedModel: '', modelList: [] }),
   }))
 )

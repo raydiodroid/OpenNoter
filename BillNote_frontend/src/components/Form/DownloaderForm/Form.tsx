@@ -36,7 +36,7 @@ const DownloaderForm = () => {
       setLoading(true) // 🔁 切换平台时显示 loading
       try {
         const res = await getDownloaderCookie(id)
-        const cookie = res?.data?.data?.cookie || ''
+        const cookie = res?.cookie || ''
         form.reset({ cookie }) // ✅ 正确重置表单值
       } catch (e) {
         toast.error('加载 Cookie 失败: ' + e)

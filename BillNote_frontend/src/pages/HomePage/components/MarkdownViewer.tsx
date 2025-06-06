@@ -173,6 +173,7 @@ const MarkdownViewer: FC<MarkdownViewerProps> = ({ status }) => {
         <div className="text-center">
           <p className="text-lg font-bold text-red-500">笔记生成失败</p>
           <p className="mt-2 mb-2 text-xs text-red-400">请检查后台或稍后再试</p>
+
           <Button onClick={() => retryTask(currentTask.id)} size="lg">
             重试
           </Button>

@@ -129,11 +129,10 @@ const ProviderForm = ({ isCreate = false }: { isCreate?: boolean }) => {
 
     try {
       const res = await deleteModelById(modelId)
-      if (res.data.code === 0) {
-        toast.success('删除成功')
-      } else {
-        toast.error(res.data.msg || '删除失败')
-      }
+      console.log('🔧 删除结果:', res)
+
+      toast.success('删除成功')
+
     } catch (e) {
       toast.error('删除异常')
     }
@@ -151,16 +150,16 @@ const ProviderForm = ({ isCreate = false }: { isCreate?: boolean }) => {
         return
       }
       setTesting(true)
-      const data = await testConnection({
-         id
-      })
-      if (data.data.code === 0) {
+     await testConnection({
+             id
+          })
+
         toast.success('测试连通性成功 🎉')
-      } else {
-        toast.error(`连接失败: ${data.data.msg || '未知错误'}`)
-      }
+
     } catch (error) {
-      toast.error('测试连通性异常')
+
+      toast.error(`连接失败: ${data.data.msg || '未知错误'}`)
+      // toast.error('测试连通性异常')
     } finally {
       setTesting(false)
     }
