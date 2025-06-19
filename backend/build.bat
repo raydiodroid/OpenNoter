@@ -23,6 +23,8 @@ echo Detected target triple: %TARGET_TRIPLE%
 REM 执行 PyInstaller 打包
 echo 开始 PyInstaller 打包...
 pyinstaller ^
+  --clean ^
+  -y ^
   --name BiliNoteBackend ^
   --paths backend ^
   --distpath BillNote_frontend\src-tauri\bin ^
