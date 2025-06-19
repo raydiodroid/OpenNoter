@@ -42,7 +42,7 @@ jobs:
         working-directory: BillNote_frontend
         run: |
           corepack enable
-          pnpm install --frozen-lockfile
+          pnpm install 
 
       # 设置 Rust 环境
       - name: Set up Rust
