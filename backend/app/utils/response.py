@@ -19,6 +19,6 @@ class ResponseWrapper:
     def error(msg="error", code=500, data=None):
         return JSONResponse(content={
             "code": code,
-            "msg": msg,
+            "msg": str(msg),
             "data": data
         })

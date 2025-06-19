@@ -436,7 +436,7 @@ class NoteGenerator:
             logger.info(f"转写并缓存成功 ({transcript_cache_file})")
             return transcript
         except Exception as exc:
-            logger.error(f"音频转写失败：{e}")
+            logger.error(f"音频转写失败：{exc}")
             self._handle_exception(task_id, exc)
             raise
 

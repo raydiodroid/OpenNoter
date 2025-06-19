@@ -38,6 +38,7 @@ import { Input } from '@/components/ui/input.tsx'
 import { Textarea } from '@/components/ui/textarea.tsx'
 import { noteStyles, noteFormats, videoPlatforms } from '@/constant/note.ts'
 import { fetchModels } from '@/services/model.ts'
+import { useNavigate } from 'react-router-dom'
 
 /* -------------------- 校验 Schema -------------------- */
 const formSchema = z
@@ -119,6 +120,8 @@ const CheckboxGroup = ({
 
 /* -------------------- 主组件 -------------------- */
 const NoteForm = () => {
+  const navigate = useNavigate();
+
   /* ---- 全局状态 ---- */
   const { addPendingTask, currentTaskId, setCurrentTask, getCurrentTask, retryTask } =
     useTaskStore()
@@ -144,6 +147,9 @@ const NoteForm = () => {
   const videoUnderstandingEnabled = useWatch({ control: form.control, name: 'video_understanding' })
   const editing = currentTask && currentTask.id
 
+  const goModelAdd = () => {
+    navigate("/settings/model");
+  };
   /* ---- 副作用 ---- */
   useEffect(() => {
     loadEnabledModels()
@@ -186,8 +192,8 @@ const NoteForm = () => {
     const formData = new FormData()
     formData.append('file', file)
     try {
-      const { data } = await uploadFile(formData)
-      if (data.code === 0) cb(data.data.url)
+      const data = await uploadFile(formData)
+      cb(data.url)
     } catch (err) {
       console.error('上传失败:', err)
       message.error('上传失败，请重试')
@@ -348,38 +354,50 @@ const NoteForm = () => {
           />
           <div className="grid grid-cols-2 gap-2">
             {/* 模型选择 */}
-            <FormField
-              className="w-full"
-              control={form.control}
-              name="model_name"
-              render={({ field }) => (
-                <FormItem>
-                  <SectionHeader title="模型选择" tip="不同模型效果不同，建议自行测试" />
-                  <Select
-                    onOpenChange={()=>{
-                      loadEnabledModels()
-                    }}
-                    value={field.value}
-                    onValueChange={field.onChange}
-                    defaultValue={field.value}
-                  >
-                    <FormControl>
-                      <SelectTrigger className="w-full min-w-0 truncate">
-                        <SelectValue />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      {modelList.map(m => (
-                        <SelectItem key={m.id} value={m.model_name}>
-                          {m.model_name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+            {
+
+             modelList.length>0?(     <FormField
+               className="w-full"
+               control={form.control}
+               name="model_name"
+               render={({ field }) => (
+                 <FormItem>
+                   <SectionHeader title="模型选择" tip="不同模型效果不同，建议自行测试" />
+                   <Select
+                     onOpenChange={()=>{
+                       loadEnabledModels()
+                     }}
+                     value={field.value}
+                     onValueChange={field.onChange}
+                     defaultValue={field.value}
+                   >
+                     <FormControl>
+                       <SelectTrigger className="w-full min-w-0 truncate">
+                         <SelectValue />
+                       </SelectTrigger>
+                     </FormControl>
+                     <SelectContent>
+                       {modelList.map(m => (
+                         <SelectItem key={m.id} value={m.model_name}>
+                           {m.model_name}
+                         </SelectItem>
+                       ))}
+                     </SelectContent>
+                   </Select>
+                   <FormMessage />
+                 </FormItem>
+               )}
+             />): (
+               <FormItem>
+                 <SectionHeader title="模型选择" tip="不同模型效果不同，建议自行测试" />
+                  <Button type={'button'} variant={
+                    'outline'
+                  } onClick={()=>{goModelAdd()}}>请先添加模型</Button>
+                 <FormMessage />
+               </FormItem>
+             )
+            }
+
             {/* 笔记风格 */}
             <FormField
               className="w-full"

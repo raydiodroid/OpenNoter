@@ -1,15 +1,19 @@
 import os
+from contextlib import asynccontextmanager
 
 import uvicorn
+from fastapi import FastAPI
+from starlette.middleware.cors import CORSMiddleware
 from starlette.staticfiles import StaticFiles
 from dotenv import load_dotenv
 
+from app.db.init_db import init_db
+from app.db.provider_dao import seed_default_providers
 from app.exceptions.exception_handlers import register_exception_handlers
-from app.db.model_dao import init_model_table
-from app.db.provider_dao import init_provider_table
+# from app.db.model_dao import init_model_table
+# from app.db.provider_dao import init_provider_table
 from app.utils.logger import get_logger
 from app import create_app
-from app.db.video_task_dao import init_video_task_table
 from app.transcriber.transcriber_provider import get_transcriber
 from events import register_handler
 from ffmpeg_helper import ensure_ffmpeg_or_raise
@@ -32,21 +36,33 @@ if not os.path.exists(uploads_dir):
 if not os.path.exists(out_dir):
     os.makedirs(out_dir)
 
-app = create_app()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    register_handler()
+    ensure_ffmpeg_or_raise()
+    init_db()
+    get_transcriber(transcriber_type=os.getenv("TRANSCRIBER_TYPE", "fast-whisper"))
+    seed_default_providers()
+    yield
+
+app = create_app(lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["tauri://localhost"],  # ✅ 加上 Tauri 的 origin
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 register_exception_handlers(app)
 app.mount(static_path, StaticFiles(directory=static_dir), name="static")
 app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
-@app.on_event("startup")
-async def startup_event():
 
 
 
-    register_handler()
-    ensure_ffmpeg_or_raise()
-    get_transcriber(transcriber_type=os.getenv("TRANSCRIBER_TYPE","fast-whisper"))
-    init_video_task_table()
-    init_provider_table()
-    init_model_table()
+
+
+
+
 
 
 if __name__ == "__main__":
