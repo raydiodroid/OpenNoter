@@ -50,6 +50,7 @@ jobs:
 
       # 打包 Tauri 应用
       - name: Build Tauri App
+        working-directory: BillNote_frontend
         run: pnpm tauri build
 
       # 可选：上传构建产物
