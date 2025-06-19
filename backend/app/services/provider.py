@@ -1,8 +1,9 @@
+from fastapi.encoders import jsonable_encoder
 from kombu import uuid
 
+from app.db.models.providers import Provider
 from app.db.provider_dao import (
     insert_provider,
-    init_provider_table,
     get_all_providers,
     get_provider_by_name,
     get_provider_by_id,
@@ -16,32 +17,51 @@ from app.models.model_config import ModelConfig
 class ProviderService:
 
     @staticmethod
-    def serialize_provider(row: tuple) -> dict:
+    def serialize_provider(row: Provider) -> dict:
         if not row:
             return None
+        row = ProviderService.provider_to_dict(row)
         return {
-            "id": row[0],
-            "name": row[1],
-            "logo": row[2],
-            "type": row[3],
-            "api_key": row[4],
-            "base_url": row[5],
-            "enabled": row[6],
-            "created_at": row[7],
+            "id": row.get("id"),
+            "name": row.get("name"),
+            "logo": row.get("logo"),
+            "type":row.get("type"),
+            "enabled": row.get("enabled"),
+            "base_url": row.get("base_url"),
+            "api_key": row.get("api_key"),
+            "created_at": jsonable_encoder(row.get("created_at")),
+            # "name": row[1],
+            # "logo": row[2],
+            # "type": row[3],
+            # "api_key": row[4],
+            # "base_url": row[5],
+            # "enabled": row[6],
+            # "created_at": row[7],
         }
     @staticmethod
-    def serialize_provider_safe(row: tuple) -> dict:
+    def serialize_provider_safe(row: Provider) -> dict:
         if not row:
             return None
+        row = ProviderService.provider_to_dict(row)
+
         return {
-            "id": row[0],
-            "name": row[1],
-            "logo": row[2],
-            "type": row[3],
-            "api_key": ProviderService.mask_key(row[4]),
-            "base_url": row[5],
-            "enabled": row[6],
-            "created_at": row[7],
+            "id": row.get("id"),
+            "name": row.get("name"),
+            "logo": row.get("logo"),
+            "type":row.get("type"),
+            "enabled": row.get("enabled"),
+            "base_url": row.get("base_url"),
+            "api_key":  ProviderService.mask_key(row.get("api_key")),
+            "created_at": jsonable_encoder(row.get("created_at")),
+
+            # "id": row[0],
+            # "name": row[1],
+            # "logo": row[2],
+            # "type": row[3],
+            # "api_key": ProviderService.mask_key(row[4]),
+            # "base_url": row[5],
+            # "enabled": row[6],
+            # "created_at": row[7],
         }
     @staticmethod
     def mask_key(key: str) -> str:
@@ -56,15 +76,30 @@ class ProviderService:
             return insert_provider(id, name, api_key, base_url, logo, type_, enabled)
         except Exception as  e:
             print('创建模式失败',e)
-
+    @staticmethod
+    def provider_to_dict(p: Provider):
+        return {
+            "id": p.id,
+            "name": p.name,
+            "logo": p.logo,
+            "type": p.type,
+            "api_key": p.api_key,
+            "base_url": p.base_url,
+            "enabled": p.enabled,
+            "created_at": p.created_at,
+        }
     @staticmethod
     def get_all_providers():
         rows = get_all_providers()
+        if rows is None:
+            return []
+
         return [ProviderService.serialize_provider(row) for row in rows] if rows else []
     @staticmethod
     def get_all_providers_safe():
         rows = get_all_providers()
-        return [ProviderService.serialize_provider(row) for row in rows] if rows else []
+
+        return [ProviderService.serialize_provider(row) for row in rows] if (rows) else []
     @staticmethod
     def get_provider_by_name(name: str):
         row = get_provider_by_name(name)

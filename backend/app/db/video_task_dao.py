@@ -1,78 +1,61 @@
-from .sqlite_client import get_connection
+from app.db.models.video_tasks import VideoTask
+from app.db.engine import get_db
 from app.utils.logger import get_logger
+
 logger = get_logger(__name__)
-def init_video_task_table():
-    conn = get_connection()
-    if conn is None:
-        logger.error("Failed to connect to the database.")
-        return
-    cursor = conn.cursor()
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS video_tasks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            video_id TEXT NOT NULL,
-            platform TEXT NOT NULL,
-            task_id TEXT NOT NULL UNIQUE,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    try:
-        conn.commit()
-        conn.close()
-        logger.info("video_tasks table created successfully.")
-    except Exception as e:
-        logger.error(f"Failed to create video_tasks table: {e}")
 
+# 插入任务
 def insert_video_task(video_id: str, platform: str, task_id: str):
+    db = next(get_db())
     try:
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO video_tasks (video_id, platform, task_id)
-            VALUES (?, ?, ?)
-        """, (video_id, platform, task_id))
-        conn.commit()
-        conn.close()
-        logger.info(f"Video task inserted successfully."
-                    f"video_id: {video_id}"
-                    f"platform: {platform}"
-                    f"task_id: {task_id}")
+        task = VideoTask(video_id=video_id, platform=platform, task_id=task_id)
+        db.add(task)
+        db.commit()
+        db.refresh(task)
+        logger.info(f"Video task inserted successfully. video_id: {video_id}, platform: {platform}, task_id: {task_id}")
     except Exception as e:
         logger.error(f"Failed to insert video task: {e}")
+    finally:
+        db.close()
 
 
+# 查询任务（最新一条）
 def get_task_by_video(video_id: str, platform: str):
+    db = next(get_db())
     try:
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT task_id FROM video_tasks
-            WHERE video_id = ? AND platform = ?
-            ORDER BY created_at DESC
-            LIMIT 1
-        """, (video_id, platform))
-        result = cursor.fetchone()
-        conn.close()
-        if result is None:
+        task = (
+            db.query(VideoTask)
+            .filter_by(video_id=video_id, platform=platform)
+            .order_by(VideoTask.created_at.desc())
+            .first()
+        )
+        if task:
+            logger.info(f"Task found for video_id: {video_id} and platform: {platform}")
+            return task.task_id
+        else:
             logger.info(f"No task found for video_id: {video_id} and platform: {platform}")
-        logger.info(f"Task found for video_id: {video_id} and platform: {platform}")
-        return result[0] if result else None
+            return None
     except Exception as e:
         logger.error(f"Failed to get task by video: {e}")
+    finally:
+        db.close()
 
 
+# 删除任务
 def delete_task_by_video(video_id: str, platform: str):
+    db = next(get_db())
     try:
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            DELETE FROM video_tasks
-            WHERE video_id = ? AND platform = ?
-        """, (video_id, platform))
-
-        conn.commit()
-        conn.close()
-        logger.info(f"Task deleted for video_id: {video_id} and platform: {platform}")
+        tasks = (
+            db.query(VideoTask)
+            .filter_by(video_id=video_id, platform=platform)
+            .all()
+        )
+        for task in tasks:
+            db.delete(task)
+        db.commit()
+        logger.info(f"Task(s) deleted for video_id: {video_id} and platform: {platform}")
     except Exception as e:
         logger.error(f"Failed to delete task by video: {e}")
+    finally:
+        db.close()

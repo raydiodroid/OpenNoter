@@ -109,8 +109,8 @@ def run_note_task(task_id: str, video_url: str, platform: str, quality: Download
 @router.post('/delete_task')
 def delete_task(data: RecordRequest):
     try:
-
-        NoteGenerator().delete_note(video_id=data.video_id, platform=data.platform)
+        # TODO: 待持久化完成
+        # NoteGenerator().delete_note(video_id=data.video_id, platform=data.platform)
         return R.success(msg='删除成功')
     except Exception as e:
         return R.error(msg=e)

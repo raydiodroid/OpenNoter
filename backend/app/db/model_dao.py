@@ -1,67 +1,67 @@
-from app.db.sqlite_client import get_connection
-
-def init_model_table():
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS models (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            provider_id INTEGER NOT NULL,
-            model_name TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    conn.commit()
-    conn.close()
+from app.db.engine import get_db
+from app.db.models.models import Model
 
 
 def get_model_by_provider_and_name(provider_id: int, model_name: str):
-    conn = get_connection()
-    cursor = conn.execute(
-        "SELECT * FROM models WHERE provider_id = ? AND model_name = ?",
-        (provider_id, model_name)
-    )
-    row = cursor.fetchone()
-    return row
-# 插入模型
+    db = next(get_db())
+    try:
+        model = db.query(Model).filter_by(provider_id=provider_id, model_name=model_name).first()
+        if model:
+            return {
+                "id": model.id,
+                "provider_id": model.provider_id,
+                "model_name": model.model_name,
+                "created_at": model.created_at,
+            }
+        return None
+    finally:
+        db.close()
+
+
 def insert_model(provider_id: int, model_name: str):
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO models (provider_id, model_name)
-        VALUES (?, ?)
-    """, (provider_id, model_name))
-    conn.commit()
-    conn.close()
+    db = next(get_db())
+    try:
+        model = Model(provider_id=provider_id, model_name=model_name)
+        db.add(model)
+        db.commit()
+        db.refresh(model)
+        return {
+            "id": model.id,
+            "provider_id": model.provider_id,
+            "model_name": model.model_name,
+            "created_at": model.created_at,
+        }
+    finally:
+        db.close()
 
-# 根据provider查模型
+
 def get_models_by_provider(provider_id: int):
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT id, model_name FROM models
-        WHERE provider_id = ?
-    """, (provider_id,))
-    rows = cursor.fetchall()
-    conn.close()
-    return [{"id": row[0], "model_name": row[1]} for row in rows]
+    db = next(get_db())
+    try:
+        models = db.query(Model).filter_by(provider_id=provider_id).all()
+        return [{"id": m.id, "model_name": m.model_name} for m in models]
+    finally:
+        db.close()
 
-# 删除某个模型
+
 def delete_model(model_id: int):
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        DELETE FROM models WHERE id = ?
-    """, (model_id,))
-    conn.commit()
-    conn.close()
+    db = next(get_db())
+    try:
+        model = db.query(Model).filter_by(id=model_id).first()
+        if model:
+            db.delete(model)
+            db.commit()
+    finally:
+        db.close()
+
 
 def get_all_models():
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT id, provider_id, model_name FROM models
-    """)
-    rows = cursor.fetchall()
-    conn.close()
-    return [{"id": row[0], "provider_id": row[1], "model_name": row[2]} for row in rows]
+    db = next(get_db())
+    try:
+        models = db.query(Model).all()
+        return [
+            {"id": m.id, "provider_id": m.provider_id, "model_name": m.model_name}
+            for m in models
+        ]
+    finally:
+        db.close()

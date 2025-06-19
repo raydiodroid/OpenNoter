@@ -49,13 +49,9 @@ export const delete_task = async ({ video_id, platform }) => {
     }
     const res = await request.post('/delete_task', data)
 
-    if (res.data.code === 0) {
+
       toast.success('任务已成功删除')
-      return res.data
-    } else {
-      toast.error(res.data.message || '删除失败')
-      throw new Error(res.data.message || '删除失败')
-    }
+      return res
   } catch (e) {
     toast.error('请求异常，删除任务失败')
     console.error('❌ 删除任务失败:', e)
