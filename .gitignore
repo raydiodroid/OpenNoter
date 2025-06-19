@@ -321,3 +321,4 @@ cython_debug/
 /backend/.idea/*
 /backend/config/*
 /BiliNote_frontend/.idea/*
+/BiliNote_frontend/src-tauri/bin/

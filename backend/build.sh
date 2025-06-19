@@ -28,7 +28,7 @@ pyinstaller \
   --hidden-import fastapi \
   --hidden-import starlette \
   --add-data "app/db/builtin_providers.json:."\
-  --add-data "../.env:." \
+  --add-data "../.env.env.example:.env" \
   "$(pwd)/backend/main.py" # 确保这里没有额外的空格，并使用绝对路径
 mv \
  ./BillNote_frontend/src-tauri/bin/BiliNoteBackend/BiliNoteBackend\
