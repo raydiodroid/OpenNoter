@@ -3,7 +3,7 @@
     <p align="center">
   <img src="./doc/icon.svg" alt="BiliNote Banner" width="50" height="50"  />
 </p>
-<h1 align="center" > BiliNote v1.7.4</h1>
+<h1 align="center" > BiliNote v1.7.5</h1>
 </div>
 
 <p align="center"><i>AI 视频笔记生成工具 让 AI 为你的视频做笔记</i></p>
@@ -26,8 +26,8 @@ BiliNote 是一个开源的 AI 视频笔记助手，支持通过哔哩哔哩、Y
 ## 📝 使用文档
 详细文档可以查看[这里](https://docs.bilinote.app/)
 
-
-
+## 体验地址
+可以通过访问 [这里](https://www.bilinote.app/) 进行体验，速度略慢，不支持长视频。
 ## 📦 Windows 打包版
 本项目提供了 Windows 系统的 exe 文件，可在[release](https://github.com/JefferyHcool/BiliNote/releases/tag/v1.1.1)进行下载。**注意一定要在没有中文路径的环境下运行。**
 
@@ -121,7 +121,7 @@ sudo apt install ffmpeg
 - BiliNote 交流QQ群：785367111
 - BiliNote 交流微信群:
   
-  <img src="https://common-1304618721.cos.ap-chengdu.myqcloud.com/20250604202557.png" alt="wechat" style="zoom:33%;" />
+  <img src="https://common-1304618721.cos.ap-chengdu.myqcloud.com/20250608111120288.png" alt="wechat" style="zoom:33%;" />
 
 
 
