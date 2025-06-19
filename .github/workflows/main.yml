@@ -39,10 +39,10 @@ jobs:
           node-version: '20'
 
       - name: Enable Corepack + Install pnpm
+        working-directory: BillNote_frontend
         run: |
           corepack enable
-          cd BillNote_frontend/
-          pnpm install
+          pnpm install --frozen-lockfile
 
       # 设置 Rust 环境
       - name: Set up Rust
