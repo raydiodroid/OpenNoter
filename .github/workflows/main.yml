@@ -41,6 +41,7 @@ jobs:
       - name: Enable Corepack + Install pnpm
         run: |
           corepack enable
+          cd BillNote_frontend/
           pnpm install
 
       # 设置 Rust 环境
