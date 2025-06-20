@@ -16,7 +16,13 @@ echo "清理完成。"
 TARGET_TRIPLE=$(rustc -Vv | grep host | cut -f2 -d' ')
 echo "Detected target triple: $TARGET_TRIPLE"
 
-# PyInstaller onedir 模式，直接输出到 Tauri 的 bin 目录
+# --- 核心修改部分开始 ---
+
+# 步骤 1: 为了避免 PyInstaller 的解析歧义，我们先手动复制文件
+echo "为打包准备 .env 文件..."
+cp .env.example backend/.env
+
+# 步骤 2: PyInstaller 打包，直接添加已存在的 .env 文件
 echo "开始 PyInstaller 打包..."
 pyinstaller \
   --name BiliNoteBackend \
@@ -27,13 +33,25 @@ pyinstaller \
   --hidden-import uvicorn \
   --hidden-import fastapi \
   --hidden-import starlette \
-  --add-data "app/db/builtin_providers.json:."\
-  --add-data "../.env.example:.env" \
-  "$(pwd)/backend/main.py" # 确保这里没有额外的空格，并使用绝对路径
+  --add-data "app/db/builtin_providers.json:." \
+  --add-data ".env:." \
+  "$(pwd)/backend/main.py"
+
+# 步骤 3: 清理在项目根目录创建的临时 .env 文件
+echo "清理临时的 .env 文件..."
+rm backend/.env
+
+# --- 核心修改部分结束 ---
+
+
+# 重命名主执行文件以包含目标平台信息
 mv \
  ./BillNote_frontend/src-tauri/bin/BiliNoteBackend/BiliNoteBackend\
  ./BillNote_frontend/src-tauri/bin/BiliNoteBackend/BiliNoteBackend-$TARGET_TRIPLE
 
-echo "PyInstaller 打包完成："
-ls -l  ./BillNote_frontend/src-tauri/bin/BiliNoteBackend # 这里会列出 onedir 模式下的目录内容
-echo "请检查 src-tauri/bin/BiliNoteBackend 目录，以确认打包内容。"
+echo "PyInstaller 打包完成。"
+echo "打包后的目录内容："
+ls -l ./BillNote_frontend/src-tauri/bin/BiliNoteBackend
+
+echo "请检查 src-tauri/bin/BiliNoteBackend 目录，确认其中包含了名为 .env 的【文件】。"
+
