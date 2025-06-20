@@ -66,7 +66,7 @@ app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
 
 
 if __name__ == "__main__":
-    port = int(os.getenv("BACKEND_PORT", 8000))
+    port = int(os.getenv("BACKEND_PORT", 8483))
     host = os.getenv("BACKEND_HOST", "0.0.0.0")
     logger.info(f"Starting server on {host}:{port}")
     uvicorn.run(app, host=host, port=port, reload=False)

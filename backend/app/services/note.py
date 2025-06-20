@@ -44,7 +44,7 @@ load_dotenv()
 
 # 后端 API 地址与端口（若有需要可以在代码其他部分使用 BACKEND_BASE_URL）
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost")
-BACKEND_PORT = os.getenv("BACKEND_PORT", "8000")
+BACKEND_PORT = os.getenv("BACKEND_PORT", "8483")
 BACKEND_BASE_URL = f"{API_BASE_URL}:{BACKEND_PORT}"
 
 # 输出目录（用于缓存音频、转写、Markdown 文件，以及存储截图）
