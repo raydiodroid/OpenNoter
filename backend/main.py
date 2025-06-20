@@ -39,7 +39,6 @@ if not os.path.exists(out_dir):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     register_handler()
-    ensure_ffmpeg_or_raise()
     init_db()
     get_transcriber(transcriber_type=os.getenv("TRANSCRIBER_TYPE", "fast-whisper"))
     seed_default_providers()
@@ -48,7 +47,7 @@ async def lifespan(app: FastAPI):
 app = create_app(lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["tauri://localhost"],  # ✅ 加上 Tauri 的 origin
+    allow_origins=["tauri://localhost"],  #  加上 Tauri 的 origin
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

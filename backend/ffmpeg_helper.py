@@ -31,7 +31,7 @@ def ensure_ffmpeg_or_raise():
     if not check_ffmpeg_exists():
         logger.error("未检测到 ffmpeg，请先安装后再使用本功能。")
         raise EnvironmentError(
-            "❌ 未检测到 ffmpeg，请先安装后再使用本功能。\n"
+            " 未检测到 ffmpeg，请先安装后再使用本功能。\n"
             "👉 下载地址：https://ffmpeg.org/download.html\n"
             "🪟 Windows 推荐：https://www.gyan.dev/ffmpeg/builds/\n"
             "💡 如果你已安装，请将其路径写入 `.env` 文件，例如：\n"
