@@ -45,9 +45,15 @@ async def lifespan(app: FastAPI):
     yield
 
 app = create_app(lifespan=lifespan)
+origins = [
+    "http://localhost",
+    "http://127.0.0.1",
+    "http://tauri.localhost",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["tauri://localhost"],  #  加上 Tauri 的 origin
+    allow_origins=origins,  #  加上 Tauri 的 origin
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
