@@ -50,7 +50,7 @@ BACKEND_BASE_URL = f"{API_BASE_URL}:{BACKEND_PORT}"
 # 输出目录（用于缓存音频、转写、Markdown 文件，以及存储截图）
 NOTE_OUTPUT_DIR = Path(os.getenv("NOTE_OUTPUT_DIR", "note_results"))
 NOTE_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-IMAGE_OUTPUT_DIR = os.getenv("OUT_DIR", "images")
+IMAGE_OUTPUT_DIR = os.getenv("OUT_DIR", "./static/screenshots")
 # 图片基础 URL（用于生成 Markdown 中的图片链接，需前端静态目录对应）
 IMAGE_BASE_URL = os.getenv("IMAGE_BASE_URL", "/static/screenshots")
 

@@ -52,7 +52,7 @@ const MarkdownViewer: FC<MarkdownViewerProps> = ({ status }) => {
   const [modelName, setModelName] = useState<string>('')
   const [style, setStyle] = useState<string>('')
   const [createTime, setCreateTime] = useState<string>('')
-
+  const baseURL = String(import.meta.env.VITE_API_BASE_URL).replace('/api','') || ''
   const getCurrentTask = useTaskStore.getState().getCurrentTask
   const currentTask = useTaskStore(state => state.getCurrentTask())
   const taskStatus = currentTask?.status || 'PENDING'
@@ -306,8 +306,16 @@ const MarkdownViewer: FC<MarkdownViewerProps> = ({ status }) => {
                       },
 
                       // Enhanced image with zoom capability
-                      img: ({ node, ...props }) => (
-                        <div className="my-8 flex justify-center">
+                      img: ({ node, ...props }) =>{
+
+                        let src = baseURL +props.src
+                        props.src = src
+
+
+                     return(
+
+
+                      <div className="my-8 flex justify-center">
                           <Zoom>
                             <img
                               {...props}
@@ -316,7 +324,7 @@ const MarkdownViewer: FC<MarkdownViewerProps> = ({ status }) => {
                             />
                           </Zoom>
                         </div>
-                      ),
+                      )},
 
                       // Better strong/bold text
                       strong: ({ children, ...props }) => (
