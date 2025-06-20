@@ -27,7 +27,7 @@ REM --- 核心修改部分开始 ---
 
 REM 步骤 1: 为了避免 PyInstaller 的解析歧义，我们先手动复制文件
 echo 为打包准备 .env 文件...
-copy .env.example backend/.env
+copy .env.example backend\.env
 
 REM 步骤 2: 执行 PyInstaller 打包，直接添加已存在的 .env 文件
 echo 开始 PyInstaller 打包...
@@ -47,7 +47,7 @@ pyinstaller ^
 
 REM 步骤 3: 清理在项目根目录创建的临时 .env 文件
 echo 清理临时的 .env 文件...
-del backend/.env
+del backend\.env
 
 REM --- 核心修改部分结束 ---
 
