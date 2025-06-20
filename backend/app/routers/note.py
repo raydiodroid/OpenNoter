@@ -238,7 +238,7 @@ async def image_proxy(request: Request, url: str):
                 resp.aiter_bytes(),
                 media_type=content_type,
                 headers={
-                    "Cache-Control": "public, max-age=86400",  # ✅ 缓存一天
+                    "Cache-Control": "public, max-age=86400",  #  缓存一天
                     "Content-Type": content_type,
                 }
             )

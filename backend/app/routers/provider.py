@@ -10,7 +10,7 @@ from app.services.provider import ProviderService
 
 router = APIRouter()
 
-# ✅ 新增 type 字段
+#  新增 type 字段
 class ProviderRequest(BaseModel):
     name: str
     api_key: str

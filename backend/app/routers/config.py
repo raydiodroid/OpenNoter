@@ -4,6 +4,7 @@ from typing import Optional
 from app.utils.response import ResponseWrapper as R
 
 from app.services.cookie_manager import CookieConfigManager
+from ffmpeg_helper import ensure_ffmpeg_or_raise
 
 router = APIRouter()
 cookie_manager = CookieConfigManager()
@@ -30,3 +31,11 @@ def update_cookie(data: CookieUpdateRequest):
     return R.success(
 
     )
+
+@router.get("/sys_health")
+async def sys_health():
+    try:
+        ensure_ffmpeg_or_raise()
+        return R.success()
+    except EnvironmentError:
+        return R.error(msg="系统未安装 ffmpeg 请先进行安装")

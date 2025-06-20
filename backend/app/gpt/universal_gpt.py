@@ -52,7 +52,7 @@ class UniversalGPT(GPT):
                 }
             })
 
-        # ✅ 正确格式：整体包在一个 message 里，role + content array
+        #  正确格式：整体包在一个 message 里，role + content array
         messages = [{
             "role": "user",
             "content": content
