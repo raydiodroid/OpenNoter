@@ -7,7 +7,7 @@ import os
 import uuid
 load_dotenv()
 api_path = os.getenv("API_BASE_URL", "http://localhost")
-BACKEND_PORT= os.getenv("BACKEND_PORT", 8000)
+BACKEND_PORT= os.getenv("BACKEND_PORT", 8483)
 
 BACKEND_BASE_URL = f"{api_path}:{BACKEND_PORT}"
 
