@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "BiliNote",
-  "version": "0.1.0",
+  "version": "1.8.0",
   "identifier": "com.jefferyhuang.bilinote",
   "build": {
     "frontendDist": "../dist",
@@ -13,8 +13,8 @@
     "windows": [
       {
         "title": "BiliNote",
-        "width": 1400,
-        "height": 900,
+        "width": 1600,
+        "height": 1000,
         "resizable": true,
         "fullscreen": false,
         "devtools": true
