@@ -8,6 +8,6 @@ def timeit(func):
         result = func(*args, **kwargs)
         end = time.perf_counter()
         duration = end - start
-        print(f"⏱️ {func.__name__} executed in {duration:.4f} seconds")
+        print(f"{func.__name__} executed in {duration:.4f} seconds")
         return result
     return wrapper

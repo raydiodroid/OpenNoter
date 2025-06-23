@@ -82,7 +82,7 @@ class WhisperTranscriber(Transcriber):
                 print(" CUDA 可用，使用 GPU")
                 return True
             elif is_torch_installed():
-                print("⚠️ 只装了 torch，但没有 CUDA，用 CPU")
+                print(" 只装了 torch，但没有 CUDA，用 CPU")
                 return False
             else:
                 print(" 还没有安装 torch，请先安装")

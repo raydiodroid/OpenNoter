@@ -104,7 +104,7 @@ class VideoReader:
         return base64_images
 
     def run(self)->list[str]:
-        logger.info("🚀 开始提取视频帧...")
+        logger.info("开始提取视频帧...")
         try:
             # 确保目录存在
             print(self.frame_dir,self.grid_dir)
@@ -122,7 +122,7 @@ class VideoReader:
             print(self.frame_dir,self.grid_dir)
             self.extract_frames()
             print("2#3",self.frame_dir,self.grid_dir)
-            logger.info("🧩 开始拼接网格图...")
+            logger.info("开始拼接网格图...")
             image_paths = []
             groups = self.group_images()
             for idx, group in enumerate(groups, start=1):
