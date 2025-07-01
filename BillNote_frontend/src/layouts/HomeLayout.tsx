@@ -68,7 +68,7 @@ const HomeLayout: FC<IProps> = ({ NoteForm, Preview, History }) => {
         <ResizableHandle />
 
         {/* 右边预览 */}
-        <ResizablePanel defaultSize={55} minSize={30}>
+        <ResizablePanel defaultSize={66} minSize={30}>
           <main className="flex h-full flex-col overflow-hidden bg-white p-6">{Preview}</main>
         </ResizablePanel>
       </ResizablePanelGroup>
