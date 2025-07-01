@@ -297,7 +297,7 @@ const NoteForm = () => {
                       ))}
                     </SelectContent>
                   </Select>
-                  <FormMessage />
+                  <FormMessage style={{ display: 'none' }} />
                 </FormItem>
               )}
             />
@@ -314,7 +314,7 @@ const NoteForm = () => {
                   ) : (
                     <Input disabled={!!editing} placeholder="请输入视频网站链接" {...field} />
                   )}
-                  <FormMessage />
+                  <FormMessage style={{ display: 'none' }} />
                 </FormItem>
               )}
             />
