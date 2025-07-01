@@ -202,7 +202,7 @@ const NoteForm = () => {
         setUploadSuccess(true)
     } catch (err) {
       console.error('上传失败:', err)
-      message.error('上传失败，请重试')
+      // message.error('上传失败，请重试')
     } finally {
       setIsUploading(false)
     }
@@ -220,13 +220,13 @@ const NoteForm = () => {
       return
     }
 
-    message.success('已提交任务')
+    // message.success('已提交任务')
     const  data  = await generateNote(payload)
     addPendingTask(data.task_id, values.platform, payload)
   }
   const onInvalid = (errors: FieldErrors<NoteFormValues>) => {
     console.warn('表单校验失败：', errors)
-    message.error('请完善所有必填项后再提交')
+    // message.error('请完善所有必填项后再提交')
   }
   const handleCreateNew = () => {
     // 🔁 这里清空当前任务状态
