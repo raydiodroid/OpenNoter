@@ -77,16 +77,15 @@ const NoteHistory: FC<NoteHistoryProps> = ({ onSelect, selectedId }) => {
       <div className="flex flex-col gap-2 overflow-hidden">
         {filteredTasks.map(task => (
           <div
-              onClick={() => onSelect(task.id)}
+            key={task.id}
+            onClick={() => onSelect(task.id)}
             className={cn(
               'flex cursor-pointer flex-col rounded-md border border-neutral-200 p-3',
               selectedId === task.id && 'border-primary bg-primary-light'
             )}
           >
             <div
-              key={task.id}
               className={cn('flex items-center gap-4')}
-
             >
               {/* 封面图 */}
               {task.platform === 'local' ? (
