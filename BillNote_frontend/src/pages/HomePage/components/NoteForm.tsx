@@ -43,7 +43,7 @@ import { useNavigate } from 'react-router-dom'
 /* -------------------- 校验 Schema -------------------- */
 const formSchema = z
   .object({
-    video_url: z.string(),
+    video_url: z.string().optional(),
     platform: z.string().nonempty('请选择平台'),
     quality: z.enum(['fast', 'medium', 'slow']),
     screenshot: z.boolean().optional(),
@@ -60,10 +60,10 @@ const formSchema = z
       .optional(),
   })
   .superRefine(({ video_url, platform }, ctx) => {
-    if (platform === 'local' || platform === 'douyin') {
-      if (!video_url) {
-        ctx.addIssue({ code: 'custom', message: '本地视频路径不能为空', path: ['video_url'] })
-      }
+    if (platform === 'local' && !video_url) {
+      ctx.addIssue({ code: 'custom', message: '本地视频路径不能为空', path: ['video_url'] })
+    } else if (!video_url) {
+      ctx.addIssue({ code: 'custom', message: '视频链接不能为空', path: ['video_url'] })
     } else {
       try {
         const url = new URL(video_url)
