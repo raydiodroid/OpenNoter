@@ -24,7 +24,7 @@ const HomeLayout: FC<IProps> = ({ NoteForm, Preview, History }) => {
     <div className="flex h-screen flex-col overflow-hidden">
       <ResizablePanelGroup direction="horizontal" className="h-full w-full">
         {/* 左边表单 */}
-        <ResizablePanel defaultSize={18} minSize={10} maxSize={35}>
+        <ResizablePanel defaultSize={23} minSize={10} maxSize={35}>
           <aside className="flex h-full flex-col overflow-hidden border-r border-neutral-200 bg-white">
             <header className="flex h-16 items-center justify-between px-6">
               <div className="flex items-center gap-2">
@@ -68,7 +68,7 @@ const HomeLayout: FC<IProps> = ({ NoteForm, Preview, History }) => {
         <ResizableHandle />
 
         {/* 右边预览 */}
-        <ResizablePanel defaultSize={55} minSize={30}>
+        <ResizablePanel defaultSize={61} minSize={30}>
           <main className="flex h-full flex-col overflow-hidden bg-white p-6">{Preview}</main>
         </ResizablePanel>
       </ResizablePanelGroup>

@@ -43,7 +43,7 @@ import { useNavigate } from 'react-router-dom'
 /* -------------------- 校验 Schema -------------------- */
 const formSchema = z
   .object({
-    video_url: z.string(),
+    video_url: z.string().optional(),
     platform: z.string().nonempty('请选择平台'),
     quality: z.enum(['fast', 'medium', 'slow']),
     screenshot: z.boolean().optional(),
@@ -60,10 +60,10 @@ const formSchema = z
       .optional(),
   })
   .superRefine(({ video_url, platform }, ctx) => {
-    if (platform === 'local' || platform === 'douyin') {
-      if (!video_url) {
-        ctx.addIssue({ code: 'custom', message: '本地视频路径不能为空', path: ['video_url'] })
-      }
+    if (platform === 'local' && !video_url) {
+      ctx.addIssue({ code: 'custom', message: '本地视频路径不能为空', path: ['video_url'] })
+    } else if (!video_url) {
+      ctx.addIssue({ code: 'custom', message: '视频链接不能为空', path: ['video_url'] })
     } else {
       try {
         const url = new URL(video_url)
@@ -202,7 +202,7 @@ const NoteForm = () => {
         setUploadSuccess(true)
     } catch (err) {
       console.error('上传失败:', err)
-      message.error('上传失败，请重试')
+      // message.error('上传失败，请重试')
     } finally {
       setIsUploading(false)
     }
@@ -220,13 +220,13 @@ const NoteForm = () => {
       return
     }
 
-    message.success('已提交任务')
+    // message.success('已提交任务')
     const  data  = await generateNote(payload)
     addPendingTask(data.task_id, values.platform, payload)
   }
   const onInvalid = (errors: FieldErrors<NoteFormValues>) => {
     console.warn('表单校验失败：', errors)
-    message.error('请完善所有必填项后再提交')
+    // message.error('请完善所有必填项后再提交')
   }
   const handleCreateNew = () => {
     // 🔁 这里清空当前任务状态
@@ -297,7 +297,7 @@ const NoteForm = () => {
                       ))}
                     </SelectContent>
                   </Select>
-                  <FormMessage />
+                  <FormMessage style={{ display: 'none' }} />
                 </FormItem>
               )}
             />
@@ -314,7 +314,7 @@ const NoteForm = () => {
                   ) : (
                     <Input disabled={!!editing} placeholder="请输入视频网站链接" {...field} />
                   )}
-                  <FormMessage />
+                  <FormMessage style={{ display: 'none' }} />
                 </FormItem>
               )}
             />

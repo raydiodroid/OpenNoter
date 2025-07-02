@@ -1,5 +1,6 @@
 from pydantic import AnyUrl, validator, BaseModel, field_validator
 import re
+from urllib.parse import urlparse
 
 SUPPORTED_PLATFORMS = {
     "bilibili": r"(https?://)?(www\.)?bilibili\.com/video/[a-zA-Z0-9]+",
@@ -10,6 +11,12 @@ SUPPORTED_PLATFORMS = {
 
 
 def is_supported_video_url(url: str) -> bool:
+    parsed = urlparse(url)
+
+    # 检查是否为Bilibili的短链接
+    if parsed.netloc == "b23.tv":
+        return True
+
     for name, pattern in SUPPORTED_PLATFORMS.items():
         if pattern in ["douyin", "kuaishou"]:
             if pattern in url:
