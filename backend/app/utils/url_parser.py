@@ -1,5 +1,6 @@
 import re
 from typing import Optional
+import requests
 
 
 def extract_video_id(url: str, platform: str) -> Optional[str]:
@@ -11,6 +12,12 @@ def extract_video_id(url: str, platform: str) -> Optional[str]:
     :return: 提取到的视频 ID 或 None
     """
     if platform == "bilibili":
+        # 如果是短链接，则解析真实链接
+        if "b23.tv" in url:
+            resolved_url = resolve_bilibili_short_url(url)
+            if resolved_url:
+                url = resolved_url
+
         # 匹配 BV号（如 BV1vc411b7Wa）
         match = re.search(r"BV([0-9A-Za-z]+)", url)
         return f"BV{match.group(1)}" if match else None
@@ -26,3 +33,18 @@ def extract_video_id(url: str, platform: str) -> Optional[str]:
         return match.group(1) if match else None
 
     return None
+
+
+def resolve_bilibili_short_url(short_url: str) -> Optional[str]:
+    """
+    解析哔哩哔哩短链接以获取真实视频链接
+
+    :param short_url: Bilibili短链接（如"https://b23.tv/xxxxxx"）
+    :return: 真实的视频链接或None
+    """
+    try:
+        response = requests.head(short_url, allow_redirects=True)
+        return response.url
+    except requests.RequestException as e:
+        print(f"Error resolving short URL: {e}")
+        return None
