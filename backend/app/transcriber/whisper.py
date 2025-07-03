@@ -64,7 +64,6 @@ class WhisperTranscriber(Transcriber):
             model_size_or_path=model_path,
             device=self.device,
             compute_type=self.compute_type,
-            cpu_threads=cpu_threads,
             download_root=model_dir
         )
     @staticmethod
