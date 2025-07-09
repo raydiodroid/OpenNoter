@@ -60,21 +60,29 @@ const formSchema = z
       .optional(),
   })
   .superRefine(({ video_url, platform }, ctx) => {
-    if (platform === 'local' && !video_url) {
-      ctx.addIssue({ code: 'custom', message: '本地视频路径不能为空', path: ['video_url'] })
-    } else if (!video_url) {
-      ctx.addIssue({ code: 'custom', message: '视频链接不能为空', path: ['video_url'] })
-    } else {
-      try {
-        const url = new URL(video_url)
-        if (!['http:', 'https:'].includes(url.protocol)) throw new Error()
-      } catch {
-        ctx.addIssue({ code: 'custom', message: '请输入正确的视频链接', path: ['video_url'] })
+    if (platform === 'local') {
+      if (!video_url) {
+        ctx.addIssue({ code: 'custom', message: '本地视频路径不能为空', path: ['video_url'] })
+      }
+    }
+    else {
+      if (!video_url) {
+        ctx.addIssue({ code: 'custom', message: '视频链接不能为空', path: ['video_url'] })
+      }
+      else {
+        try {
+          const url = new URL(video_url)
+          if (!['http:', 'https:'].includes(url.protocol))
+            throw new Error()
+        }
+        catch {
+          ctx.addIssue({ code: 'custom', message: '请输入正确的视频链接', path: ['video_url'] })
+        }
       }
     }
   })
 
-type NoteFormValues = z.infer<typeof formSchema>
+export type NoteFormValues = z.infer<typeof formSchema>
 
 /* -------------------- 可复用子组件 -------------------- */
 const SectionHeader = ({ title, tip }: { title: string; tip?: string }) => (
