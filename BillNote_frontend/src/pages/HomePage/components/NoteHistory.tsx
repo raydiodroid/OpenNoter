@@ -24,7 +24,8 @@ interface NoteHistoryProps {
 const NoteHistory: FC<NoteHistoryProps> = ({ onSelect, selectedId }) => {
   const tasks = useTaskStore(state => state.tasks)
   const removeTask = useTaskStore(state => state.removeTask)
-  const baseURL = import.meta.env.VITE_API_BASE_URL || 'api/'
+  // 确保baseURL没有尾部斜杠
+  const baseURL = (String(import.meta.env.VITE_API_BASE_URL || 'api')).replace(/\/$/, '')
   const [rawSearch, setRawSearch] = useState('')
   const [search, setSearch] = useState('')
   const fuse = new Fuse(tasks, {
@@ -101,7 +102,7 @@ const NoteHistory: FC<NoteHistoryProps> = ({ onSelect, selectedId }) => {
 
                       src={
                         task.audioMeta.cover_url
-                            ? baseURL+`/image_proxy?url=${encodeURIComponent(task.audioMeta.cover_url)}`
+                            ? `${baseURL}/image_proxy?url=${encodeURIComponent(task.audioMeta.cover_url)}`
                             : '/placeholder.png'
                       }
                       alt="封面"
