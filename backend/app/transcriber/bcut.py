@@ -1,5 +1,6 @@
 import json
 import logging
+import threading
 import time
 from typing import Optional, List, Dict, Union
 
@@ -40,6 +41,10 @@ class BcutTranscriber(Transcriber):
         self.session = requests.Session()
         self.task_id = None
         self.__etags = []
+        # 实例被 transcriber_provider 缓存复用，并发任务会交错读写上传会话状态
+        # （etags/upload_id/task_id），必须整段串行化
+        # ponytail: 全局实例锁，并发转写会排队；如需吞吐量应改为每任务独立实例
+        self._lock = threading.Lock()
 
         self.__in_boss_key: Optional[str] = None
         self.__resource_id: Optional[str] = None
@@ -59,6 +64,15 @@ class BcutTranscriber(Transcriber):
 
     def _upload(self, file_path: str) -> None:
         """申请上传"""
+        # 实例被 transcriber_provider 缓存复用，必须清掉上一次上传的会话状态，
+        # 否则 __etags 跨上传残留，提交的 etag 数与本次分片数不符，B 站会拒绝合并
+        self.__etags = []
+        self.__in_boss_key = None
+        self.__resource_id = None
+        self.__upload_id = None
+        self.__upload_urls = []
+        self.__download_url = None
+
         file_binary = self._load_file(file_path)
         if not file_binary:
             raise ValueError("无法读取文件数据")
@@ -169,6 +183,10 @@ class BcutTranscriber(Transcriber):
     @timeit
     def transcript(self, file_path: str) -> TranscriptResult:
         """执行识别过程，符合 Transcriber 接口"""
+        with self._lock:
+            return self._transcript_locked(file_path)
+
+    def _transcript_locked(self, file_path: str) -> TranscriptResult:
         try:
             logger.info(f"开始处理文件: {file_path}")
             
