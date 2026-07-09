@@ -1,6 +1,8 @@
-from pydantic import AnyUrl, validator, BaseModel, field_validator
+from pydantic import AnyUrl, validator, BaseModel, field_validator, model_validator
 import re
 from urllib.parse import urlparse
+
+from app.utils.url_parser import normalize_video_url
 
 SUPPORTED_PLATFORMS = {
     "bilibili": r"(https?://)?(www\.)?bilibili\.com/video/[a-zA-Z0-9]+",
@@ -30,6 +32,13 @@ def is_supported_video_url(url: str) -> bool:
 class VideoRequest(BaseModel):
     url: AnyUrl
     platform: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_url(cls, data):
+        if isinstance(data, dict) and data.get("platform") == "bilibili" and data.get("url"):
+            data["url"] = normalize_video_url(str(data["url"]))
+        return data
 
     @field_validator("url")
     def validate_video_url(cls, v):

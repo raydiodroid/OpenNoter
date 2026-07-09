@@ -7,7 +7,7 @@ from typing import Optional
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks, UploadFile, File
-from pydantic import BaseModel, validator, field_validator
+from pydantic import BaseModel, validator, field_validator, model_validator
 from dataclasses import asdict
 
 from app.db.video_task_dao import get_task_by_video
@@ -17,7 +17,7 @@ from app.exceptions.note import NoteError
 from app.services.note import NoteGenerator, logger
 from app.services.task_serial_executor import task_serial_executor
 from app.utils.response import ResponseWrapper as R
-from app.utils.url_parser import extract_video_id
+from app.utils.url_parser import extract_video_id, normalize_video_url
 from app.validators.video_url_validator import is_supported_video_url
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import StreamingResponse
@@ -54,6 +54,15 @@ class VideoRequest(BaseModel):
     # 跳过 download_subtitles 和音频转写。形如：
     #   {"language": "zh", "full_text": "...", "segments": [{"start","end","text"}, ...]}
     prefetched_transcript: Optional[dict] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_url(cls, data):
+        # 稍后再看/收藏夹/带追踪参数的 B 站链接先规范化成标准 /video/BVxxx 形式，
+        # 后续校验和 yt-dlp 下载拿到的都是干净链接
+        if isinstance(data, dict) and data.get("platform") == "bilibili" and data.get("video_url"):
+            data["video_url"] = normalize_video_url(str(data["video_url"]))
+        return data
 
     @field_validator("video_url")
     def validate_supported_url(cls, v):
