@@ -42,6 +42,9 @@ import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 
 /* -------------------- 校验 Schema -------------------- */
+/** 用户粘贴的链接常缺协议头（如 bilibili.com/...），无任何 scheme 时自动补 https:// */
+const withScheme = (url: string) => (/^[a-z][a-z0-9+.-]*:\/\//i.test(url) ? url : `https://${url}`)
+
 const formSchema = z
   .object({
     video_url: z.string().optional(),
@@ -72,7 +75,7 @@ const formSchema = z
       }
       else {
         try {
-          const url = new URL(video_url)
+          const url = new URL(withScheme(video_url))
           if (!['http:', 'https:'].includes(url.protocol))
             throw new Error()
         }
@@ -221,6 +224,8 @@ const NoteForm = () => {
     console.log('Not even go here')
     const payload: NoteFormValues = {
       ...values,
+      video_url:
+        values.platform === 'local' ? values.video_url : withScheme(values.video_url || ''),
       provider_id: modelList.find(m => m.model_name === values.model_name)!.provider_id,
       task_id: currentTaskId || '',
     }
