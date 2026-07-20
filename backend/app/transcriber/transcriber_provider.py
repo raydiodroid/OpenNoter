@@ -1,5 +1,6 @@
 import os
 import platform
+import threading
 from enum import Enum
 
 from app.transcriber.groq import GroqTranscriber
@@ -38,17 +39,29 @@ _transcribers = {
     TranscriberType.GROQ: None,
 }
 
+# Cache instances together with their constructor configuration. The
+# transcriber choice and Whisper model size can be changed from the frontend,
+# so caching by transcriber type alone would keep using the first loaded model.
+_transcriber_configs = {key: None for key in _transcribers}
+_transcriber_init_lock = threading.Lock()
+
 # 公共实例初始化函数
 def _init_transcriber(key: TranscriberType, cls, *args, **kwargs):
-    if _transcribers[key] is None:
-        logger.info(f'创建 {cls.__name__} 实例: {key}')
-        try:
-            _transcribers[key] = cls(*args, **kwargs)
+    init_config = (args, tuple(sorted(kwargs.items())))
+    with _transcriber_init_lock:
+        instance = _transcribers[key]
+        if instance is None or _transcriber_configs[key] != init_config:
+            action = "创建" if instance is None else "按新配置重新创建"
+            logger.info(f'{action} {cls.__name__} 实例: {key}')
+            try:
+                new_instance = cls(*args, **kwargs)
+            except Exception as e:
+                logger.error(f"{cls.__name__} 创建失败: {e}")
+                raise
+            _transcribers[key] = new_instance
+            _transcriber_configs[key] = init_config
             logger.info(f'{cls.__name__} 创建成功')
-        except Exception as e:
-            logger.error(f"{cls.__name__} 创建失败: {e}")
-            raise
-    return _transcribers[key]
+        return _transcribers[key]
 
 # 各类型获取方法
 def get_groq_transcriber():
