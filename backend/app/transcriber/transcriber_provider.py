@@ -83,13 +83,13 @@ def get_mlx_whisper_transcriber(model_size="base"):
     return _init_transcriber(TranscriberType.MLX_WHISPER, MLXWhisperTranscriber, model_size=model_size)
 
 # 通用入口
-def get_transcriber(transcriber_type="fast-whisper", model_size="base", device="cuda"):
+def get_transcriber(transcriber_type="fast-whisper", model_size=None, device="cuda"):
     """
     获取指定类型的转录器实例
 
     参数:
         transcriber_type: 支持 "fast-whisper", "mlx-whisper", "bcut", "kuaishou", "groq"
-        model_size: 模型大小，适用于 whisper 类
+        model_size: 模型大小，适用于 whisper 类；未提供时才读取环境变量默认值
         device: 设备类型（如 cuda / cpu），仅 whisper 使用
 
     返回:
@@ -103,7 +103,9 @@ def get_transcriber(transcriber_type="fast-whisper", model_size="base", device="
         logger.warning(f'未知转录器类型 "{transcriber_type}"，默认使用 fast-whisper')
         transcriber_enum = TranscriberType.FAST_WHISPER
 
-    whisper_model_size = os.environ.get("WHISPER_MODEL_SIZE", model_size)
+    # The explicit value normally comes from the persisted frontend setting and
+    # must take precedence over Docker's startup default.
+    whisper_model_size = model_size or os.environ.get("WHISPER_MODEL_SIZE", "base")
 
     if transcriber_enum == TranscriberType.FAST_WHISPER:
         return get_whisper_transcriber(whisper_model_size, device=device)

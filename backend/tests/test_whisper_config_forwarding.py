@@ -80,3 +80,41 @@ def test_whisper_cache_is_rebuilt_when_model_size_changes():
         assert turbo_again is turbo
         """
     )
+
+
+def test_explicit_model_size_wins_over_environment_default():
+    _run_isolated(
+        """
+        import os
+
+        from app.transcriber import transcriber_provider as provider
+
+        class FakeWhisperTranscriber:
+            def __init__(self, model_size, device):
+                self.model_size = model_size
+                self.device = device
+
+        os.environ["WHISPER_MODEL_SIZE"] = "tiny"
+        provider._transcribers = {key: None for key in provider._transcribers}
+        provider._transcriber_configs = {
+            key: None for key in provider._transcribers
+        }
+        provider.WhisperTranscriber = FakeWhisperTranscriber
+
+        transcriber = provider.get_transcriber(
+            transcriber_type="fast-whisper",
+            model_size="large-v3-turbo",
+            device="cpu",
+        )
+
+        assert transcriber.model_size == "large-v3-turbo"
+
+        fallback = provider.get_transcriber(
+            transcriber_type="fast-whisper",
+            model_size=None,
+            device="cpu",
+        )
+
+        assert fallback.model_size == "tiny"
+        """
+    )
