@@ -58,12 +58,15 @@ def apply_bilibili_dm_img_patch() -> bool:
     if getattr(original, '_bili_dm_patched', False):
         return True
 
-    def _patched_download_playinfo(self, bvid, cid, headers=None, query=None):
+    def _patched_download_playinfo(self, bvid, cid, headers=None, query=None, **kwargs):
         # dm_* are merged into the query that the original method signs via
         # _sign_wbi; caller-supplied query params (e.g. try_look/qn) take
         # precedence over the injected dummies.
+        # **kwargs stays open on purpose: yt-dlp keeps adding parameters to
+        # _download_playinfo (2026.x added `fatal`), and a wrapper that pins the
+        # signature turns every such addition into a TypeError at download time.
         merged_query = {**build_dm_img_params(), **(query or {})}
-        return original(self, bvid, cid, headers=headers, query=merged_query)
+        return original(self, bvid, cid, headers=headers, query=merged_query, **kwargs)
 
     _patched_download_playinfo._bili_dm_patched = True
     BilibiliBaseIE._download_playinfo = _patched_download_playinfo
