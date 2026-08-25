@@ -31,7 +31,11 @@ def _stub(name, **attrs):
     module = types.ModuleType(name)
     for key, value in attrs.items():
         setattr(module, key, value)
-    sys.modules.setdefault(name, module)
+    # Tests in this repository load downloader modules with lightweight app
+    # stubs. Replace a previous test's stub instead of inheriting it; otherwise
+    # a prior import can leave AudioDownloadResult as ``object`` and turn this
+    # metadata-only test into a TypeError unrelated to the behavior under test.
+    sys.modules[name] = module
     return module
 
 
