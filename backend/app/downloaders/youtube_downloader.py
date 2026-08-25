@@ -55,6 +55,10 @@ class YoutubeDownloader(Downloader, ABC):
 
         if skip_download:
             ydl_opts['skip_download'] = True
+            # 只取元信息时并不需要媒体流。yt-dlp 版本落后于 YouTube player 时，
+            # nsig 解析失败会导致所有音视频格式被丢弃，此时格式选择会抛
+            # "Requested format is not available"，把一个已经拿到字幕的任务带崩。
+            ydl_opts['ignore_no_formats_error'] = True
 
         _apply_proxy(ydl_opts)
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -63,7 +67,8 @@ class YoutubeDownloader(Downloader, ABC):
             title = info.get("title")
             duration = info.get("duration", 0)
             cover_url = info.get("thumbnail")
-            ext = info.get("ext", "m4a")
+            # skip_download 时 yt-dlp 返回 ext=None，默认值不会生效，避免拼出 "xxx.None"
+            ext = info.get("ext") or "m4a"
             audio_path = os.path.join(output_dir, f"{video_id}.{ext}")
 
         return AudioDownloadResult(

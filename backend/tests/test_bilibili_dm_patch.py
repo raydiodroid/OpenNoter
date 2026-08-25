@@ -71,7 +71,9 @@ class ApplyPatchTest(unittest.TestCase):
 
         def fake_download_json(url, video_id, **kwargs):
             # Avoid any network; the real playurl call would 412 without dm_*.
-            return {"data": {"ok": True}}
+            # yt-dlp >= 2026.x checks the envelope's `code` before returning
+            # `data`, so the fake has to look like a real playurl response.
+            return {"code": 0, "data": {"ok": True}}
 
         ie = BilibiliBaseIE(YoutubeDL({"quiet": True}))
         ie._sign_wbi = fake_sign_wbi
@@ -88,6 +90,32 @@ class ApplyPatchTest(unittest.TestCase):
         self.assertEqual(captured["qn"], 64)
         # the original method still builds its base params
         self.assertEqual(captured["bvid"], "BV1X9L16oEgB")
+
+    def test_patch_forwards_unknown_kwargs_to_original(self):
+        """
+        yt-dlp's real call site passes kwargs the wrapper never declared —
+        `_real_extract` calls `_download_playinfo(..., fatal=False)` since
+        2026.x. A wrapper with a pinned signature raises TypeError there and
+        breaks every Bilibili download, so unknown kwargs must pass through.
+        """
+        from yt_dlp import YoutubeDL
+        from yt_dlp.extractor.bilibili import BilibiliBaseIE
+
+        bilibili_dm_patch.apply_bilibili_dm_img_patch()
+
+        seen = {}
+
+        def fake_download_json(url, video_id, **kwargs):
+            return {"code": 0, "data": {"ok": True}}
+
+        ie = BilibiliBaseIE(YoutubeDL({"quiet": True}))
+        ie._sign_wbi = lambda params, video_id: seen.update(params) or params
+        ie._download_json = fake_download_json
+
+        # Must not raise TypeError on a kwarg the wrapper does not name.
+        ie._download_playinfo("BV1X9L16oEgB", 4242, headers={}, query={}, fatal=False)
+
+        self.assertTrue(REQUIRED_KEYS.issubset(seen.keys()))
 
 
 if __name__ == "__main__":
