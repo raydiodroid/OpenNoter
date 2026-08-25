@@ -52,7 +52,12 @@ def _load_youtube_downloader():
     _stub("app.models")
     _stub("app.services")
     _stub("app.utils")
-    _stub("app.downloaders.base", Downloader=_Downloader, DownloadQuality=str)
+    _stub(
+        "app.downloaders.base",
+        Downloader=_Downloader,
+        DownloadQuality=str,
+        YDL_RETRY_OPTS={"retries": 3, "fragment_retries": 3, "socket_timeout": 30},
+    )
     _stub("app.downloaders.youtube_subtitle", YouTubeSubtitleFetcher=object)
     _stub("app.models.notes_model", AudioDownloadResult=_AudioDownloadResult)
     _stub("app.models.transcriber_model", TranscriptResult=object)
