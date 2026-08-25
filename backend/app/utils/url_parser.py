@@ -35,6 +35,29 @@ def extract_video_id(url: str, platform: str) -> Optional[str]:
     return None
 
 
+def normalize_video_url(url: str) -> str:
+    """
+    将任意包含 BV 号的 B 站链接规范化为标准视频链接。
+
+    支持稍后再看（/list/watchlater/?bvid=BV...）、收藏夹播放页（/list/mlXXX?bvid=BV...）、
+    带追踪参数的分享链接等。保留分 P 参数，丢弃其余查询参数。
+
+    b23.tv 短链与无 BV 号的链接原样返回（后者交由校验器拒绝）。
+    """
+    if "b23.tv" in url:
+        return url
+
+    match = re.search(r"BV([0-9A-Za-z]+)", url)
+    if not match:
+        return url
+
+    normalized = f"https://www.bilibili.com/video/BV{match.group(1)}"
+    p = extract_bilibili_p_number(url)
+    if p:
+        normalized += f"?p={p}"
+    return normalized
+
+
 def resolve_bilibili_short_url(short_url: str) -> Optional[str]:
     """
     解析哔哩哔哩短链接以获取真实视频链接
