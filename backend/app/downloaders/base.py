@@ -13,6 +13,19 @@ QUALITY_MAP = {
     "slow": "128"
 }
 
+# yt-dlp 的 `retries` 默认值(10)是命令行参数解析器给的，Python API 不套用它：
+# 不显式设置时 HttpFD 拿到的是 `self.params.get('retries')` == None，而
+# `RetryManager.__init__` 做的是 `self.retries = _retries or 0`——也就是
+# 一次都不重试。任何一次网络抖动（例如 B 站 CDN
+# upos-sz-mirror*.bilivideo.com 读超时）都会让整个笔记任务直接失败。
+#
+# 这里的值偏保守：笔记任务是用户在前台等的，重试太多不如早点失败让用户重来。
+YDL_RETRY_OPTS = {
+    "retries": 3,
+    "fragment_retries": 3,
+    "socket_timeout": 30,
+}
+
 
 class Downloader(ABC):
     def __init__(self):

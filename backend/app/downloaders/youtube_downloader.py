@@ -5,7 +5,7 @@ from typing import Union, Optional, List
 
 import yt_dlp
 
-from app.downloaders.base import Downloader, DownloadQuality
+from app.downloaders.base import Downloader, DownloadQuality, YDL_RETRY_OPTS
 from app.downloaders.youtube_subtitle import YouTubeSubtitleFetcher
 from app.models.notes_model import AudioDownloadResult
 from app.models.transcriber_model import TranscriptResult
@@ -47,6 +47,7 @@ class YoutubeDownloader(Downloader, ABC):
         output_path = os.path.join(output_dir, "%(id)s.%(ext)s")
 
         ydl_opts = {
+            **YDL_RETRY_OPTS,
             'format': 'bestaudio[ext=m4a]/bestaudio/best',
             'outtmpl': output_path,
             'noplaylist': True,
@@ -100,6 +101,7 @@ class YoutubeDownloader(Downloader, ABC):
         output_path = os.path.join(output_dir, "%(id)s.%(ext)s")
 
         ydl_opts = {
+            **YDL_RETRY_OPTS,
             'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]',
             'outtmpl': output_path,
             'noplaylist': True,
