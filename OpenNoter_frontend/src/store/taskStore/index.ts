@@ -57,6 +57,18 @@ function normalizeTask(task: any): Task {
 interface TaskState {
   tasks: Task[]
   currentTaskId: string | null
+  /**
+   * 从服务端同步任务列表。
+   *
+   * 历史列表原先只存浏览器 IndexedDB：换浏览器/设备就看不到，清缓存就丢。
+   * 现在以服务端为准（它按 user_id 做归属隔离），本地只作离线缓存：
+   *   - 拉到服务端已有、本地没有的任务 → 补一个占位条目（正文点开再拉）
+   *   - 服务端已删除、本地还在的 → 从本地移除
+   *   - 本地正在进行中（PENDING/...）的任务 → 保留，避免刚提交就被覆盖
+   */
+  syncFromServer: () => Promise<void>
+  syncing: boolean
+  lastSyncedAt: string | null
   addPendingTask: (taskId: string, formData: TaskFormData) => void
   updateTask: (id: string, patch: Partial<Omit<Task, 'id'>>) => void
   markSuccess: (
@@ -73,6 +85,70 @@ export const useTaskStore = create<TaskState>()(
     (set) => ({
       tasks: [],
       currentTaskId: null,
+      syncing: false,
+      lastSyncedAt: null,
+
+      syncFromServer: async () => {
+        const { listTasks } = await import('@/services/note')
+        set({ syncing: true })
+        try {
+          const res = await listTasks({ limit: 200 })
+          const remote = res?.items ?? []
+          set(state => {
+            const localById = new Map(state.tasks.map(t => [t.id, t]))
+            const remoteIds = new Set(remote.map(r => r.task_id))
+            const running = new Set([
+              'PENDING',
+              'PARSING',
+              'DOWNLOADING',
+              'TRANSCRIBING',
+              'SUMMARIZING',
+              'FORMATTING',
+              'SAVING',
+            ])
+
+            const merged: Task[] = []
+
+            // 1) 服务端有的：沿用本地已有内容，否则建占位条目
+            for (const r of remote) {
+              const local = localById.get(r.task_id)
+              if (local) {
+                merged.push({ ...local, status: (r.status as TaskStatus) || local.status })
+              } else {
+                merged.push({
+                  id: r.task_id,
+                  status: (r.status as TaskStatus) || 'PENDING',
+                  markdown: [],
+                  transcript: emptyTranscript(),
+                  audioMeta: emptyAudioMeta(),
+                  createdAt: r.updated_at || new Date().toISOString(),
+                  formData: {
+                    video_url: '',
+                    platform: '',
+                    quality: 'medium',
+                    format: [],
+                    model_name: '',
+                    provider_id: '',
+                    style: '',
+                    extras: '',
+                  } as TaskFormData,
+                })
+              }
+            }
+
+            // 2) 本地有、服务端没有的：正在跑的保留，已结束的移除
+            for (const t of state.tasks) {
+              if (remoteIds.has(t.id)) continue
+              if (running.has(t.status)) merged.push(t)
+            }
+
+            return { tasks: merged, syncing: false, lastSyncedAt: new Date().toISOString() }
+          })
+        } catch {
+          // 离线/未登录：保留本地缓存，不打断使用
+          set({ syncing: false })
+        }
+      },
 
       addPendingTask: (taskId, formData) =>
         set(state => ({

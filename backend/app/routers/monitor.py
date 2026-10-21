@@ -16,6 +16,7 @@
 
 import json
 import os
+import re
 import platform
 import shutil
 import subprocess
@@ -230,6 +231,32 @@ def _storage() -> dict:
     return result
 
 
+# 任务 id 形态：标准 UUID（8-4-4-4-12）。历史上还有 task-<n> 这类测试数据，
+# 一并放行；但 `xxx_markdown` 这种后缀残留必须排除。
+_UUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+
+def _looks_like_task_id(name: str) -> bool:
+    """判断状态文件名（去掉 .status.json）是否像合法 task_id。
+
+    合法：标准 UUID，或 `task-*` / `t-*` 之类的简单标识（测试与旧数据）。
+    非法：带 `_markdown` / `_audio` / `_transcript` 后缀的缓存残留。
+    """
+    if not name:
+        return False
+    if _UUID_RE.match(name):
+        return True
+    # 排除已知的缓存后缀残留
+    lowered = name.lower()
+    for suffix in ("_markdown", "_audio", "_transcript", "_meta"):
+        if lowered.endswith(suffix):
+            return False
+    # 其余（task-1、t-abc 等）按简单标识放行；含路径分隔符的排除
+    return "/" not in name and "\\" not in name
+
+
 def _tasks() -> dict:
     """扫状态文件统计任务。
 
@@ -262,7 +289,14 @@ def _tasks() -> dict:
     stale_cutoff = time.time() - TASK_STALE_HOURS * 3600
 
     try:
-        status_files = list(NOTE_DIR.glob("*.status.json"))
+        # 只认「纯 UUID」文件名。旧版代码曾写出过
+        # `{task_id}_markdown.status.json` 这类残留文件（内容是过期的
+        # SUMMARIZING），它们会被误当成独立任务，导致总数虚高、状态错乱。
+        status_files = [
+            p
+            for p in NOTE_DIR.glob("*.status.json")
+            if _looks_like_task_id(p.name[: -len(".status.json")])
+        ]
     except OSError as exc:
         counters["error"] = f"扫描任务目录失败：{exc}"
         return counters

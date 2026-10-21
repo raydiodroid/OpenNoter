@@ -4,9 +4,18 @@ import { getTaskStatus } from '@/services/note'
 import { toast } from '@/lib/toast'
 
 /** 全局任务轮询：推进 PENDING → … → SUCCESS / FAILED，成功后落库多版本笔记 */
+/** 服务端列表同步的间隔：比状态轮询稀疏得多（列表变化不频繁） */
+const SYNC_INTERVAL = 30000
+
 export const useTaskPolling = (interval = 3000) => {
   useEffect(() => {
     let busy = false
+
+    // 启动时先拉一次服务端列表：换浏览器/设备后也能看到自己的历史
+    void useTaskStore.getState().syncFromServer()
+    const syncTimer = setInterval(() => {
+      void useTaskStore.getState().syncFromServer()
+    }, SYNC_INTERVAL)
 
     const tick = async () => {
       if (busy) return
@@ -43,6 +52,9 @@ export const useTaskPolling = (interval = 3000) => {
 
     const timer = setInterval(tick, interval)
     tick()
-    return () => clearInterval(timer)
+    return () => {
+      clearInterval(timer)
+      clearInterval(syncTimer)
+    }
   }, [interval])
 }

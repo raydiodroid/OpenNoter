@@ -2,6 +2,7 @@
 import json
 import os
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
@@ -19,7 +20,7 @@ from app.db.models.users import User
 from app.enmus.exception import NoteErrorEnum
 from app.enmus.note_enums import DownloadQuality
 from app.exceptions.note import NoteError
-from app.services.auth import get_optional_user
+from app.services.auth import auth_enforced, get_optional_user
 from app.services.model_selection import resolve_model_selection
 from app.services.note import NoteGenerator, logger, transcript_cache_path
 from app.services.task_serial_executor import task_serial_executor
@@ -460,6 +461,111 @@ def create_note(data: CreateNoteRequest, background_tasks: BackgroundTasks,
     return R.success({"task_id": task_id, "platform": platform})
 
 
+@router.get("/tasks")
+def list_tasks(
+    limit: int = 50,
+    offset: int = 0,
+    status: Optional[str] = None,
+    user: User | None = Depends(get_optional_user),
+):
+    """列出当前用户的笔记任务（供前端「历史」列表使用）。
+
+    **为什么需要这个接口**：任务列表原先只存在前端 IndexedDB 里，
+    导致换浏览器/换设备就看不到历史、清缓存就丢——而笔记文件其实
+    一直在服务器上。这里把列表能力补到服务端，让历史真正跟着账号走。
+
+    归属规则（与单条查询保持一致）：
+      - 有 user_id 且等于当前用户 → 可见
+      - 有 user_id 但不是当前用户 → **不可见**（不泄露他人任务）
+      - 没有 user_id（改名前的历史数据）→ 仅管理员可见，
+        避免「任何人都能翻到别人早期任务」
+
+    返回按创建时间倒序，只带列表需要的轻量字段（不含 markdown 正文，
+    正文由 `/tasks/{id}` 按需拉取）。
+    """
+    note_dir = Path(NOTE_OUTPUT_DIR)
+    if not note_dir.exists():
+        return R.success({"items": [], "total": 0, "limit": limit, "offset": offset})
+
+    limit = max(1, min(limit, 200))
+    offset = max(0, offset)
+
+    is_admin = bool(user and user.is_superuser)
+    wanted_status = (status or "").strip().upper() or None
+
+    items: list[dict] = []
+    scan_errors = 0
+
+    try:
+        # 排除 `{task_id}_markdown.status.json` 这类缓存残留：
+        # 它们会被误认为独立任务，让列表出现重复项。
+        status_files = [
+            p
+            for p in note_dir.glob("*.status.json")
+            if not any(
+                p.name[: -len(".status.json")].lower().endswith(sfx)
+                for sfx in ("_markdown", "_audio", "_transcript", "_meta")
+            )
+        ]
+    except OSError as exc:
+        logger.warning(f"扫描任务目录失败: {exc}")
+        return R.success({"items": [], "total": 0, "limit": limit, "offset": offset})
+
+    for path in status_files:
+        try:
+            st = path.stat()
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError("not a dict")
+        except Exception:
+            scan_errors += 1
+            continue
+
+        owner = payload.get("user_id")
+        if owner is not None:
+            if user is None or owner != user.id:
+                continue
+        elif not is_admin:
+            # 无归属的历史数据：只让管理员看到
+            continue
+
+        task_status = str(payload.get("status") or "").upper()
+        if wanted_status and task_status != wanted_status:
+            continue
+
+        task_id = path.name[: -len(".status.json")]
+        # 只有成功的任务才有正文；列表里给个标记，前端点开再拉全文
+        result_path = path.with_name(f"{task_id}.json")
+        items.append(
+            {
+                "task_id": task_id,
+                "status": task_status,
+                "message": payload.get("message") or None,
+                "has_result": result_path.exists(),
+                "updated_at": datetime.fromtimestamp(
+                    st.st_mtime, tz=timezone.utc
+                ).isoformat(),
+                "failed_at": payload.get("failed_at"),
+            }
+        )
+
+    items.sort(key=lambda x: x["updated_at"], reverse=True)
+    total = len(items)
+    page = items[offset : offset + limit]
+
+    if scan_errors:
+        logger.warning(f"列表扫描跳过 {scan_errors} 个无法解析的状态文件")
+
+    return R.success(
+        {
+            "items": page,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }
+    )
+
+
 @router.get("/tasks/{task_id}")
 def get_task(task_id: str, user: User | None = Depends(get_optional_user)):
     """查询任务状态。
@@ -469,6 +575,7 @@ def get_task(task_id: str, user: User | None = Depends(get_optional_user)):
     结果，不是接口出错。
     """
     return get_task_status(task_id, user)
+
 
 
 @router.get("/task_status/{task_id}", include_in_schema=False)
@@ -481,9 +588,19 @@ def get_task_status(task_id: str, user: User | None = Depends(get_optional_user)
         with open(status_path, "r", encoding="utf-8") as f:
             status_content = json.load(f)
 
-        # 归属校验：老任务没有 user_id 时放行，避免把历史结果锁死
+        # 归属校验。
+        #
+        # 旧实现对「没有 user_id 的老任务」一律放行，等于任何登录用户
+        # 只要猜到 task_id 就能读到别人的笔记——这是越权。
+        # 现在：有归属必须匹配；无归属只允许管理员读（便于排查历史数据）。
         owner = status_content.get("user_id")
-        if owner is not None and user is not None and owner != user.id:
+        is_admin = bool(user and user.is_superuser)
+        if owner is not None:
+            if user is None or owner != user.id:
+                raise HTTPException(status_code=403, detail="无权访问该任务")
+        elif not is_admin and auth_enforced():
+            # 无归属的遗留数据：仅在「开启强制认证」的环境下收紧，
+            # 避免单人自托管场景把历史笔记全部锁死。
             raise HTTPException(status_code=403, detail="无权访问该任务")
 
         status = status_content.get("status")
