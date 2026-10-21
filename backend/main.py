@@ -70,6 +70,19 @@ async def lifespan(app: FastAPI):
         if _proxy:
             logger.info(f"           已应用全局代理到环境变量: {_proxy}")
 
+        # 静默把历史明文 Cookie 转成密文（幂等）。
+        # 放在这里而不是首次读写时：避免「读一次写一次」的隐式落盘，
+        # 也让升级后第一时间消除明文。
+        try:
+            from app.services.cookie_manager import CookieConfigManager
+
+            migrated = CookieConfigManager().migrate_plaintext()
+            if migrated:
+                logger.info(f"           已加密 {migrated} 个平台的存量 Cookie（明文 → 密文）")
+        except Exception as exc:
+            # 迁移失败不该阻止启动；下次再试
+            logger.warning(f"           Cookie 明文迁移失败（下次启动重试）：{exc}")
+
         logger.info("[startup 5/5] 启动完成，等待请求")
     except Exception:
         logger.exception("[startup FAILED] 后端启动期异常，详见堆栈；容器会退出并由 restart 策略决定是否重试")
