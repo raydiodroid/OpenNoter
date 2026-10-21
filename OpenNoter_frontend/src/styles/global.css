@@ -1,0 +1,722 @@
+/* ────────────────────────────────────────────────────────────────
+   全局基线
+   设计语言：Adobe Spectrum 2（@react-spectrum/s2）
+   本文件只负责四件事：
+   1. 全站字体统一为思源系（黑体 / 等宽），不引入任何其他字体
+   2. 亮色主题与视口、滚动条、选区等浏览器默认样式
+   3. 笔记正文排版（Markdown 不在 S2 组件覆盖范围内）
+   4. S2 style() 覆盖不到的几个结构性工具类（单边分隔线、mono）
+   颜色 / 间距 / 字号仍以 style() token 与 Spectrum 语义 token 为准。
+   ──────────────────────────────────────────────────────────────── */
+
+/* ── 思源黑体（Source Han Sans / Noto Sans CJK） ──────────────────
+   字体文件仅包含约 7900 个常用汉字 + 拉丁与标点，覆盖界面与笔记正文。
+   优先使用系统已安装的思源字体，没有再加载随包字体。 */
+@font-face {
+  font-family: 'Source Han Sans SC';
+  src:
+    local('Source Han Sans SC'),
+    local('Source Han Sans CN'),
+    local('Noto Sans CJK SC'),
+    url('/fonts/SourceHanSansSC-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Source Han Sans SC';
+  src:
+    local('Source Han Sans SC Medium'),
+    local('Noto Sans CJK SC Medium'),
+    url('/fonts/SourceHanSansSC-Medium.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Source Han Sans SC';
+  src:
+    local('Source Han Sans SC Bold'),
+    local('Noto Sans CJK SC Bold'),
+    url('/fonts/SourceHanSansSC-Bold.woff2') format('woff2');
+  font-weight: 700 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* 思源宋体：只用于数学公式等需要衬线的场景 */
+@font-face {
+  font-family: 'Source Han Serif SC';
+  src:
+    local('Source Han Serif SC'),
+    local('Source Han Serif CN'),
+    local('Noto Serif CJK SC'),
+    url('/fonts/SourceHanSerifSC-Regular.woff2') format('woff2');
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* 思源等宽（Source Han Mono / Noto Sans Mono CJK）用于代码与数字表格 */
+@font-face {
+  font-family: 'Source Han Mono SC';
+  src:
+    local('Source Han Mono SC'),
+    local('Source Han Mono CN'),
+    local('Noto Sans Mono CJK SC'),
+    url('/fonts/SourceHanMonoSC-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  /* 明暗主题：浅色为默认；html[data-theme='dark'] 覆盖。
+     color-scheme 同时驱动 CSS 的 light-dark()，S2 的 style() token 本身也是
+     light-dark() 编译出来的，因此暗色下 S2 组件自动跟随，无需额外覆盖。 */
+  color-scheme: light;
+  --s2-color-scheme: light;
+
+  /* 全站唯一字体栈：思源黑体 / 思源宋体 / 思源等宽。
+     不列 -apple-system、PingFang、Segoe UI、Arial 等任何其他字体。 */
+  --font-sans: 'Source Han Sans SC', 'Source Han Sans CN', 'Noto Sans CJK SC', sans-serif;
+  --font-serif: 'Source Han Serif SC', 'Source Han Serif CN', 'Noto Serif CJK SC', serif;
+  --font-mono:
+    'Source Han Mono SC', 'Source Han Mono CN', 'Noto Sans Mono CJK SC', 'Source Han Sans SC',
+    monospace;
+
+  /* S2 组件通过这两个变量取字体；同时给不读变量的 i18n 规则做覆盖（见下） */
+  --s2-font-family-sans: var(--font-sans);
+  --s2-font-family-serif: var(--font-serif);
+
+  /* 笔记正文用的 Spectrum 语义色（与 S2 gray / accent 色阶一致） */
+  --note-text: #292929; /* gray-800 */
+  --note-subdued: #505050; /* gray-700 */
+  --note-faint: #6e6e6e; /* gray-600 */
+  --note-border: #e1e1e1; /* gray-200 */
+  --note-surface: #f8f8f8; /* layer-1 */
+  --note-surface-2: #f5f5f5; /* gray-100 */
+  --note-accent: #274dea; /* accent */
+  --note-accent-soft: rgba(39, 77, 234, 0.08);
+  --note-accent-soft-hover: rgba(39, 77, 234, 0.16);
+
+  --scrollbar-thumb: rgba(41, 41, 41, 0.18);
+  --scrollbar-thumb-hover: rgba(41, 41, 41, 0.32);
+}
+
+/* 深色主题：语义变量 + color-scheme 双覆盖，S2 的 light-dark() 随之取暗值 */
+html[data-theme='dark'] {
+  color-scheme: dark;
+  --s2-color-scheme: dark;
+
+  --note-text: #f5f5f5;
+  --note-subdued: #d0d0d0;
+  --note-faint: #a6a6a6;
+  --note-border: #3e3e3e;
+  --note-surface: #1b1b1b;
+  --note-surface-2: #262626;
+  --note-accent: #7d97ff;
+  --note-accent-soft: rgba(125, 151, 255, 0.16);
+  --note-accent-soft-hover: rgba(125, 151, 255, 0.26);
+
+  --scrollbar-thumb: rgba(245, 245, 245, 0.2);
+  --scrollbar-thumb-hover: rgba(245, 245, 245, 0.35);
+}
+
+/* 兜底：无论 S2 内部（含 portal / 隐藏的 live region）写了什么字体，
+   未分层的通配规则都优先于 S2 的 @layer 规则，确保全站只用思源。
+   code / pre / .u-mono 在下面用更高优先级改回思源等宽。 */
+*,
+*::before,
+*::after {
+  font-family: var(--font-sans);
+}
+
+/* S2 的 i18n 规则会把 zh-CN 强制切到 Adobe Clean Han / SimSun / Heiti SC。
+   它位于 @layer 内，未分层的规则优先级更高，这里统一拉回思源。 */
+:lang(zh-Hans),
+:lang(zh-CN),
+:lang(zh-SG),
+:lang(zh) {
+  font-family: var(--font-sans);
+}
+
+/* 代码 / 等宽数字不受上面的 sans 覆盖影响 */
+:is(code, pre, kbd, samp, .u-mono),
+:is(:lang(zh-Hans), :lang(zh-CN), :lang(zh-SG), :lang(zh)) :is(code, pre, kbd, samp, .u-mono) {
+  font-family: var(--font-mono);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+html {
+  background: var(--note-surface); /* layer-1：应用外壳 */
+}
+
+html[data-theme='dark'] {
+  background: #1b1b1b;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--note-text);
+  background: var(--note-surface);
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+/* 数字列 / 时间戳 / 指标值：等宽对齐，避免跳动 */
+.u-tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 滚动条：细、低对比，悬停才加深 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
+  border: 3px solid transparent;
+  background-clip: content-box;
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-thumb-hover);
+}
+
+::selection {
+  background: rgba(59, 99, 251, 0.18);
+}
+
+/* ────────────────────────────────────────────────────────────────
+   笔记正文
+   Spectrum Body M：16px；CJK 行高 1.7；标题使用 Heading 字号并加粗。
+   ──────────────────────────────────────────────────────────────── */
+.note-body {
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.7;
+  color: var(--note-text);
+  word-break: break-word;
+  text-wrap: pretty;
+}
+
+.note-body > *:first-child {
+  margin-top: 0;
+}
+
+.note-body > *:last-child {
+  margin-bottom: 0;
+}
+
+.note-body p {
+  margin: 0 0 1.1em;
+}
+
+.note-body strong {
+  font-weight: 700;
+  color: var(--note-text);
+}
+
+.note-body em {
+  font-style: italic;
+}
+
+.note-body a {
+  color: var(--note-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+}
+
+.note-body a:hover {
+  text-decoration-thickness: 2px;
+}
+
+.note-body h1,
+.note-body h2,
+.note-body h3,
+.note-body h4,
+.note-body h5,
+.note-body h6 {
+  color: var(--note-text);
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1.5;
+  margin: 1.8em 0 0.6em;
+  scroll-margin-top: 80px;
+}
+
+.note-body h1 {
+  font-size: 28px;
+}
+
+.note-body h2 {
+  font-size: 22px;
+}
+
+.note-body h3 {
+  font-size: 18px;
+}
+
+.note-body h4,
+.note-body h5,
+.note-body h6 {
+  font-size: 16px;
+}
+
+.note-body ul,
+.note-body ol {
+  margin: 0 0 1.1em;
+  padding-left: 1.6em;
+}
+
+.note-body ul {
+  list-style: disc;
+}
+
+.note-body ol {
+  list-style: decimal;
+}
+
+.note-body li {
+  margin: 0.3em 0;
+}
+
+.note-body li > p {
+  margin: 0 0 0.3em;
+}
+
+.note-body blockquote {
+  margin: 0 0 1.1em;
+  padding: 4px 0 4px 16px;
+  border-left: 2px solid light-dark(#cacaca, #4a4a4a); /* gray-300 */
+  color: var(--note-subdued);
+}
+
+.note-body code {
+  font-family: var(--font-mono);
+  font-size: 0.75em;
+  background: var(--note-surface-2);
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+}
+
+/* 代码块：外框（边框 / 圆角 / 背景）由 MarkdownArticle 的 codeBlock 容器负责，
+   这里只定排版，避免内外两层各画一次边框和圆角。 */
+.note-body pre {
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-x: auto;
+}
+
+.note-body pre code {
+  background: transparent;
+  padding: 0;
+  font-size: inherit;
+}
+
+.note-body img {
+  max-width: 100%;
+  border-radius: 10px;
+}
+
+.note-body table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0 0 1.2em;
+  font-size: 14px;
+}
+
+.note-body th {
+  text-align: left;
+  font-weight: 700;
+  color: var(--note-subdued);
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--note-border);
+  background: var(--note-surface);
+}
+
+.note-body td {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--note-border);
+}
+
+.note-body tr:last-child td {
+  border-bottom: none;
+}
+
+.note-body hr {
+  border: none;
+  border-top: 1px solid var(--note-border);
+  margin: 2em 0;
+}
+
+/* KaTeX 公式在窄容器里允许横向滚动，不撑破版面 */
+.note-body .katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 4px 0;
+}
+
+/* 原片跳转胶囊 */
+.note-origin-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--note-accent-soft);
+  color: var(--note-accent);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.note-origin-link:hover {
+  background: var(--note-accent-soft-hover);
+}
+
+/* 平台品牌标：SVG 自带 200px 宽高，外层裁切 */
+.brand-mark > svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* markmap 工具栏跟随主题 */
+.markmap {
+  width: 100%;
+  height: 100%;
+}
+
+.markmap > svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* 图片放大层 */
+[data-rmiz-modal-overlay='visible'] {
+  background-color: rgba(0, 0, 0, 0.82);
+}
+
+/* TabPanel 的 styles 不允许 overflow，用它接管滚动 */
+.scroll-pane {
+  overflow-y: auto;
+}
+
+/* 全站手写规则的取色一律走 light-dark()：html 上的 color-scheme 随主题切换，
+   light-dark() 会自动取对应的一侧。S2 的 style() token 本身已经是 light-dark()，
+   这里只需要对齐 S2 的同名字面量，不要再写死单一色值。 */
+
+/* 键盘焦点：自定义可点击行必须有可见焦点环（对齐 S2 focus-indicator-color） */
+.focus-ring:focus-visible {
+  outline: 2px solid light-dark(#3b63fb, #5681ff);
+  outline-offset: 2px;
+}
+
+/* 历史 / 平台 / 供应商列表行的悬停底色（S2 无 ListView hover token，对齐 gray-100） */
+.row-hover:hover {
+  background: light-dark(#e9e9e9, #2c2c2c);
+}
+
+/* 表格里可点的状态 Badge（用户管理「状态」列）。
+   按钮自身不画框，只借用 Badge 的形状；可点性靠 hover 的轻微不透明度变化提示，
+   不给行 hover 再叠一层灰底（表格行本来就会高亮，叠起来显脏）。
+   禁用态用于「不能停用自己」那一行。 */
+.status-chip {
+  cursor: pointer;
+}
+
+.status-chip:hover:not(:disabled) {
+  opacity: 0.72;
+}
+
+.status-chip:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+/* 角色列的下拉箭头去掉。
+   S2 的 Picker 没有「隐藏 chevron」的开关，Chevron 是它按钮里 10×10 的固定结构，
+   所以从 DOM 层收掉：`.role-picker > svg` 是那个箭头（Badge 里的图标在 span 内部，
+   不受影响）。同时把按钮右侧留给箭头的内边距归零，否则会空出一截。
+   去掉箭头后仍可点：整枚 Badge 就是触发器。
+   注意 UNSAFE_className 落在 Picker 的**外层 div** 上，按钮是它的子元素，所以用后代选择器。 */
+.role-picker button {
+  padding-inline-end: 0 !important;
+}
+
+.role-picker button > svg {
+  display: none;
+}
+
+/* 行内删除按钮：破坏性操作，常态就是红的。
+   S2 的 ActionButton 没有 danger/negative 变体（只有 Button 有 negative），
+   图标本身吃 currentColor，所以直接给按钮上色。
+   色值直接抄 S2 编译产物里的 negative 语义色：light #b72818 / dark #ff6756，
+   与 StatusIndicator 的负向状态、AlertDialog 的 destructive 是同一支红，不另造色。
+   hover 用 S2 negative 的深一档 #d73220 / #fc432e（构建产物里同样有）。
+   禁用态回落到 S2 的 disabled 文本色，避免「灰掉的按钮还在喊红色」。 */
+.delete-action {
+  color: light-dark(#b72818, #ff6756) !important;
+}
+
+.delete-action:hover:not(:disabled) {
+  color: light-dark(#d73220, #fc432e) !important;
+}
+
+.delete-action:disabled {
+  color: light-dark(#cacaca, #4a4a4a) !important;
+}
+
+/* Cookie 是多行文本，空值时也保留可书写高度 */
+.cookie-textarea textarea {
+  min-height: 132px;
+}
+
+/* markmap 的文本节点在 SVG foreignObject 内，必须显式指定思源字体 */
+.markmap text,
+.markmap foreignObject,
+.markmap foreignObject div {
+  font-family: var(--font-sans) !important;
+}
+
+/* 数学公式也归到思源宋体：KaTeX 默认会加载 KaTeX_Main / KaTeX_Math 等字体，
+   与「全站只用思源系」冲突。公式的语义样式（斜体、上下标、间距）由 KaTeX 保留。 */
+.note-body .katex,
+.note-body .katex * {
+  font-family: var(--font-serif) !important;
+}
+
+/* S2 SideNavPanel 自带图标轨道宽度与折叠控制按钮定位；不要覆盖 footer 的 marginStart，
+   这样按钮在宽度动画过程中保持同一锚点。 */
+
+/* 分组之间的间距：官方 token side-navigation-item-to-header = 24px
+   （container-gap-extra-large）。S2 的 SideNavSection 自带 marginTop: 24，
+   但宏的条件写法 ':not(:first-child)' 不被支持、编译后并未生效，这里手动补上。
+   不画分隔线：app frame 规范里的分隔线指的是侧栏底部「end section」与状态控制按钮之间那条，
+   分组之间不画。 */
+.app-nav [role='rowgroup']:not(:first-child) {
+  margin-top: 24px;
+}
+
+/* S2 的 SideNavItem 会为「可展开子级」预留一个 32px 的 chevron 槽位。
+   这个槽位在 `hasChildItems` 为假时用 `visibility: hidden` 隐藏 —— 看不见，
+   但**仍然占布局宽度**，于是每一行右侧凭空多出约 28px 的死区，
+   导航项因此只撑到面板内容宽的约 87%，右侧看上去空了一块。
+   本项目的一级导航没有子级、也不做行内展开，所以把整个槽位从布局里移除；
+   行宽随即回到面板内容宽，导航项与内容表面之间不再有多余空隙。
+   折叠态下 S2 本来就对 chevron 用 `display: none`，这里不改变折叠表现。 */
+.app-nav [slot='chevron'] {
+  display: none;
+}
+
+/* SideNavPanel 自身负责宽度动画；在不支持 React ViewTransition 的浏览器里，
+   仍让导航项保持 S2 的平滑切换节奏。 */
+[data-side-panel-collapsed] {
+  transition: width 200ms cubic-bezier(0.45, 0, 0.4, 1);
+}
+
+/* 工作台参数面板与内容区同步收展：先动画宽度，内容等宽度稳定后再显示，
+   与 S2 SideNavPanel 的时序一致（200ms，in-out 缓动）。拖动调宽时关闭动画。
+   注意：这里不能加 overflow:hidden —— 拖拽手柄要跨在分界线上，裁掉就只剩半截。 */
+.workbench-panel-frame {
+  flex: 0 0 auto;
+  transition: width 200ms cubic-bezier(0.45, 0, 0.4, 1);
+}
+
+.workbench-panel-frame--resizing {
+  transition: none;
+}
+
+/* 内容不做宽度动画，避免文字被挤压；收起时直接隐藏 */
+.workbench-panel-content {
+  overflow: hidden;
+}
+
+.workbench-panel-content--hidden {
+  visibility: hidden;
+}
+
+/* 折叠后的图标轨道 */
+.workbench-panel-rail {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-start: 0;
+  width: 44px;
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 120ms ease,
+    visibility 0s linear 120ms;
+}
+
+.workbench-panel-rail--visible {
+  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
+  transition: opacity 120ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-side-panel-collapsed],
+  .workbench-panel-frame,
+  .workbench-panel-content,
+  .workbench-panel-rail {
+    transition: none;
+  }
+}
+
+/* 工作台参数面板 / 预览区之间的拖拽分隔。
+   1px 线正好落在两栏的分界上；手柄叠在线之上（线在手柄上下两段仍然可见）。
+   手柄是面板框的子元素、而不是 aside 的子元素 —— aside 有 overflow:hidden，
+   放在里面会被裁掉一半，露出的那半截正好压住 1px 线，分隔线就「消失」了。 */
+.panel-resizer {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: -4px;
+  z-index: 4;
+  width: 8px;
+  cursor: col-resize;
+  touch-action: none;
+  outline: none;
+}
+
+.panel-resizer::before {
+  content: '';
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: calc(50% - 0.5px);
+  width: 1px;
+  background: var(--note-border);
+  transition:
+    background-color 120ms ease,
+    width 120ms ease;
+}
+
+.panel-resizer:hover::before,
+.panel-resizer:focus-visible::before,
+.panel-resizer-active::before {
+  width: 2px;
+  inset-inline-start: calc(50% - 1px);
+  background: light-dark(#3b63fb, #5681ff);
+}
+
+/* 手柄绘制在分隔线之上，居中对齐 */
+.panel-resizer::after {
+  content: '';
+  position: absolute;
+  inset-inline-start: calc(50% - 2px);
+  top: 50%;
+  width: 4px;
+  height: 36px;
+  transform: translateY(-50%);
+  border-radius: 999px;
+  background: light-dark(#b3b3b3, #6e6e6e);
+  opacity: 0.8;
+  transition:
+    background-color 120ms ease,
+    opacity 120ms ease;
+}
+
+.panel-resizer:hover::after,
+.panel-resizer:focus-visible::after,
+.panel-resizer-active::after {
+  background: light-dark(#3b63fb, #5681ff);
+  opacity: 1;
+}
+
+.panel-resizer:focus-visible {
+  outline: 2px solid light-dark(#3b63fb, #5681ff);
+  outline-offset: -2px;
+  border-radius: 2px;
+}
+
+/* 面板已折叠：没有可拖宽的对象，只留 1px 分隔线把图标轨道与预览区分开，
+   手柄隐藏、不吃指针事件（否则会挡住预览区左边缘的点击）。 */
+.workbench-panel-frame--collapsed .panel-resizer {
+  pointer-events: none;
+}
+
+.workbench-panel-frame--collapsed .panel-resizer::after {
+  content: none;
+}
+
+/* 顶栏与内容表面共用同一条右边线：两者都距窗口右缘 16px。
+   这对宽窄屏都成立，所以不再需要断点覆盖 —— 值本身写在 AppShell 的
+   style() 里（header paddingEnd 16 / content marginEnd 16）。
+   先前 768px 断点把顶栏 padding-inline-end 拉到 32px，会让窄屏下
+   右侧操作比内容表面右缘多内缩 16px，正是这次要修掉的错位。 */
+
+/* 窄屏下参数面板作为临时 drawer 覆盖阅读区，而不是继续压缩阅读列。
+   点面板外的 scrim 或面板收起按钮即可回到完整阅读区。 */
+.workbench-page--narrow {
+  position: relative;
+}
+
+.workbench-panel-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  background: light-dark(rgb(0 0 0 / 12%), rgb(0 0 0 / 32%));
+}
+
+@media (max-width: 920px) {
+  .workbench-panel-frame {
+    position: absolute;
+    inset-block: 0;
+    inset-inline-start: 0;
+    z-index: 4;
+    max-width: 100%;
+  }
+
+  .workbench-panel-content {
+    max-width: 100%;
+    box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
+  }
+
+  .workbench-panel-frame .panel-resizer {
+    display: none;
+  }
+}
+
+/* S2 的虚拟化表格在没有数据时会把表体压成 0 高度，内置的 renderEmptyState
+   因此被定位到可视区之外 —— 空态在页面上根本看不到。给表格网格一个最小
+   高度，空态才有地方显示。用法：给表格外层加 .table-empty 包裹。 */
+.table-empty [role='grid'] {
+  min-height: 260px;
+}
