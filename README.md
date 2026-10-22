@@ -292,13 +292,32 @@ docker logs -f opennoter-backend
 
 **3. 数据存在哪？删容器会丢吗？**
 
-`docker-compose` 用的是 `./backend:/app` 绑挂，下面这些文件都在宿主机的 `./backend/` 目录里、删容器不会丢：
-- `./backend/open_noter.db` —— SQLite 库（含 LLM 供应商配置、笔记历史）
-- `./backend/config/transcriber.json` —— 转写器运行时配置
-- `./backend/static/screenshots/` —— 视频截图
-- `./backend/uploads/` —— 上传的本地视频
+compose **只挂数据卷**，代码在镜像里（不再整目录 `./backend:/app`）：
+- `./backend/data/open_noter.db` —— SQLite（`DATABASE_URL` 默认 `sqlite:////app/data/open_noter.db`）
+- `./backend/config/` —— 转写器 / Cookie 等运行时配置
+- `./backend/static/`、`uploads/`、`note_results/`、`models/`、`logs/`、`vector_db/`
 
-要彻底重置就 `docker-compose down && rm backend/open_noter.db backend/config/transcriber.json`。
+删容器不丢上述目录。升级镜像即可换代码，数据卷保留。
+
+若你还在用旧布局（库在 `./backend/open_noter.db`），升级前迁移一次：
+
+```bash
+mkdir -p backend/data
+mv backend/open_noter.db backend/data/open_noter.db  # 若存在
+docker-compose up -d --build
+```
+
+要彻底重置：`docker-compose down && rm -rf backend/data backend/config/*`（按需再清 uploads / note_results）。
+
+**多副本 / 水平扩展**
+
+默认是**单副本 + SQLite**。内存限流、OIDC state、笔记 `BackgroundTasks` 都在进程内，**不能**直接 `replicas: N`。若要多后端副本，至少：
+
+1. 把 `DATABASE_URL` 换成 **Postgres**（或其它多写者库；SQLAlchemy 已支持非 SQLite 连接池）；
+2. 外置任务队列 / 共享限流（Redis 等）——当前仓库未内置，需自建；
+3. 数据卷改为共享存储（NFS/对象存储），避免每副本各写一份 uploads。
+
+未满足前请保持 `deploy.replicas` 为 1（compose 默认即如此）。
 
 **任务中断与队列（为何没有 Celery/Redis）**
 
@@ -306,7 +325,7 @@ docker logs -f opennoter-backend
 
 - 进程**优雅退出**或**下次启动**时，会把仍处于 `PENDING` / `TRANSCRIBING` 等中间态的任务标为 `FAILED`，避免前端永远轮询。
 - **不**自动续跑；需要用户重新提交。
-- 若要多副本 / 可靠投递，请改用外部队列，并把 `DATABASE_URL` 换成 Postgres（SQLite 不适合多写者）。详见 compose 注释与下方「数据卷」说明。
+- 若要多副本 / 可靠投递，请改用外部队列，并把 `DATABASE_URL` 换成 Postgres（SQLite 不适合多写者）。详见 compose 注释与上文「多副本 / 水平扩展」。
 
 
 **4. 前端打开是空白页 / 报 502**

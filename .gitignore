@@ -309,6 +309,7 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 /backend/data/*
+!/backend/data/.gitkeep
 /backend/static/*
 /backend/note_tasks.db
 /backend/bin/

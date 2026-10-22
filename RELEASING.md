@@ -159,3 +159,11 @@ git checkout -b hotfix/<scope>-<事项>
 |---|---|---|
 | 2.1.0 | 2026-05-07 | [`v2.1.0`](https://github.com/JefferyHcool/BiliNote/releases/tag/v2.1.0) |
 | 2.0.0 | (上游 web 端 v2.0.0) | [`v2.0.0`](https://github.com/JefferyHcool/BiliNote/releases/tag/v2.0.0) |
+
+---
+
+## 部署提醒（安全 / 扩展）
+
+- 公网请设置 `OPENNOTER_AUTH_ENFORCE=true`（见 `.env.example`）。
+- compose 数据卷与镜像代码已分离；SQLite 默认在 `./backend/data/`。
+- **多副本后端**需要 Postgres（或等价）+ 外置队列/限流，不能直接复制 SQLite 单机布局。详见 [README.md](./README.md)「多副本 / 水平扩展」。

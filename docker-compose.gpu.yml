@@ -15,9 +15,20 @@ services:
     environment:
       - BACKEND_PORT=${BACKEND_PORT}
       - BACKEND_HOST=${BACKEND_HOST}
+      # SQLite 落到 data 卷；多副本请改 Postgres，见 README「多副本」
+      - DATABASE_URL=${DATABASE_URL:-sqlite:////app/data/open_noter.db}
     volumes:
-      # 同 docker-compose.yml：./backend 绑到 /app，DB / 转写器配置 / 截图 / 上传都持久化
-      - ./backend:/app
+      # 代码在镜像内（Dockerfile COPY）；这里只挂运行时数据，避免整目录 ./backend:/app
+      # 把代码与 DB/密钥/Cookie/笔记混在一起（备份易泄露，升级也难）。
+      # 本地改代码热重载可临时加回：- ./backend:/app（会盖住镜像代码）。
+      - ./backend/data:/app/data
+      - ./backend/config:/app/config
+      - ./backend/static:/app/static
+      - ./backend/uploads:/app/uploads
+      - ./backend/note_results:/app/note_results
+      - ./backend/models:/app/models
+      - ./backend/logs:/app/logs
+      - ./backend/vector_db:/app/vector_db
     expose:
       - "${BACKEND_PORT}"  # 不再对外暴露，用于 nginx 内部通信
     # 用 unless-stopped 避免短暂崩溃把容器永久打死后再也读不到 .env 修改
