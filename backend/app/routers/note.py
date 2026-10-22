@@ -33,6 +33,12 @@ from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import StreamingResponse
 import httpx
 from app.enmus.task_status_enums import TaskStatus
+from app.utils.upload_paths import (
+    max_upload_bytes,
+    resolve_under_uploads,
+    sanitize_store_name,
+    uploads_dir,
+)
 
 # from app.services.downloader import download_raw_audio
 # from app.services.whisperer import transcribe_audio
@@ -136,7 +142,7 @@ class CreateNoteRequest(BaseModel):
 
 
 NOTE_OUTPUT_DIR = os.getenv("NOTE_OUTPUT_DIR", "note_results")
-UPLOAD_DIR = "uploads"
+UPLOAD_DIR = str(uploads_dir())
 # image_proxy 允许的最大重定向跳数（每跳都会重新做一次 SSRF 校验）
 MAX_IMAGE_REDIRECTS = 3
 
@@ -229,60 +235,100 @@ def run_note_task(task_id: str, video_url: str, platform: str, quality: Download
         logger.warning(f"向量索引失败（不影响笔记）: {e}")
 
 
+def _ownerless_accessible(user: Optional[User]) -> bool:
+    """无归属任务是否可被当前身份访问。
+
+    强制认证关闭时，匿名可创建任务（user_id=None）；若此处一律拒匿名，
+    会出现「能创建却立刻 403 轮询」——前端再吞错就会永远「生成中」。
+    因此：未强制认证 + 匿名 → 允许凭 task_id 访问无归属任务。
+    强制认证开启后新任务必有归属；无归属只剩历史数据，仅管理员可碰。
+    已登录的非管理员仍不能操作无归属任务（避免任意登录用户清历史）。
+    """
+    if user and user.is_superuser:
+        return True
+    if user is None and not auth_enforced():
+        return True
+    return False
+
+
 def _can_access_task(task_id: str, user: Optional[User]) -> bool:
     """统一的「当前用户能否操作该任务」判定。
 
-    之前每个接口各写一遍 `owner is not None and user is not None and owner != user.id`，
-    这个写法有两个越权漏洞：
-      1. 无 user_id 的历史任务 → 条件整体为假 → **任何登录用户都能操作**
-      2. user 为 None（未登录，未开强制认证时）→ 条件整体为假 → **匿名也能操作**
-
-    这里的规则：
+    规则：
       - 有归属：必须登录且 id 匹配；管理员不例外（管理员用管理接口，不走这条）
-      - 无归属：仅管理员可操作（历史数据清理/排查场景）
+      - 无归属：见 `_ownerless_accessible`
     """
     owner = _task_owner(task_id)
-    is_admin = bool(user and user.is_superuser)
-
     if owner is not None:
         return bool(user) and owner == user.id
-    # 无归属的历史数据：只允许管理员
-    return is_admin
+    return _ownerless_accessible(user)
 
 
 def _can_access_task_from_payload(payload: dict, user: Optional[User]) -> bool:
     """同 _can_access_task，但直接吃已读出的状态 payload（避免再读一次文件）。"""
     owner = payload.get("user_id")
-    is_admin = bool(user and user.is_superuser)
     if owner is not None:
         return bool(user) and owner == user.id
-    return is_admin
+    return _ownerless_accessible(user)
 
 
 def _task_owner(task_id: str):
-    """从状态文件里读出任务归属，老任务没有 user_id 时返回 None。"""
+    """读任务归属：先状态文件，再 DB；都没有则视为无归属。"""
     status_path = os.path.join(NOTE_OUTPUT_DIR, f"{task_id}.status.json")
-    if not os.path.exists(status_path):
-        return None
+    if os.path.exists(status_path):
+        try:
+            with open(status_path, "r", encoding="utf-8") as f:
+                owner = json.load(f).get("user_id")
+            if owner is not None:
+                return owner
+        except Exception:
+            pass
     try:
-        with open(status_path, "r", encoding="utf-8") as f:
-            return json.load(f).get("user_id")
+        row = get_task_by_id(task_id)
+        if row is not None and getattr(row, "user_id", None) is not None:
+            return row.user_id
     except Exception:
-        return None
+        pass
+    return None
 
 
 def _purge_task(task_id: str) -> tuple[list[str], bool]:
-    """清掉一个任务的落盘文件、向量索引和数据库记录。
+    """清掉一个任务的落盘文件、指纹缓存、向量索引和数据库记录。
 
     返回 (被删掉的文件列表, 数据库里是否有记录)。
+    除 `.status.json` / `.json` 外，还按 NoteCachePaths 的命名清掉
+    `{task_id}_{fingerprint}_audio|transcript|markdown` 以及 legacy 无指纹文件，
+    避免删除后残留转写/音频缓存导致配额与磁盘偏高。
     """
     removed = []
-    for suffix in (".status.json", ".json", "_transcript.json"):
-        path = os.path.join(NOTE_OUTPUT_DIR, f"{task_id}{suffix}")
-        if os.path.exists(path):
+    note_dir = Path(NOTE_OUTPUT_DIR)
+    exact_names = (
+        f"{task_id}.status.json",
+        f"{task_id}.json",
+        f"{task_id}_transcript.json",
+        f"{task_id}_audio.json",
+        f"{task_id}_markdown.md",
+    )
+    candidates: list[Path] = [note_dir / name for name in exact_names]
+    if note_dir.exists():
+        for pattern in (
+            f"{task_id}_*_audio.json",
+            f"{task_id}_*_transcript.json",
+            f"{task_id}_*_markdown.md",
+            f"{task_id}_*_markdown.status.json",
+        ):
+            candidates.extend(note_dir.glob(pattern))
+
+    seen: set[str] = set()
+    for path in candidates:
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        if path.exists() and path.is_file():
             try:
-                os.remove(path)
-                removed.append(path)
+                path.unlink()
+                removed.append(key)
             except OSError as e:
                 logger.warning(f"删除任务文件失败 {path}: {e}")
 
@@ -342,15 +388,60 @@ def delete_task(data: TaskDeleteRequest, user: User | None = Depends(get_optiona
 
 
 @router.post("/upload")
-async def upload(file: UploadFile = File(...)):
+async def upload(file: UploadFile = File(...), user: User | None = Depends(get_optional_user)):
+    """本地视频/音频上传。
+
+    - 文件名强制取 basename + UUID 存储，杜绝路径穿越写任意文件
+    - 限制扩展名与大小（UPLOAD_MAX_SIZE_MB，默认 500）
+    - 返回的 url 仍是 `/uploads/<uuid>.ext`，供 LocalDownloader 解析
+    """
+    # get_optional_user 在 AUTH_ENFORCE 时已要求登录；此处无需再判
+    _ = user
+    try:
+        store_name = sanitize_store_name(file.filename)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
     os.makedirs(UPLOAD_DIR, exist_ok=True)
-    file_location = os.path.join(UPLOAD_DIR, file.filename)
+    dest = Path(UPLOAD_DIR) / store_name
+    # 双检：落盘路径 resolve 后必须仍在 uploads 根内
+    try:
+        resolve_under_uploads(f"/uploads/{store_name}")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
-    with open(file_location, "wb+") as f:
-        f.write(await file.read())
+    limit = max_upload_bytes()
+    written = 0
+    chunk_size = 1024 * 1024
+    try:
+        with open(dest, "wb") as f:
+            while True:
+                chunk = await file.read(chunk_size)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if limit and written > limit:
+                    f.close()
+                    try:
+                        dest.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"文件过大，上限 {limit // (1024 * 1024)}MB",
+                    )
+                f.write(chunk)
+    except HTTPException:
+        raise
+    except Exception as e:
+        try:
+            dest.unlink(missing_ok=True)
+        except OSError:
+            pass
+        logger.warning(f"上传失败: {e}")
+        raise HTTPException(status_code=500, detail="上传失败")
 
-    # 假设你静态目录挂载了 /uploads
-    return R.success({"url": f"/uploads/{file.filename}"})
+    return R.success({"url": f"/uploads/{store_name}", "filename": store_name, "size": written})
 
 
 def _transcriber_readiness_gate():
@@ -467,6 +558,9 @@ def generate_note(data: VideoRequest, background_tasks: BackgroundTasks,
         prefetched_transcript=data.prefetched_transcript,
         user=user,
     )
+    # 配额/校验失败时 _submit_note_task 直接返回 R.error（JSONResponse），勿再包进 success
+    if not isinstance(task_id, str):
+        return task_id
     return R.success({"task_id": task_id})
 
 
@@ -510,6 +604,8 @@ def create_note(data: CreateNoteRequest, background_tasks: BackgroundTasks,
         prefetched_transcript=data.prefetched_transcript,
         user=user,
     )
+    if not isinstance(task_id, str):
+        return task_id
     return R.success({"task_id": task_id, "platform": platform})
 
 
@@ -706,8 +802,10 @@ def get_task_status(task_id: str, user: User | None = Depends(get_optional_user)
             "task_id": task_id
         })
 
-    # 没有状态文件，但有结果
+    # 没有状态文件，但有结果 —— 同样做归属校验，堵住「仅凭 UUID 读笔记」旁路
     if os.path.exists(result_path):
+        if not _can_access_task(task_id, user):
+            raise HTTPException(status_code=403, detail="无权访问该任务")
         with open(result_path, "r", encoding="utf-8") as f:
             result_content = json.load(f)
         return R.success({
@@ -719,6 +817,9 @@ def get_task_status(task_id: str, user: User | None = Depends(get_optional_user)
     # 文件和数据库都没有 → 这个 task_id 根本不存在，别装作「排队中」
     if get_task_by_id(task_id) is None:
         raise HTTPException(status_code=404, detail="任务不存在")
+
+    if not _can_access_task(task_id, user):
+        raise HTTPException(status_code=403, detail="无权访问该任务")
 
     # 什么都没有，默认PENDING
     return R.success({

@@ -85,14 +85,26 @@ class LocalDownloader(Downloader, ABC):
             return output_path
         except subprocess.CalledProcessError as e:
             raise RuntimeError(f"mp3 文件生成失败: {output_path}") from e
+    def _resolve_local_path(self, video_url: str) -> str:
+        """解析本地/uploads 路径，强制 resolve 后仍在 uploads 根内。"""
+        from app.utils.upload_paths import resolve_under_uploads
+
+        if video_url.startswith("/uploads") or video_url.startswith("uploads/"):
+            try:
+                return str(resolve_under_uploads(video_url))
+            except ValueError as e:
+                raise FileNotFoundError(f"非法本地路径: {e}") from e
+        # 非 /uploads 前缀：仍要求最终路径落在 uploads 根下，避免任意本地读
+        try:
+            return str(resolve_under_uploads(video_url))
+        except ValueError as e:
+            raise FileNotFoundError(f"非法本地路径: {e}") from e
+
     def download_video(self, video_url: str, output_dir: str = None) -> str:
         """
         处理本地文件路径，返回视频文件路径
         """
-        if video_url.startswith('/uploads'):
-            project_root = os.getcwd()
-            video_url = os.path.join(project_root, video_url.lstrip('/'))
-            video_url = os.path.normpath(video_url)
+        video_url = self._resolve_local_path(video_url)
 
         if not os.path.exists(video_url):
             raise FileNotFoundError()
@@ -108,10 +120,7 @@ class LocalDownloader(Downloader, ABC):
         """
         处理本地文件路径，返回音频元信息
         """
-        if video_url.startswith('/uploads'):
-            project_root = os.getcwd()
-            video_url = os.path.join(project_root, video_url.lstrip('/'))
-            video_url = os.path.normpath(video_url)
+        video_url = self._resolve_local_path(video_url)
 
         if not os.path.exists(video_url):
             raise FileNotFoundError(f"本地文件不存在: {video_url}")

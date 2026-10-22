@@ -14,7 +14,7 @@ export const generateNote = (data: TaskFormData & { task_id?: string }) =>
   request.post<never, { task_id: string }>('/notes', data, { suppressToast: true })
 
 export const getTaskStatus = (taskId: string) =>
-  request.get<never, NoteStatusResponse>(`/tasks/${taskId}`)
+  request.get<never, NoteStatusResponse>(`/tasks/${taskId}`, { suppressToast: true })
 
 /** 任务列表项：后端只返回轻量字段，正文按需拉取 */
 export interface TaskListItem {

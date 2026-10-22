@@ -1,6 +1,7 @@
-from fastapi import APIRouter, BackgroundTasks, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
 
+from app.db.models.users import User
 from app.services.chat_service import chat as chat_service
 from app.services.vector_store import VectorStoreManager
 from app.utils.logger import get_logger
@@ -13,6 +14,15 @@ router = APIRouter(dependencies=[Depends(get_optional_user)])
 
 # 索引状态追踪: task_id -> "indexing" | "indexed" | "failed"
 _index_status: dict[str, str] = {}
+
+def _require_task_access(task_id: str, user: User | None) -> None:
+    """Chat/Index 与笔记接口共用任务 ACL，防止凭 task_id 对他人笔记做 RAG。"""
+    from app.routers.note import _can_access_task
+
+    if not _can_access_task(task_id, user):
+        raise HTTPException(status_code=403, detail="无权访问该任务")
+
+
 
 
 class IndexRequest(BaseModel):
@@ -46,8 +56,10 @@ def _do_index(task_id: str):
 
 
 @router.post("/chat/index")
-def index_task(data: IndexRequest, background_tasks: BackgroundTasks):
+def index_task(data: IndexRequest, background_tasks: BackgroundTasks,
+               user: User | None = Depends(get_optional_user)):
     """触发后台索引，立即返回。"""
+    _require_task_access(data.task_id, user)
     if _index_status.get(data.task_id) == "indexing":
         return R.success(msg="正在索引中")
 
@@ -63,8 +75,9 @@ def index_task(data: IndexRequest, background_tasks: BackgroundTasks):
 
 
 @router.get("/chat/status")
-def chat_status(task_id: str):
+def chat_status(task_id: str, user: User | None = Depends(get_optional_user)):
     """返回索引状态：idle / indexing / indexed / failed。"""
+    _require_task_access(task_id, user)
     try:
         # 优先检查内存状态
         status = _index_status.get(task_id)
@@ -83,8 +96,9 @@ def chat_status(task_id: str):
 
 
 @router.post("/chat/ask")
-def ask_question(data: AskRequest):
+def ask_question(data: AskRequest, user: User | None = Depends(get_optional_user)):
     """基于笔记内容的 RAG 问答。"""
+    _require_task_access(data.task_id, user)
     try:
         history = [{"role": m.role, "content": m.content} for m in data.history]
         result = chat_service(

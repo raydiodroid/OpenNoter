@@ -2,7 +2,7 @@ import os
 from contextlib import asynccontextmanager
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.staticfiles import StaticFiles
@@ -142,7 +142,33 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(ApiKeyUsageMiddleware)
 register_exception_handlers(app)
 app.mount(static_path, StaticFiles(directory=static_dir), name="static")
-app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
+
+
+# /uploads 不再用匿名 StaticFiles：统一走鉴权下载，并强制路径落在 uploads 根内。
+# AUTH_ENFORCE=false 时匿名仍可读（与本地上传→生成链路一致）；开启后需登录。
+@app.get("/uploads/{file_path:path}")
+async def serve_upload(file_path: str, request: Request):
+    from fastapi import HTTPException
+    from fastapi.responses import FileResponse
+
+    from app.db.engine import SessionLocal
+    from app.services.auth import get_optional_user
+    from app.utils.upload_paths import resolve_under_uploads
+
+    db = SessionLocal()
+    try:
+        # 复用 get_optional_user：强制认证时未登录 → 401
+        get_optional_user(request, db)
+    finally:
+        db.close()
+
+    try:
+        target = resolve_under_uploads(f"/uploads/{file_path}")
+    except ValueError:
+        raise HTTPException(status_code=404, detail="文件不存在")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="文件不存在")
+    return FileResponse(target)
 
 
 

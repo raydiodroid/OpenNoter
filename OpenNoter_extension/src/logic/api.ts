@@ -235,7 +235,16 @@ export async function getTaskStatus(taskId: string): Promise<TaskStatusResponse>
   //   成功：{code:0, data:{status, message, task_id, result?}}
   //   任务失败：{code:500, msg:'xxx', data:null}
   // 这里手动拆，把任务失败翻译成 status:'FAILED'，避免 request() 抛错让 UI 收不到状态
-  const res = await fetch(`${backendUrl()}/api/task_status/${taskId}`)
+  // 必须带鉴权头：强制认证开启后裸 fetch 会 401，进度永远失败
+  const res = await fetch(`${backendUrl()}/api/task_status/${taskId}`, {
+    headers: {
+      ...authHeaders(),
+    },
+  })
+  if (res.status === 401)
+    throw new Error('HTTP 401：后端已开启强制认证，请在插件设置里填写 API Key')
+  if (res.status === 403)
+    throw new Error(`HTTP 403：无权查询任务 ${taskId}`)
   if (!res.ok)
     throw new Error(`HTTP ${res.status}`)
   const body = (await res.json()) as { code: number, msg: string, data: TaskStatusResponse | null }

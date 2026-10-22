@@ -7,9 +7,13 @@ import { toast } from '@/lib/toast'
 /** 服务端列表同步的间隔：比状态轮询稀疏得多（列表变化不频繁） */
 const SYNC_INTERVAL = 30000
 
+/** 连续鉴权失败次数达到阈值后判 FAILED，避免 403 被空吞导致永远「生成中」 */
+const AUTH_FAIL_THRESHOLD = 3
+
 export const useTaskPolling = (interval = 3000) => {
   useEffect(() => {
     let busy = false
+    const authFailCounts = new Map<string, number>()
 
     // 启动时先拉一次服务端列表：换浏览器/设备后也能看到自己的历史
     void useTaskStore.getState().syncFromServer()
@@ -28,6 +32,7 @@ export const useTaskPolling = (interval = 3000) => {
         for (const task of active) {
           try {
             const res = await getTaskStatus(task.id)
+            authFailCounts.delete(task.id)
             if (res.status === 'SUCCESS' && res.result) {
               markSuccess(task.id, {
                 markdown: res.result.markdown ?? '',
@@ -41,8 +46,24 @@ export const useTaskPolling = (interval = 3000) => {
             } else if (res.status && res.status !== task.status) {
               updateTask(task.id, { status: res.status })
             }
-          } catch {
-            // 单次轮询失败不把任务判死，等下一轮
+          } catch (err: unknown) {
+            const code = (err as { code?: number })?.code
+            // 401/403：鉴权或归属失败，再吞下去只会永远「生成中」
+            if (code === 401 || code === 403) {
+              const n = (authFailCounts.get(task.id) || 0) + 1
+              authFailCounts.set(task.id, n)
+              if (n >= AUTH_FAIL_THRESHOLD) {
+                updateTask(task.id, { status: 'FAILED' })
+                toast.error(
+                  code === 401
+                    ? '未登录或登录已过期，无法查询任务进度'
+                    : '无权访问该任务，已停止轮询',
+                )
+                authFailCounts.delete(task.id)
+              }
+              continue
+            }
+            // 其它单次轮询失败不把任务判死，等下一轮
           }
         }
       } finally {
