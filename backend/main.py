@@ -83,6 +83,18 @@ async def lifespan(app: FastAPI):
             # 迁移失败不该阻止启动；下次再试
             logger.warning(f"           Cookie 明文迁移失败（下次启动重试）：{exc}")
 
+        # 静默把 providers.api_key 存量明文转成密文（幂等；复用 secret_box / Fernet）。
+        try:
+            from app.db.provider_dao import migrate_plaintext_api_keys
+
+            migrated_keys = migrate_plaintext_api_keys()
+            if migrated_keys:
+                logger.info(
+                    f"           已加密 {migrated_keys} 个 Provider api_key（明文 → 密文）"
+                )
+        except Exception as exc:
+            logger.warning(f"           Provider api_key 明文迁移失败（下次启动重试）：{exc}")
+
         logger.info("[startup 5/5] 启动完成，等待请求")
     except Exception:
         logger.exception("[startup FAILED] 后端启动期异常，详见堆栈；容器会退出并由 restart 策略决定是否重试")

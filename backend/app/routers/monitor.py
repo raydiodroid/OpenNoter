@@ -32,6 +32,7 @@ from fastapi import APIRouter, Depends
 
 from app.db.engine import SessionLocal
 from app.db.models.providers import Provider
+from app.db.provider_dao import reveal_api_key
 from app.db.models.users import User
 from app.enmus.task_status_enums import TaskStatus
 from app.services.auth import require_admin
@@ -410,7 +411,7 @@ def _active_llm_provider() -> tuple[Optional[dict], Optional[dict]]:
                     "id": row.id,
                     "name": row.name,
                     "base_url": row.base_url,
-                    "api_key": row.api_key,
+                    "api_key": reveal_api_key(row.api_key),
                 },
                 info,
             )
@@ -499,7 +500,7 @@ def monitor_status(admin: User = Depends(require_admin)):
                         "id": row.id,
                         "name": row.name,
                         "base_url": row.base_url,
-                        "api_key": row.api_key,
+                        "api_key": reveal_api_key(row.api_key),
                     }
             finally:
                 db.close()

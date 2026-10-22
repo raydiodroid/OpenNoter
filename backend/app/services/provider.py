@@ -86,12 +86,15 @@ class ProviderService:
             raise
     @staticmethod
     def provider_to_dict(p: Provider):
+        from app.db.provider_dao import reveal_api_key
+
         return {
             "id": p.id,
             "name": p.name,
             "logo": p.logo,
             "type": p.type,
-            "api_key": p.api_key,
+            # 读路径统一解密；磁盘/库内为 enc:v1: 密文或历史明文
+            "api_key": reveal_api_key(p.api_key),
             "base_url": p.base_url,
             "enabled": p.enabled,
             "created_at": p.created_at,
@@ -107,7 +110,7 @@ class ProviderService:
     def get_all_providers_safe():
         rows = get_all_providers()
 
-        return [ProviderService.serialize_provider(row) for row in rows] if (rows) else []
+        return [ProviderService.serialize_provider_safe(row) for row in rows] if (rows) else []
     @staticmethod
     def get_provider_by_name(name: str):
         row = get_provider_by_name(name)

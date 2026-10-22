@@ -8,6 +8,53 @@ from app.db.engine import get_engine, Base, get_db
 logger = get_logger(__name__)
 
 
+def reveal_api_key(stored: str | None) -> str:
+    """读库得到的 api_key → 明文。密文损坏/密钥不符时返回空串（不当密文用）。"""
+    if not stored:
+        return ""
+    from app.utils import secret_box
+
+    plain = secret_box.decrypt(stored)
+    return plain if plain is not None else ""
+
+
+def seal_api_key(plaintext: str | None) -> str:
+    """写入前加密。已是密文则原样返回；空串不加密。"""
+    if not plaintext:
+        return ""
+    from app.utils import secret_box
+
+    if secret_box.is_encrypted(plaintext):
+        return plaintext
+    return secret_box.encrypt(plaintext)
+
+
+def migrate_plaintext_api_keys() -> int:
+    """把 providers.api_key 存量明文转成 enc:v1: 密文（幂等）。返回迁移条数。"""
+    from app.utils import secret_box
+
+    db = next(get_db())
+    try:
+        migrated = 0
+        for row in db.query(Provider).all():
+            raw = row.api_key or ""
+            if not raw or secret_box.is_encrypted(raw):
+                continue
+            row.api_key = secret_box.encrypt(raw)
+            migrated += 1
+        if migrated:
+            db.commit()
+            logger.info(f"Migrated {migrated} provider api_key(s) plaintext → ciphertext")
+        return migrated
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Failed to migrate provider api_keys: {e}")
+        raise
+    finally:
+        db.close()
+
+
+
 def get_builtin_providers_path():
     if getattr(sys, 'frozen', False):
         base_path = sys._MEIPASS
@@ -35,7 +82,7 @@ def seed_default_providers():
             db.add(Provider(
                 id=p['id'],
                 name=p['name'],
-                api_key=p['api_key'],
+                api_key=seal_api_key(p.get('api_key') or ''),
                 base_url=p['base_url'],
                 logo=p['logo'],
                 type=p['type'],
@@ -52,7 +99,7 @@ def seed_default_providers():
 def insert_provider(id: str, name: str, api_key: str, base_url: str, logo: str, type_: str, enabled: int = 1):
     db = next(get_db())
     try:
-        provider = Provider(id=id, name=name, api_key=api_key, base_url=base_url, logo=logo, type=type_, enabled=enabled)
+        provider = Provider(id=id, name=name, api_key=seal_api_key(api_key), base_url=base_url, logo=logo, type=type_, enabled=enabled)
         db.add(provider)
         db.commit()
         logger.info(f"Provider inserted successfully. id: {id}, name: {name}, type: {type_}")
@@ -105,6 +152,8 @@ def update_provider(id: str, **kwargs):
 
         for key, value in kwargs.items():
             if hasattr(provider, key):
+                if key == "api_key":
+                    value = seal_api_key(value)
                 setattr(provider, key, value)
 
         db.commit()
