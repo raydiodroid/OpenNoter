@@ -1,9 +1,14 @@
 """IP 白名单：来源 IP 判断与 CIDR 匹配。
 
-反代链是 client → SafeLine → NPMplus → nginx → backend，每一跳都会往
-X-Forwarded-For 后面追加自己的地址，所以**最左一项**是 SafeLine 记录的真实
-客户端 IP（SafeLine 作为前置 WAF 会重写而不是追加这个头）。最左一项之后的
-都是我们自己链路上的地址。
+信任模型（与 nginx/*.conf 对齐）：
+  本仓库自带 nginx 用 ``proxy_set_header X-Forwarded-For $remote_addr``
+  **覆盖**（不是追加）客户端头，并同时设置 ``X-Real-IP $remote_addr``。
+  因此经本 nginx 到达 backend 时，XFF 最左一项与 X-Real-IP 都是真实对端，
+  客户端无法再伪造 XFF 绕过 API Key IP 白名单。
+
+  若前面还有 SafeLine / NPMplus 等反代，请让它们直连 backend，或自行保证
+  「写入 XFF/X-Real-IP 的那一跳」是唯一受信跳；切勿改回
+  ``$proxy_add_x_forwarded_for``（会恢复伪造面）。
 """
 
 import ipaddress
@@ -11,7 +16,11 @@ from typing import Iterable, Optional
 
 
 def client_ip(request) -> str:
-    """取真实来源 IP。取不到就返回空串。"""
+    """取真实来源 IP。取不到就返回空串。
+
+    优先 X-Forwarded-For 最左一项（本仓库 nginx 已覆盖为 $remote_addr），
+    其次 X-Real-IP，最后 TCP 对端。
+    """
     forwarded = request.headers.get("x-forwarded-for", "")
     if forwarded:
         first = forwarded.split(",")[0].strip()

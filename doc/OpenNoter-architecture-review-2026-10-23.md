@@ -235,15 +235,15 @@
 | P1-5 | chat ask/index/status 复用任务 ACL |
 | P1-6 | 配额失败 `JSONResponse` 不再包进 `R.success` |
 | P1-7 | `_purge_task` 清理指纹缓存与 legacy 缓存文件 |
+| P1-8 | nginx：用 `$remote_addr` **覆盖** `X-Forwarded-For`，并设 `X-Real-IP`；补 `/uploads/` 鉴权反代（与 `client_ip()` 信任模型一致） |
 
 鉴权开关实际环境变量为 **`OPENNOTER_AUTH_ENFORCE`**（兼容 `BILINOTE_AUTH_ENFORCE`），见 `app/utils/env_compat.getbool`。
 
-### 有意放第二步（风险/面较大，本分支未改）
+### 有意放第二步（尚未合入的后续项）
 
 | 项 | 原因 |
 |----|------|
-| nginx `X-Forwarded-For` 信任模型 | 需与反代拓扑对齐，误改易导致 API Key IP 白名单全失效 |
 | 扩展 `manifest` host 收窄 | 开发版扩展 ID / 多平台域名清单需产品确认，易打断一键同步 |
 | Provider `api_key` 加密落库 | 需迁移存量明文、前后端读写路径与备份兼容，单独开变更更安全 |
 
-回归：`pytest tests/test_p0_security_hardening.py tests/test_multiuser_security.py tests/test_task_list_api.py`（42 passed）。
+回归：`pytest tests/test_p0_security_hardening.py tests/test_multiuser_security.py tests/test_task_list_api.py tests/test_client_ip_trust.py`。
