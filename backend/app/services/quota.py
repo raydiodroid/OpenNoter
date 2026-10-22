@@ -24,6 +24,9 @@
 
 - **不阻止已排队的任务**：只拦「新提交」，避免把用户正在跑的任务打断
 - **管理员不参与配额**：管理员需要排查问题时不该被拦
+- **匿名也有全局限流**：未强制认证时 `user is None`，用
+  `ANON_MAX_CONCURRENT_TASKS` / `ANON_SUBMIT_RPM` 防止刷接口
+- **check + 写 PENDING 在同一把锁里**：`begin_submit` 避免并发双检都通过
 - **存储检查是粗查**：只统计该用户 `note_results` 下相关文件的体积，
   不做精确归属（那需要索引表）。足够拦住「狂刷到爆盘」的场景。
 """
@@ -32,6 +35,8 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -41,6 +46,15 @@ from app.db.models.users import User
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+# 进程内锁：把「读配额 → 写 PENDING」收成临界区，避免并发双检都通过。
+# 单副本部署够用；多副本需换 Postgres 行锁 / Redis（见 README / RELEASING）。
+_submit_lock = threading.Lock()
+
+# 匿名提交 RPM（固定窗口）；与 API Key 限流同思路，重启清零可接受。
+_ANON_RATE_WINDOW = 60
+_anon_rate_buckets: dict[int, int] = {}
+_anon_rate_lock = threading.Lock()
 
 # 进行中的任务状态（与 task_status_enums 保持一致，但这里不 import 避免循环依赖）
 _RUNNING_STATES = {
@@ -160,19 +174,75 @@ def _user_storage_mb(user_id: int, note_dir: Path) -> float:
     return total / 1024 / 1024
 
 
+def _count_anon_running(note_dir: Path) -> int:
+    """统计无归属（匿名）进行中任务数。"""
+    running = 0
+    if not note_dir.exists():
+        return 0
+    for path in note_dir.glob("*.status.json"):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        if payload.get("user_id") is not None:
+            continue
+        if str(payload.get("status") or "").upper() in _RUNNING_STATES:
+            running += 1
+    return running
+
+
+def _check_anon_submit_rpm() -> None:
+    """匿名全局限流（次/分钟）。0 = 不限制。"""
+    limit = _env_int("ANON_SUBMIT_RPM", 10)
+    if limit <= 0:
+        return
+    window_id = int(time.time()) // _ANON_RATE_WINDOW
+    with _anon_rate_lock:
+        # 只保留最近两个窗口
+        stale = [k for k in _anon_rate_buckets if k < window_id - 1]
+        for k in stale:
+            del _anon_rate_buckets[k]
+        count = _anon_rate_buckets.get(window_id, 0) + 1
+        _anon_rate_buckets[window_id] = count
+        if count > limit:
+            raise QuotaExceeded(
+                f"匿名提交过于频繁（{limit} 次/分钟），请稍后再试或登录后提交",
+                dimension="anon_rpm",
+                limit=limit,
+                current=count,
+                retry_after=_ANON_RATE_WINDOW,
+            )
+
+
 def check_submit_quota(user: Optional[User]) -> None:
     """提交任务前的配额校验。超限抛 QuotaExceeded。
 
-    未登录用户（未开强制认证的单人部署）不限制——那种部署下没有
-    「多用户互相影响」的问题，加限制反而添堵。
-    管理员也不限制。
+    - 管理员不限制
+    - 匿名：全局限流（并发 + RPM），防止未强制认证时刷接口
+    - 登录用户：并发 / 每日 / 存储三层
     """
-    if user is None:
-        return
-    if getattr(user, "is_superuser", False):
+    if user is not None and getattr(user, "is_superuser", False):
         return
 
     note_dir = _note_dir()
+
+    if user is None:
+        _check_anon_submit_rpm()
+        max_concurrent = _env_int("ANON_MAX_CONCURRENT_TASKS", 2)
+        if max_concurrent > 0:
+            running = _count_anon_running(note_dir)
+            if running >= max_concurrent:
+                raise QuotaExceeded(
+                    f"匿名同时进行的任务已达上限（{running}/{max_concurrent}），"
+                    f"请等待完成、登录后提交，或开启 OPENNOTER_AUTH_ENFORCE",
+                    dimension="anon_concurrent",
+                    limit=max_concurrent,
+                    current=running,
+                )
+        return
+
     user_id = user.id
 
     # 1) 并发任务数
@@ -221,10 +291,32 @@ def check_submit_quota(user: Optional[User]) -> None:
             )
 
 
+def begin_submit(user: Optional[User], write_pending) -> None:
+    """原子化：持锁校验配额并立即写 PENDING，避免并发突破上限。
+
+    ``write_pending`` 无参可调用，负责落盘 PENDING（以及任何必须与配额
+    同临界区的副作用）。调用方在锁外做模型校验等无副作用准备。
+    """
+    with _submit_lock:
+        check_submit_quota(user)
+        write_pending()
+
+
 def quota_snapshot(user: Optional[User]) -> dict:
     """返回当前用量快照（给「我的配额」类接口/前端提示用）。"""
     if user is None:
-        return {"unlimited": True, "reason": "anonymous"}
+        note_dir = _note_dir()
+        max_concurrent = _env_int("ANON_MAX_CONCURRENT_TASKS", 2)
+        rpm = _env_int("ANON_SUBMIT_RPM", 10)
+        return {
+            "unlimited": max_concurrent <= 0 and rpm <= 0,
+            "reason": "anonymous",
+            "concurrent": {
+                "limit": max_concurrent,
+                "used": _count_anon_running(note_dir),
+            },
+            "submit_rpm": {"limit": rpm},
+        }
     if getattr(user, "is_superuser", False):
         return {"unlimited": True, "reason": "admin"}
 

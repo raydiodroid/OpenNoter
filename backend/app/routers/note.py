@@ -478,13 +478,9 @@ def _submit_note_task(background_tasks: BackgroundTasks, *, video_url: str, plat
                       video_interval: int, grid_size: list,
                       prefetched_transcript: Optional[dict], user) -> str:
     """校验入参 → 落 PENDING 状态 → 排后台任务 → 返回 task_id。"""
-    # 配额校验：必须在落 PENDING **之前**，否则排队的任务也算「已提交」，
-    # 用户会看到任务已创建但永远排队。
-    from app.services.quota import QuotaExceeded, check_submit_quota
+    from app.services.quota import QuotaExceeded, begin_submit, check_submit_quota
 
-    try:
-        check_submit_quota(user)
-    except QuotaExceeded as exc:
+    def _quota_error(exc: QuotaExceeded):
         return R.error(
             msg=exc.message,
             code=429,
@@ -498,24 +494,37 @@ def _submit_note_task(background_tasks: BackgroundTasks, *, video_url: str, plat
             status_code=429,
         )
 
-    # 模型/供应商当场校验。不在这里校验的话，错的 provider_id 会先返回 200 + task_id，
-    # 任务在后台才失败，调用方只能轮询一次才发现「供应商不存在/未保存」。
+    # 先快速拦一次（无锁），避免无谓的模型解析；真正防并发突破在 begin_submit。
+    try:
+        check_submit_quota(user)
+    except QuotaExceeded as exc:
+        return _quota_error(exc)
+
+    # 模型/供应商当场校验（无副作用）。不在这里校验的话，错的 provider_id
+    # 会先返回 200 + task_id，任务在后台才失败。
     provider_id, model_name = resolve_model_selection(provider_id, model_name)
 
     if task_id:
-        # 传了 task_id 说明是重试
         logger.info(f"重试模式，复用已有 task_id={task_id}")
     else:
         task_id = str(uuid.uuid4())
 
-    # 统一先写入 PENDING，表示已进入队列等待串行执行；顺带记下任务归属
-    NoteGenerator()._update_status(
-        task_id,
-        TaskStatus.PENDING,
-        user_id=user.id if user else None,
-        platform=platform,
-        video_id=str(video_url),
-    )
+    # 配额校验与写 PENDING 必须同临界区，否则并发双检都能通过并突破上限。
+    try:
+        tid = task_id
+
+        def _write_pending():
+            NoteGenerator()._update_status(
+                tid,
+                TaskStatus.PENDING,
+                user_id=user.id if user else None,
+                platform=platform,
+                video_id=str(video_url),
+            )
+
+        begin_submit(user, _write_pending)
+    except QuotaExceeded as exc:
+        return _quota_error(exc)
 
     # 客户端已经抓好字幕的话，写到转写缓存文件，NoteGenerator 的 cache-hit 逻辑会直接用上
     if prefetched_transcript:

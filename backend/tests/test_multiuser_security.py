@@ -236,13 +236,41 @@ def test_quota_admin_bypasses(quota_mod, monkeypatch):
     quota.check_submit_quota(U(1, admin=True))  # 管理员不限制
 
 
-def test_quota_anonymous_unlimited(quota_mod, monkeypatch):
+def test_quota_anonymous_global_concurrent(quota_mod, monkeypatch):
+    """匿名也有全局限流，防止未强制认证时刷接口。"""
+    quota, notes = quota_mod
+    monkeypatch.setenv("OPENNOTER_ANON_MAX_CONCURRENT_TASKS", "1")
+    monkeypatch.setenv("OPENNOTER_ANON_SUBMIT_RPM", "0")  # 本用例不测 RPM
+    _status(notes, "a", {"status": "TRANSCRIBING"})  # 无 user_id = 匿名
+
+    with pytest.raises(quota.QuotaExceeded) as exc:
+        quota.check_submit_quota(None)
+    assert exc.value.dimension == "anon_concurrent"
+
+
+def test_quota_anonymous_rpm(quota_mod, monkeypatch):
+    quota, notes = quota_mod
+    monkeypatch.setenv("OPENNOTER_ANON_MAX_CONCURRENT_TASKS", "0")
+    monkeypatch.setenv("OPENNOTER_ANON_SUBMIT_RPM", "2")
+    quota._anon_rate_buckets.clear()
+    quota.check_submit_quota(None)
+    quota.check_submit_quota(None)
+    with pytest.raises(quota.QuotaExceeded) as exc:
+        quota.check_submit_quota(None)
+    assert exc.value.dimension == "anon_rpm"
+
+
+def test_begin_submit_is_atomic(quota_mod, monkeypatch):
+    """check + 写 PENDING 同锁：第二次在第一次写完后应看到占用。"""
     quota, notes = quota_mod
     monkeypatch.setenv("OPENNOTER_USER_MAX_CONCURRENT_TASKS", "1")
-    for i in range(5):
-        _status(notes, f"t{i}", {"status": "TRANSCRIBING"})
 
-    quota.check_submit_quota(None)  # 未登录不限制
+    def write_a():
+        _status(notes, "a", {"status": "PENDING", "user_id": 1})
+
+    quota.begin_submit(U(1), write_a)
+    with pytest.raises(quota.QuotaExceeded):
+        quota.begin_submit(U(1), lambda: _status(notes, "b", {"status": "PENDING", "user_id": 1}))
 
 
 def test_quota_user_override(quota_mod, monkeypatch):
