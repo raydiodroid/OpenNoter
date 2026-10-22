@@ -300,6 +300,15 @@ docker logs -f opennoter-backend
 
 要彻底重置就 `docker-compose down && rm backend/open_noter.db backend/config/transcriber.json`。
 
+**任务中断与队列（为何没有 Celery/Redis）**
+
+笔记任务跑在 FastAPI `BackgroundTasks` + 进程内线程池里，**没有**独立持久化队列。完整队列会引入新服务与运维面，对默认单机自托管过重。折中方案：
+
+- 进程**优雅退出**或**下次启动**时，会把仍处于 `PENDING` / `TRANSCRIBING` 等中间态的任务标为 `FAILED`，避免前端永远轮询。
+- **不**自动续跑；需要用户重新提交。
+- 若要多副本 / 可靠投递，请改用外部队列，并把 `DATABASE_URL` 换成 Postgres（SQLite 不适合多写者）。详见 compose 注释与下方「数据卷」说明。
+
+
 **4. 前端打开是空白页 / 报 502**
 
 通常是 nginx 起来了但 backend 还没 healthy。`docker ps` 看 backend 容器 STATUS 是不是 `(healthy)`；若长期 `(unhealthy)`，按问题 1 排查后端日志。

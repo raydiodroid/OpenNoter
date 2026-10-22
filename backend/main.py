@@ -96,6 +96,20 @@ async def lifespan(app: FastAPI):
             logger.warning(f"           Provider api_key 明文迁移失败（下次启动重试）：{exc}")
 
         logger.info("[startup 5/5] 启动完成，等待请求")
+
+        # 上次进程可能被 SIGKILL/OOM 干掉，shutdown 钩子没跑到：把残留进行中任务标 FAILED。
+        try:
+            from app.services.task_interrupt import (
+                DEFAULT_STARTUP_MESSAGE,
+                fail_interrupted_tasks,
+            )
+
+            n = fail_interrupted_tasks(reason=DEFAULT_STARTUP_MESSAGE)
+            if n:
+                logger.info(f"           启动清理：{n} 个中断任务已标 FAILED")
+        except Exception as exc:
+            logger.warning(f"           启动清理中断任务失败：{exc}")
+
     except Exception:
         logger.exception("[startup FAILED] 后端启动期异常，详见堆栈；容器会退出并由 restart 策略决定是否重试")
         raise
@@ -107,6 +121,17 @@ async def lifespan(app: FastAPI):
         logger.warning("API Key 用量日志线程启动失败，用量统计将不可用", exc_info=True)
 
     yield
+
+    # 优雅退出：进行中的 BackgroundTasks 不会被续跑，先标 FAILED 避免前端空转。
+    try:
+        from app.services.task_interrupt import (
+            DEFAULT_SHUTDOWN_MESSAGE,
+            fail_interrupted_tasks,
+        )
+
+        fail_interrupted_tasks(reason=DEFAULT_SHUTDOWN_MESSAGE)
+    except Exception:
+        logger.warning("退出前标记中断任务失败", exc_info=True)
 
     # 退出前把活动记录缓冲刷进库，别丢掉最后一段使用痕迹
     try:
