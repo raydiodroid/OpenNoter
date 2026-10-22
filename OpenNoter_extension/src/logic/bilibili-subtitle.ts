@@ -1,5 +1,5 @@
 // 在浏览器里直接调 B 站 player API 抓字幕。
-// 因为 manifest host_permissions: '*://*/*' 覆盖 api.bilibili.com，service worker 里的
+// 因为 manifest host_permissions 含 *.bilibili.com（覆盖 api.bilibili.com），service worker 里的
 // fetch 会自动带 .bilibili.com 域下的用户 cookie，并且绕过 CORS——AI 字幕需要登录态，
 // 这等于用用户当前浏览器的登录身份代替了 backend 那边的 SESSDATA 配置。
 //

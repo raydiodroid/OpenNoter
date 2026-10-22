@@ -3,6 +3,28 @@ import type { Manifest } from 'webextension-polyfill'
 import type PkgType from '../package.json'
 import { isDev, isFirefox, port, r } from '../scripts/utils'
 
+/** 视频站 + 本机/已知 OpenNoter 前端与后端（Cookie 同步、API 调用、字幕预取）。 */
+const VIDEO_HOST_PERMISSIONS = [
+  '*://*.bilibili.com/*',
+  '*://*.youtube.com/*',
+  '*://youtu.be/*',
+  '*://*.douyin.com/*',
+  '*://*.iesdouyin.com/*',
+  '*://*.kuaishou.com/*',
+] as const
+
+/** 本机前端（3015）/ 后端（8483）任意端口，以及已部署的 OpenNoter Web。 */
+const OPENNOTER_HOST_PERMISSIONS = [
+  'http://localhost/*',
+  'http://127.0.0.1/*',
+  'https://opennoter.raydiodroid.top/*',
+] as const
+
+const CONTENT_SCRIPT_MATCHES = [
+  ...VIDEO_HOST_PERMISSIONS,
+  ...OPENNOTER_HOST_PERMISSIONS,
+]
+
 export async function getManifest() {
   const pkg = await fs.readJSON(r('package.json')) as typeof PkgType
 
@@ -42,12 +64,15 @@ export async function getManifest() {
       'contextMenus',
       'cookies',
     ],
-    host_permissions: ['*://*/*'],
+    // 收窄：去掉 *://*/* / <all_urls>；保留视频站 + 本机/已知后端通信。
+    // 自定义公网 backendUrl 需用户在浏览器「扩展详情」里额外授权，或改此清单。
+    host_permissions: [
+      ...VIDEO_HOST_PERMISSIONS,
+      ...OPENNOTER_HOST_PERMISSIONS,
+    ],
     content_scripts: [
       {
-        matches: [
-          '<all_urls>',
-        ],
+        matches: [...CONTENT_SCRIPT_MATCHES],
         js: [
           'dist/contentScripts/index.global.js',
         ],
@@ -56,7 +81,7 @@ export async function getManifest() {
     web_accessible_resources: [
       {
         resources: ['dist/contentScripts/style.css'],
-        matches: ['<all_urls>'],
+        matches: [...CONTENT_SCRIPT_MATCHES],
       },
     ],
     content_security_policy: {
