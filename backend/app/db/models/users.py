@@ -33,3 +33,10 @@ class User(Base):
 
     created_at = Column(DateTime, server_default=func.now())
     last_login_at = Column(DateTime, nullable=True)
+
+    # ---- 配额（多用户场景必填，否则一个用户能把队列占满）----
+    # NULL 表示「跟随全局默认值」（见 app/services/quota.py）
+    # 0 表示「不限制」
+    max_concurrent_tasks = Column(Integer, nullable=True)   # 同时进行中的任务数
+    daily_task_limit = Column(Integer, nullable=True)       # 每日提交任务数
+    storage_quota_mb = Column(Integer, nullable=True)       # 笔记产物占用上限

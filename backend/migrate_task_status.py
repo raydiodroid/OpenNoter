@@ -1,4 +1,4 @@
-"""给 video_tasks 增加任务状态列（status / failed_at / updated_at / error）。
+"""给 video_tasks 增加任务状态列，给 users 增加配额列。
 
 **为什么需要**：任务历史目前只存在 `note_results/*.status.json` 里，
 删除任务会把 `.status.json` 物理删掉，于是「累计任务」「24h 失败」这类
@@ -40,6 +40,13 @@ NEW_COLUMNS = [
     ("updated_at", "DATETIME"),
     # 软删除标记：删笔记只打时间戳，不物理删行，否则累计指标会倒退
     ("deleted_at", "DATETIME"),
+]
+
+# 用户表：多用户配额字段（NULL = 跟随全局默认，0 = 不限制）
+USER_COLUMNS = [
+    ("max_concurrent_tasks", "INTEGER"),
+    ("daily_task_limit", "INTEGER"),
+    ("storage_quota_mb", "INTEGER"),
 ]
 
 
@@ -87,6 +94,15 @@ def add_columns() -> int:
     engine = get_engine()
     added = 0
     with engine.begin() as conn:
+        # users 表的配额列
+        for name, coltype in USER_COLUMNS:
+            if _column_exists(conn, "users", name):
+                logger.info(f"users.{name} 已存在，跳过")
+                continue
+            conn.execute(text(f"ALTER TABLE users ADD COLUMN {name} {coltype}"))
+            logger.info(f"users.{name} 已添加 ({coltype})")
+            added += 1
+
         for name, coltype in NEW_COLUMNS:
             if _column_exists(conn, "video_tasks", name):
                 logger.info(f"video_tasks.{name} 已存在，跳过")

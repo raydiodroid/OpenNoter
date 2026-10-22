@@ -264,6 +264,7 @@ class NoteGenerator:
                     formats=_format,
                     audio_meta=audio_meta,
                     platform=platform,
+                    task_id=task_id,
                 )
 
             markdown = prepend_source_link(markdown, str(video_url))
@@ -354,7 +355,8 @@ class NoteGenerator:
         return downloader
 
     def _update_status(self, task_id: Optional[str], status: Union[str, TaskStatus], message: Optional[str] = None,
-                       user_id: Optional[int] = None):
+                       user_id: Optional[int] = None, platform: Optional[str] = None,
+                       video_id: Optional[str] = None):
         """
         创建或更新 {task_id}.status.json，记录当前任务状态
 
@@ -403,6 +405,9 @@ class NoteGenerator:
                 status=data["status"],
                 message=data.get("message"),
                 failed_at=_parse_iso(data.get("failed_at")),
+                user_id=user_id,
+                platform=platform,
+                video_id=video_id,
             )
         except Exception as exc:  # noqa: BLE001 - 状态落库失败不影响任务
             logger.debug(f"同步任务状态到 DB 失败 (task_id={task_id})：{exc}")
@@ -1084,6 +1089,7 @@ class NoteGenerator:
         formats: List[str],
         audio_meta: AudioDownloadResult,
         platform: str,
+        task_id: Optional[str] = None,
     ) -> str:
         """
         对生成的 Markdown 做后期处理：插入截图和/或插入链接。
@@ -1097,7 +1103,7 @@ class NoteGenerator:
         """
         if "screenshot" in formats and video_path:
             try:
-                replaced = self._insert_screenshots(markdown, video_path)
+                replaced = self._insert_screenshots(markdown, video_path, task_id=task_id)
                 # 防御：任何情况下都不能让后处理把一个正常字符串变成 None/空，
                 # 否则整篇笔记会变空白而任务仍被标 SUCCESS。
                 if isinstance(replaced, str) and replaced.strip():
@@ -1119,26 +1125,40 @@ class NoteGenerator:
 
         return markdown
 
-    def _insert_screenshots(self, markdown: str, video_path: Path) -> str:
+    def _insert_screenshots(self, markdown: str, video_path: Path, task_id: Optional[str] = None) -> str:
         """
         扫描 Markdown 文本中所有 Screenshot 标记，并替换为实际生成的截图链接。
 
+        **用户隔离**：截图落到 `screenshots/<task_id>/` 子目录，而不是全部平铺在
+        根目录。理由：旧实现用全局目录 + UUID 文件名，虽然不会撞名，但
+        任何拿到文件名的人都能访问别人的截图，也无法按用户/任务清理。
+        用 task_id 分目录后，任务归属（状态文件里的 user_id）天然决定了
+        目录归属，删除任务时也能整目录回收。
+
         **失败语义**：单张截图失败只跳过该标记（连同标记本身一并去掉，避免
         用户看到残留的 `*Screenshot-00:05` 字样），其余内容照常返回。
-        旧实现失败时 `return None`，调用方把 None 赋回 markdown →
-        整篇笔记变成 None，但任务仍被标记 SUCCESS，用户拿到一个空白笔记。
 
         :param markdown: 含有 *Screenshot-mm:ss 或 Screenshot-[mm:ss] 标记的 Markdown 文本
         :param video_path: 本地视频文件路径
+        :param task_id: 任务 ID，用作子目录名；为空时退回根目录（兼容旧调用）
         :return: 替换后的 Markdown 字符串（永不返回 None）
         """
+        # 隔离目录：screenshots/<task_id>/
+        if task_id:
+            safe = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in str(task_id))
+            out_dir = Path(IMAGE_OUTPUT_DIR) / safe
+            url_prefix = f"{IMAGE_BASE_URL.rstrip('/')}/{safe}"
+        else:
+            out_dir = Path(IMAGE_OUTPUT_DIR)
+            url_prefix = IMAGE_BASE_URL.rstrip('/')
+
         matches: List[Tuple[str, int]] = extract_screenshot_timestamps(markdown)
         for idx, (marker, ts) in enumerate(matches):
             try:
-                img_path = generate_screenshot(str(video_path), str(IMAGE_OUTPUT_DIR), ts, idx)
+                img_path = generate_screenshot(str(video_path), str(out_dir), ts, idx)
                 filename = Path(img_path).name
-                # 构建前端可访问的 URL，例如 /static/screenshots/{filename}
-                img_url = f"{IMAGE_BASE_URL.rstrip('/')}/{filename}"
+                # 构建前端可访问 URL，例如 /static/screenshots/<task_id>/xxx.jpg
+                img_url = f"{url_prefix}/{filename}"
                 markdown = markdown.replace(marker, f"![]({img_url})", 1)
             except Exception as exc:
                 logger.error(f"生成截图失败 (timestamp={ts})：{exc}，跳过该截图")

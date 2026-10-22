@@ -132,17 +132,30 @@ def update_task_status(
     status: str,
     message: str | None = None,
     failed_at=None,
+    *,
+    user_id: int | None = None,
+    platform: str | None = None,
+    video_id: str | None = None,
 ) -> bool:
-    """把任务状态同步进 DB。
+    """把任务状态同步进 DB（行不存在则创建）。
 
-    - 记录不存在时**不新建**（video_tasks 是「已保存的笔记」表，语义由
-      _save_metadata 决定；状态更新不应该凭空造行）
+    ## 为什么要 upsert
+
+    任务列表接口原来靠扫 `note_results/*.status.json`，成本是 O(全部文件)——
+    实测 5000 个文件单次 137ms，多用户下每个用户每次刷新都要付这个代价。
+    改成查 DB（有 `user_id`/`updated_at` 索引）就是 O(log n)。
+
+    但前提是**任务一创建就要有 DB 行**，否则列表查不到刚提交的任务。
+    所以：
+      - 传了 platform/video_id（新建任务）→ 不存在则插入
+      - 只传 task_id（状态推进）→ 不存在则跳过（保持原语义，避免
+        `_update_status` 被别处调用时凭空造行）
+
+    ## 其他语义
     - FAILED 时写 failed_at；非 FAILED 时清空 failed_at 与 error，
       避免重试成功后仍带着上一次的失败痕迹
     - updated_at 每次刷新
-
-    返回是否更新到行。任何异常都只记日志，绝不向上抛 ——
-    状态落库失败不应该影响任务主流程。
+    - 任何异常都只记日志，绝不向上抛 —— 状态落库失败不该影响任务主流程
     """
     from datetime import datetime, timezone
 
@@ -150,7 +163,17 @@ def update_task_status(
     try:
         task = db.query(VideoTask).filter_by(task_id=task_id).first()
         if task is None:
-            return False
+            can_create = platform and video_id
+            if not can_create:
+                return False
+            task = VideoTask(
+                task_id=task_id,
+                video_id=str(video_id),
+                platform=str(platform),
+                user_id=user_id,
+            )
+            db.add(task)
+            db.flush()
 
         now = datetime.now(timezone.utc)
         task.status = str(status)[:32]
@@ -237,5 +260,72 @@ def count_tasks_by_status_since(since=None) -> dict:
     except Exception as e:
         logger.warning(f"按状态统计任务失败（可能未迁移）：{e}")
         return {}
+    finally:
+        db.close()
+
+def list_tasks_for_user(
+    user_id: int | None,
+    *,
+    is_admin: bool = False,
+    limit: int = 50,
+    offset: int = 0,
+    status: str | None = None,
+) -> tuple[list[dict], int]:
+    """按用户查任务列表（走 DB 索引，不扫文件）。
+
+    返回 (当前页, 总数)。排序按 updated_at 倒序（没有则用 created_at）。
+
+    归属规则与接口层一致：
+      - 有 user_id：必须等于当前用户
+      - 无 user_id：仅管理员可见（历史数据）
+    """
+    from sqlalchemy import func as sa_func
+    from sqlalchemy import or_
+
+    db = next(get_db())
+    try:
+        q = db.query(VideoTask).filter(VideoTask.deleted_at.is_(None))
+
+        if user_id is not None:
+            if is_admin:
+                cond = or_(VideoTask.user_id == user_id, VideoTask.user_id.is_(None))
+            else:
+                cond = VideoTask.user_id == user_id
+            q = q.filter(cond)
+        elif not is_admin:
+            return [], 0
+
+        if status:
+            q = q.filter(VideoTask.status == status.strip().upper())
+
+        total = q.with_entities(sa_func.count(VideoTask.id)).scalar() or 0
+
+        rows = (
+            q.order_by(
+                sa_func.coalesce(VideoTask.updated_at, VideoTask.created_at).desc()
+            )
+            .limit(limit)
+            .offset(offset)
+            .all()
+        )
+
+        items = []
+        for row in rows:
+            updated = row.updated_at or row.created_at
+            items.append(
+                {
+                    "task_id": row.task_id,
+                    "status": (row.status or "").upper() or "PENDING",
+                    "message": row.error,
+                    "platform": row.platform,
+                    "video_id": row.video_id,
+                    "updated_at": updated.isoformat() if updated else None,
+                    "failed_at": row.failed_at.isoformat() if row.failed_at else None,
+                }
+            )
+        return items, int(total)
+    except Exception as e:
+        logger.warning(f"按用户查询任务列表失败: {e}")
+        return [], 0
     finally:
         db.close()

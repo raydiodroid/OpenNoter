@@ -229,6 +229,36 @@ def run_note_task(task_id: str, video_url: str, platform: str, quality: Download
         logger.warning(f"向量索引失败（不影响笔记）: {e}")
 
 
+def _can_access_task(task_id: str, user: Optional[User]) -> bool:
+    """统一的「当前用户能否操作该任务」判定。
+
+    之前每个接口各写一遍 `owner is not None and user is not None and owner != user.id`，
+    这个写法有两个越权漏洞：
+      1. 无 user_id 的历史任务 → 条件整体为假 → **任何登录用户都能操作**
+      2. user 为 None（未登录，未开强制认证时）→ 条件整体为假 → **匿名也能操作**
+
+    这里的规则：
+      - 有归属：必须登录且 id 匹配；管理员不例外（管理员用管理接口，不走这条）
+      - 无归属：仅管理员可操作（历史数据清理/排查场景）
+    """
+    owner = _task_owner(task_id)
+    is_admin = bool(user and user.is_superuser)
+
+    if owner is not None:
+        return bool(user) and owner == user.id
+    # 无归属的历史数据：只允许管理员
+    return is_admin
+
+
+def _can_access_task_from_payload(payload: dict, user: Optional[User]) -> bool:
+    """同 _can_access_task，但直接吃已读出的状态 payload（避免再读一次文件）。"""
+    owner = payload.get("user_id")
+    is_admin = bool(user and user.is_superuser)
+    if owner is not None:
+        return bool(user) and owner == user.id
+    return is_admin
+
+
 def _task_owner(task_id: str):
     """从状态文件里读出任务归属，老任务没有 user_id 时返回 None。"""
     status_path = os.path.join(NOTE_OUTPUT_DIR, f"{task_id}.status.json")
@@ -271,8 +301,7 @@ def delete_task_by_id(task_id: str, user: User | None = Depends(get_optional_use
 
     删掉：笔记结果 JSON、状态文件、预取字幕缓存、向量索引、数据库记录。
     """
-    owner = _task_owner(task_id)
-    if owner is not None and user is not None and owner != user.id:
+    if not _can_access_task(task_id, user):
         raise HTTPException(status_code=403, detail="无权删除该任务")
 
     removed, had_row = _purge_task(task_id)
@@ -302,8 +331,7 @@ def delete_task(data: TaskDeleteRequest, user: User | None = Depends(get_optiona
 
     deleted = []
     for task_id in task_ids:
-        owner = _task_owner(task_id)
-        if owner is not None and user is not None and owner != user.id:
+        if not _can_access_task(task_id, user):
             continue
         _purge_task(task_id)
         deleted.append(task_id)
@@ -359,6 +387,26 @@ def _submit_note_task(background_tasks: BackgroundTasks, *, video_url: str, plat
                       video_interval: int, grid_size: list,
                       prefetched_transcript: Optional[dict], user) -> str:
     """校验入参 → 落 PENDING 状态 → 排后台任务 → 返回 task_id。"""
+    # 配额校验：必须在落 PENDING **之前**，否则排队的任务也算「已提交」，
+    # 用户会看到任务已创建但永远排队。
+    from app.services.quota import QuotaExceeded, check_submit_quota
+
+    try:
+        check_submit_quota(user)
+    except QuotaExceeded as exc:
+        return R.error(
+            msg=exc.message,
+            code=429,
+            data={
+                "reason": "quota_exceeded",
+                "dimension": exc.dimension,
+                "limit": exc.limit,
+                "current": exc.current,
+                "retry_after": exc.retry_after,
+            },
+            status_code=429,
+        )
+
     # 模型/供应商当场校验。不在这里校验的话，错的 provider_id 会先返回 200 + task_id，
     # 任务在后台才失败，调用方只能轮询一次才发现「供应商不存在/未保存」。
     provider_id, model_name = resolve_model_selection(provider_id, model_name)
@@ -371,7 +419,11 @@ def _submit_note_task(background_tasks: BackgroundTasks, *, video_url: str, plat
 
     # 统一先写入 PENDING，表示已进入队列等待串行执行；顺带记下任务归属
     NoteGenerator()._update_status(
-        task_id, TaskStatus.PENDING, user_id=user.id if user else None
+        task_id,
+        TaskStatus.PENDING,
+        user_id=user.id if user else None,
+        platform=platform,
+        video_id=str(video_url),
     )
 
     # 客户端已经抓好字幕的话，写到转写缓存文件，NoteGenerator 的 cache-hit 逻辑会直接用上
@@ -483,15 +535,38 @@ def list_tasks(
     返回按创建时间倒序，只带列表需要的轻量字段（不含 markdown 正文，
     正文由 `/tasks/{id}` 按需拉取）。
     """
+    limit = max(1, min(limit, 200))
+    offset = max(0, offset)
+    is_admin = bool(user and user.is_superuser)
+    wanted_status = (status or "").strip().upper() or None
+
+    # ---- 首选：查 DB（有 user_id / updated_at 索引，O(log n)）----
+    # 文件扫描是 O(全部状态文件)：实测 5000 个文件单次 137ms、20000 个 715ms。
+    # 多用户下每个用户每次刷新都付这个成本，不可接受。
+    try:
+        from app.db.video_task_dao import list_tasks_for_user
+
+        db_items, db_total = list_tasks_for_user(
+            user.id if user else None,
+            is_admin=is_admin,
+            limit=limit,
+            offset=offset,
+            status=wanted_status,
+        )
+        # DB 有数据就直接返回；为空则回退到扫文件——
+        # 兼容「迁移前就已存在、还没进 DB」的历史任务。
+        if db_total > 0:
+            return R.success(
+                {"items": db_items, "total": db_total, "limit": limit, "offset": offset,
+                 "source": "db"}
+            )
+    except Exception as exc:
+        logger.warning(f"DB 列表查询失败，回退到文件扫描：{exc}")
+
+    # ---- 回退：扫文件（历史数据 / DB 未迁移时）----
     note_dir = Path(NOTE_OUTPUT_DIR)
     if not note_dir.exists():
         return R.success({"items": [], "total": 0, "limit": limit, "offset": offset})
-
-    limit = max(1, min(limit, 200))
-    offset = max(0, offset)
-
-    is_admin = bool(user and user.is_superuser)
-    wanted_status = (status or "").strip().upper() or None
 
     items: list[dict] = []
     scan_errors = 0
@@ -588,19 +663,8 @@ def get_task_status(task_id: str, user: User | None = Depends(get_optional_user)
         with open(status_path, "r", encoding="utf-8") as f:
             status_content = json.load(f)
 
-        # 归属校验。
-        #
-        # 旧实现对「没有 user_id 的老任务」一律放行，等于任何登录用户
-        # 只要猜到 task_id 就能读到别人的笔记——这是越权。
-        # 现在：有归属必须匹配；无归属只允许管理员读（便于排查历史数据）。
-        owner = status_content.get("user_id")
-        is_admin = bool(user and user.is_superuser)
-        if owner is not None:
-            if user is None or owner != user.id:
-                raise HTTPException(status_code=403, detail="无权访问该任务")
-        elif not is_admin and auth_enforced():
-            # 无归属的遗留数据：仅在「开启强制认证」的环境下收紧，
-            # 避免单人自托管场景把历史笔记全部锁死。
+        # 归属校验：与删除/列表用同一套规则（见 _can_access_task）。
+        if not _can_access_task_from_payload(status_content, user):
             raise HTTPException(status_code=403, detail="无权访问该任务")
 
         status = status_content.get("status")
