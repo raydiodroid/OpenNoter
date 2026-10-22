@@ -260,7 +260,7 @@
 | 15 生产 CORS 扩展白名单 | `bb41e5c` | `cors_origins.py`：默认固定 `OPENNOTER_CORS_EXTENSION_IDS`；`ALLOW_ANY_EXTENSION` 仅开发 |
 | 16 nginx body ↔ 上传上限 | `b52fbad` | `client_max_body_size 512m` 对齐 `UPLOAD_MAX_SIZE_MB≈500` |
 | 12 配额原子化 + 匿名限流 | `df45b12` | `begin_submit` 同锁写 PENDING；`ANON_MAX_CONCURRENT_TASKS` / `ANON_SUBMIT_RPM` |
-| 11 退出标记 FAILED（最小队列） | `b5ac6e0`（目录对齐补丁见后续） | lifespan 启停扫描 `*.status.json`；README 说明为何不上 Celery |
+| 11 退出标记 FAILED（最小队列） | `b5ac6e0` + `de0961c` | lifespan 启停扫描 `*.status.json`；`NOTE_OUTPUT_DIR` 对齐写入；README 说明为何不上 Celery |
 | 13 compose 数据/代码分离 | `62b99b7` | 仅挂 data/config/uploads/…；文档化多副本需 Postgres |
 
 回归（本轮 P2）：`pytest tests/test_probe_endpoint_ssrf.py tests/test_cors_origins.py tests/test_nginx_body_limit.py tests/test_multiuser_security.py tests/test_p0_security_hardening.py tests/test_task_interrupt.py`。
