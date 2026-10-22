@@ -20,16 +20,28 @@
 | 孤儿状态残留（`*_markdown.status.json` 等） | 有同名正常文件才删 | — |
 | 已删除任务的状态文件 | DB 里 deleted_at 非空 | — |
 
-## 用法
+## 运行位置（重要）
 
-    # 先看会删什么（默认）
-    python scripts/cleanup_cache.py --dry-run
+**必须在宿主机上跑**（或 `docker exec` + 显式挂载 scripts/）。
 
-    # 确认后真删
-    python scripts/cleanup_cache.py --apply
+原因：docker-compose 只把 `./backend` 挂到容器的 `/app`，仓库根的
+`scripts/` 不在容器里。所以容器内 `python scripts/cleanup_cache.py`
+会报 No such file。
+
+宿主机跑法（路径需指向容器挂载的宿主机目录）：
+
+    # 在 VPS 上
+    cd /opt/opennoter-src/backend
+    NOTE_OUTPUT_DIR=note_results \
+    DATA_DIR=data \
+    OUT_DIR=static/screenshots \
+    python3 ../scripts/cleanup_cache.py --dry-run
+
+    # 确认后
+    ... --apply
 
     # 自定义保留天数
-    python scripts/cleanup_cache.py --apply --media-days 30 --orphan-shot-days 7
+    ... --apply --media-days 30 --orphan-shot-days 7
 """
 
 from __future__ import annotations

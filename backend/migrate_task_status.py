@@ -50,6 +50,14 @@ USER_COLUMNS = [
 ]
 
 
+def _table_exists(conn, table: str) -> bool:
+    row = conn.execute(
+        text("SELECT name FROM sqlite_master WHERE type='table' AND name=:n"),
+        {"n": table},
+    ).fetchone()
+    return row is not None
+
+
 def _column_exists(conn, table: str, column: str) -> bool:
     rows = conn.execute(text(f"PRAGMA table_info({table})")).fetchall()
     return any(r[1] == column for r in rows)
@@ -94,14 +102,18 @@ def add_columns() -> int:
     engine = get_engine()
     added = 0
     with engine.begin() as conn:
-        # users 表的配额列
-        for name, coltype in USER_COLUMNS:
-            if _column_exists(conn, "users", name):
-                logger.info(f"users.{name} 已存在，跳过")
-                continue
-            conn.execute(text(f"ALTER TABLE users ADD COLUMN {name} {coltype}"))
-            logger.info(f"users.{name} 已添加 ({coltype})")
-            added += 1
+        # users 表的配额列（表不存在时跳过——它由 init_db 创建，
+        # 这里不该替它建表；老库可能还没跑到那一步）
+        if _table_exists(conn, "users"):
+            for name, coltype in USER_COLUMNS:
+                if _column_exists(conn, "users", name):
+                    logger.info(f"users.{name} 已存在，跳过")
+                    continue
+                conn.execute(text(f"ALTER TABLE users ADD COLUMN {name} {coltype}"))
+                logger.info(f"users.{name} 已添加 ({coltype})")
+                added += 1
+        else:
+            logger.warning("users 表不存在，跳过配额列迁移（请先执行 init_db）")
 
         for name, coltype in NEW_COLUMNS:
             if _column_exists(conn, "video_tasks", name):
@@ -110,6 +122,7 @@ def add_columns() -> int:
             conn.execute(text(f"ALTER TABLE video_tasks ADD COLUMN {name} {coltype}"))
             logger.info(f"video_tasks.{name} 已添加 ({coltype})")
             added += 1
+
 
         # 索引：监控按 status / failed_at / updated_at 过滤
         try:
