@@ -188,16 +188,34 @@ def probe_endpoint(data: EndpointProbeRequest, admin: User = Depends(require_adm
     与 connect_test 的区别：不发起 chat completion，因此适用于 LLM、ASR、
     Embedding 等任意 OpenAI 兼容端点，也不消耗 token。返回耗时与模型数量，
     让配置页能直接判断「这个地址到底通不通」。
+
+    出站前复用 assert_safe_url（suffixes=()：只拦 scheme / 内网 IP，不套
+    图片 CDN 白名单），缩管理员内网探测面。本机 Ollama 等私网端点需显式
+    打开 OPENNOTER_PROBE_ALLOW_PRIVATE=true。
     """
     import time
 
     import requests
+
+    from app.utils.env_compat import getbool
+    from app.utils.url_safety import UnsafeUrlError, assert_safe_url
 
     base = (data.base_url or "").strip().rstrip("/")
     if not base:
         return R.success(data={"ok": False, "latency": 0, "message": "未配置地址"})
 
     url = base + "/models"
+    if not getbool("PROBE_ALLOW_PRIVATE", False):
+        try:
+            # suffixes=()：不限制域名，只做协议 + 私网/保留地址拦截
+            assert_safe_url(url, suffixes=())
+        except UnsafeUrlError as exc:
+            return R.success(data={
+                "ok": False,
+                "latency": 0,
+                "message": f"地址不安全：{exc}",
+            })
+
     headers = {"Authorization": f"Bearer {data.api_key}"} if data.api_key else {}
     started = time.time()
     try:
