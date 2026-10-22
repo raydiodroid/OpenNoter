@@ -72,11 +72,26 @@ def fail_interrupted_tasks(
 
     通过 ``NoteGenerator._update_status`` 落盘 + 同步 DB，与正常失败路径一致。
     """
+    from app.services import note as note_mod
+    from app.services.note import NoteGenerator
+
+    root = note_dir if note_dir is not None else _note_output_dir()
+    # NoteGenerator._update_status 用模块级 NOTE_OUTPUT_DIR；测试/自定义目录时对齐。
+    prev_dir = note_mod.NOTE_OUTPUT_DIR
+    note_mod.NOTE_OUTPUT_DIR = root
+    try:
+        marked = _fail_interrupted_tasks_locked(reason=reason, root=root)
+    finally:
+        note_mod.NOTE_OUTPUT_DIR = prev_dir
+    return marked
+
+
+def _fail_interrupted_tasks_locked(*, reason: str, root: Path) -> int:
     from app.services.note import NoteGenerator
 
     gen = NoteGenerator()
     marked = 0
-    for path in iter_status_files(note_dir):
+    for path in iter_status_files(root):
         data = _read_status(path)
         if not data:
             continue
