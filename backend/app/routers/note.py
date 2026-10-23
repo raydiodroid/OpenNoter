@@ -238,11 +238,20 @@ def run_note_task(task_id: str, video_url: str, platform: str, quality: Download
 def _ownerless_accessible(user: Optional[User]) -> bool:
     """无归属任务是否可被当前身份访问。
 
-    强制认证关闭时，匿名可创建任务（user_id=None）；若此处一律拒匿名，
-    会出现「能创建却立刻 403 轮询」——前端再吞错就会永远「生成中」。
-    因此：未强制认证 + 匿名 → 允许凭 task_id 访问无归属任务。
-    强制认证开启后新任务必有归属；无归属只剩历史数据，仅管理员可碰。
-    已登录的非管理员仍不能操作无归属任务（避免任意登录用户清历史）。
+    ## 现状（匿名关闭后）
+
+    `AUTH_ENFORCE` 默认 True，未登录请求在 `get_optional_user` 那层就被
+    401 拦掉，走不到这里。因此本函数实际只需处理「已登录用户」：
+
+    - 管理员 → 可以（清理历史数据、排查问题的出口）
+    - 普通用户 → 不可以（否则任何登录用户都能翻到别人的早期任务）
+
+    ## 遗留的兼容分支
+
+    如果部署方显式设了 `OPENNOTER_AUTH_ENFORCE=0`（单机自托管场景），
+    匿名创建的任务 user_id 为 None，此时必须允许匿名凭 task_id 读回，
+    否则「能创建却读不回来」，前端会永远停在「生成中」。
+    这段逻辑保留，但只在显式关闭认证时生效。
     """
     if user and user.is_superuser:
         return True

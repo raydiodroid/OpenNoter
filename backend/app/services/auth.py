@@ -420,14 +420,28 @@ def require_admin(user: User = Depends(get_current_user)) -> User:
 
 
 def auth_enforced() -> bool:
-    """是否强制认证。
+    """是否强制认证（**默认开启**）。
 
-    渐进上线的开关：前端登录页就绪前保持关闭，业务接口照旧可用；
-    打开后所有挂了 get_optional_user 的接口都会要求有效凭据。
+    ## 为什么默认开启
+
+    早期为「渐进上线」留了 `AUTH_ENFORCE=0` 的默认值：未登录时
+    `get_optional_user` 返回 None 而不是 401，业务照常可用。但这带来两个问题：
+
+    1. **匿名可创建任务**（user_id=None），却因为 ACL 规则读不回自己的任务，
+       前端轮询吞错后表现为「永远生成中」；
+    2. 公网部署时任何人只要拿到地址就能白嫖 LLM/转写额度。
+
+    所以默认改为 `True`：除健康检查等显式公开的路由外，一律要求凭据。
+
+    ## 什么场景还要关
+
+    单机自托管、只在内网用、且不想配账号时，可以显式设
+    `OPENNOTER_AUTH_ENFORCE=0` 恢复旧行为（此时匿名可创建并访问无归属任务）。
+    但**不要**在公网上这样配置。
     """
     from app.utils.env_compat import getbool
 
-    return getbool("AUTH_ENFORCE", False)
+    return getbool("AUTH_ENFORCE", True)
 
 
 def get_optional_user(request: Request, db: Session = Depends(get_db)) -> Optional[User]:

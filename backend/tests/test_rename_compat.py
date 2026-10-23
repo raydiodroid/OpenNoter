@@ -89,57 +89,184 @@ def test_empty_new_value_is_honoured(monkeypatch):
 # ---------------------------------------------------------------------------
 # 数据库文件自动迁移
 # ---------------------------------------------------------------------------
-def test_legacy_db_is_renamed(tmp_path, monkeypatch):
-    """旧库存在、新库不存在时，启动应自动改名而不是新建空库。"""
-    old = tmp_path / "bili_note.db"
-    old.write_bytes(b"SQLite format 3\x00fake-legacy-db")
-    new = tmp_path / "open_noter.db"
+def _fresh_engine(tmp_path):
+    """在指定目录下重新 import engine（触发路径解析 + 迁移）。"""
+    import os
 
-    monkeypatch.chdir(tmp_path)
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        for name in list(sys.modules):
+            if name.startswith("app."):
+                sys.modules.pop(name, None)
+        _install_app_namespace()
+        from app.db import engine as eng
+
+        return eng
+    finally:
+        os.chdir(cwd)
+
+
+def _make_db(path: Path, email: str = "a@b.c") -> None:
+    import sqlite3
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    c = sqlite3.connect(str(path))
+    try:
+        c.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT)")
+        c.execute("INSERT INTO users (email) VALUES (?)", (email,))
+        c.commit()
+    finally:
+        c.close()
+
+
+def test_legacy_db_moves_into_data_dir(tmp_path, monkeypatch):
+    """旧位置（cwd 根）的库应自动搬到 data/，且数据不丢。"""
     monkeypatch.delenv("DATABASE_URL", raising=False)
-    for name in list(sys.modules):
-        if name.startswith("app."):
-            sys.modules.pop(name, None)
-    _install_app_namespace()
+    old = tmp_path / "open_noter.db"
+    _make_db(old, "old@test.com")
 
-    from app.db.engine import _migrate_legacy_sqlite
+    eng = _fresh_engine(tmp_path)
 
-    result = _migrate_legacy_sqlite("open_noter.db")
+    new = tmp_path / "data" / "open_noter.db"
+    assert new.exists(), "应迁移到 data/ 下"
+    assert not old.exists(), "源文件应被移走"
+    assert str(new) in eng.DATABASE_URL
 
-    assert result == "open_noter.db"
-    assert new.exists(), "旧库应被重命名为新名字"
-    assert not old.exists()
-    assert new.read_bytes().startswith(b"SQLite format 3")
+    # 数据完整
+    import sqlite3
+
+    c = sqlite3.connect(str(new))
+    try:
+        rows = list(c.execute("SELECT email FROM users"))
+    finally:
+        c.close()
+    assert rows == [("old@test.com",)]
 
 
-def test_existing_new_db_is_untouched(tmp_path):
-    """新库已存在时不覆盖、不迁移（幂等）。"""
+def test_legacy_brand_name_is_migrated(tmp_path, monkeypatch):
+    """更早的品牌名 bili_note.db 也要能迁到 data/open_noter.db。"""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     old = tmp_path / "bili_note.db"
-    old.write_bytes(b"legacy")
-    new = tmp_path / "open_noter.db"
-    new.write_bytes(b"current")
+    _make_db(old, "ancient@test.com")
 
-    for name in list(sys.modules):
-        if name.startswith("app."):
-            sys.modules.pop(name, None)
+    eng = _fresh_engine(tmp_path)
+
+    new = tmp_path / "data" / "open_noter.db"
+    assert new.exists()
+    assert str(new) in eng.DATABASE_URL
+
+
+def test_existing_new_db_wins(tmp_path, monkeypatch):
+    """新位置已有可用库时，不动旧文件（幂等 / 避免覆盖更新的数据）。"""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    new = tmp_path / "data" / "open_noter.db"
+    _make_db(new, "current@test.com")
+    old = tmp_path / "open_noter.db"
+    _make_db(old, "stale@test.com")
+
+    eng = _fresh_engine(tmp_path)
+
+    assert str(new) in eng.DATABASE_URL
+    assert old.exists(), "新库已存在时不该动旧文件"
+    c = __import__("sqlite3").connect(str(new))
+    try:
+        assert list(c.execute("SELECT email FROM users")) == [("current@test.com",)]
+    finally:
+        c.close()
+
+
+def test_corrupt_file_is_not_migrated(tmp_path, monkeypatch):
+    """坏文件不能被当成数据库搬走（否则会把好库覆盖成坏库）。"""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    bad = tmp_path / "open_noter.db"
+    bad.write_bytes(b"this is not sqlite")
+
+    _fresh_engine(tmp_path)
+
+    new = tmp_path / "data" / "open_noter.db"
+    # 迁移被拒：要么没生成新库，要么新库不是这个坏内容
+    assert not new.exists() or new.read_bytes() != b"this is not sqlite"
+
+
+def test_explicit_database_url_is_respected(tmp_path, monkeypatch):
+    """用户显式配置 DATABASE_URL 时完全尊重，不做任何迁移。"""
+    custom = tmp_path / "custom" / "mydb.sqlite"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{custom}")
+    legacy = tmp_path / "open_noter.db"
+    _make_db(legacy, "should-not-move@test.com")
+
+    eng = _fresh_engine(tmp_path)
+
+    assert eng.DATABASE_URL == f"sqlite:///{custom}"
+    assert legacy.exists(), "显式配置时不该搬动旧库"
+
+
+def test_fresh_install_points_at_data_dir(tmp_path, monkeypatch):
+    """全新安装：指向 data/ 下，首次连接时由 SQLite 建空库。"""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    eng = _fresh_engine(tmp_path)
+
+    assert str(tmp_path / "data" / "open_noter.db") in eng.DATABASE_URL
+
+
+def test_explicit_url_adopts_legacy_when_target_missing(tmp_path, monkeypatch):
+    """容器场景：compose 显式写 DATABASE_URL 指向 data/，也不能丢旧库。
+
+    这是最容易踩的坑——显式配置会让「默认路径迁移」整段跳过，
+    升级后看到一个空库，表现为「数据全丢」。
+    """
+    target = tmp_path / "data" / "open_noter.db"
+    legacy = tmp_path / "open_noter.db"
+    _make_db(legacy, "prod@test.com")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{target}")
+
+    eng = _fresh_engine(tmp_path)
+
+    assert target.exists(), "应接管旧库到 data/"
+    assert not legacy.exists(), "源文件应被移走"
+    c = __import__("sqlite3").connect(str(target))
+    try:
+        assert list(c.execute("SELECT email FROM users")) == [("prod@test.com",)]
+    finally:
+        c.close()
+
+
+def test_explicit_url_never_overwrites_existing_db(tmp_path, monkeypatch):
+    """目标已是有数据的真库时，绝不覆盖（防误删新数据）。"""
+    target = tmp_path / "data" / "open_noter.db"
+    _make_db(target, "new@test.com")
+    legacy = tmp_path / "open_noter.db"
+    _make_db(legacy, "old@test.com")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{target}")
+
+    _fresh_engine(tmp_path)
+
+    c = __import__("sqlite3").connect(str(target))
+    try:
+        assert list(c.execute("SELECT email FROM users")) == [("new@test.com",)]
+    finally:
+        c.close()
+    assert legacy.exists(), "目标已有数据时不该动旧库"
+
+
+def test_non_sqlite_url_is_untouched(tmp_path, monkeypatch):
+    """非 sqlite URL 不做任何本地文件操作（直接测 URL 处理函数，免装 PG 驱动）。"""
+    sys.modules.pop("app.db.engine", None)
     _install_app_namespace()
+    from app.db import engine as eng_mod
 
-    from app.db.engine import _migrate_legacy_sqlite
+    legacy = tmp_path / "open_noter.db"
+    _make_db(legacy, "x@test.com")
+    import os
 
-    assert _migrate_legacy_sqlite(str(new)) == str(new)
-    assert new.read_bytes() == b"current"
-    assert old.read_bytes() == b"legacy", "新库已存在时不应动旧库"
-
-
-def test_no_legacy_db_is_noop(tmp_path):
-    """没有旧库时保持默认路径。"""
-    for name in list(sys.modules):
-        if name.startswith("app."):
-            sys.modules.pop(name, None)
-    _install_app_namespace()
-
-    from app.db.engine import _migrate_legacy_sqlite
-
-    target = tmp_path / "open_noter.db"
-    assert _migrate_legacy_sqlite(str(target)) == str(target)
-    assert not target.exists()
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        url = "postgresql://user:pass@db:5432/opennoter"
+        out = eng_mod._maybe_adopt_legacy_for_explicit_url(url)
+        assert out == url, "非 sqlite 应原样返回"
+        assert legacy.exists(), "非 sqlite 时不该动本地文件"
+    finally:
+        os.chdir(cwd)

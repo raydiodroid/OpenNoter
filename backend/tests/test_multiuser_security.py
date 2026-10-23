@@ -356,3 +356,58 @@ def test_screenshot_dir_is_per_task(tmp_path, monkeypatch):
         for name in [n for n in sys.modules if n == "app" or n.startswith("app.")]:
             sys.modules.pop(name, None)
         sys.modules.update(saved)
+
+
+# ---------------------------------------------------------------------------
+# 匿名关闭（AUTH_ENFORCE 默认 True）
+# ---------------------------------------------------------------------------
+def test_auth_enforced_by_default(monkeypatch):
+    """默认应强制认证：未登录不能匿名创建/读取任务。"""
+    saved = {
+        name: mod for name, mod in sys.modules.items() if name == "app" or name.startswith("app.")
+    }
+    for name in saved:
+        sys.modules.pop(name, None)
+    monkeypatch.delenv("OPENNOTER_AUTH_ENFORCE", raising=False)
+    monkeypatch.delenv("BILINOTE_AUTH_ENFORCE", raising=False)
+
+    try:
+        _install_app_namespace()
+        from app.services.auth import auth_enforced
+
+        assert auth_enforced() is True, "生产默认必须强制认证"
+    finally:
+        for name in [n for n in sys.modules if n == "app" or n.startswith("app.")]:
+            sys.modules.pop(name, None)
+        sys.modules.update(saved)
+
+
+def test_auth_can_be_explicitly_disabled(monkeypatch):
+    """单机自托管仍可显式关闭（内网使用场景）。"""
+    saved = {
+        name: mod for name, mod in sys.modules.items() if name == "app" or name.startswith("app.")
+    }
+    for name in saved:
+        sys.modules.pop(name, None)
+    monkeypatch.setenv("OPENNOTER_AUTH_ENFORCE", "0")
+
+    try:
+        _install_app_namespace()
+        from app.services.auth import auth_enforced
+
+        assert auth_enforced() is False
+    finally:
+        for name in [n for n in sys.modules if n == "app" or n.startswith("app.")]:
+            sys.modules.pop(name, None)
+        sys.modules.update(saved)
+
+
+def test_ownerless_task_needs_admin_when_enforced(note_mod, monkeypatch):
+    """认证开启时，无归属历史任务只有管理员能访问（匿名/普通用户都不行）。"""
+    mod, notes = note_mod
+    monkeypatch.setenv("OPENNOTER_AUTH_ENFORCE", "1")
+    _status(notes, "legacy", {"status": "SUCCESS"})
+
+    assert mod._can_access_task("legacy", None) is False
+    assert mod._can_access_task("legacy", U(1)) is False
+    assert mod._can_access_task("legacy", U(1, admin=True)) is True
