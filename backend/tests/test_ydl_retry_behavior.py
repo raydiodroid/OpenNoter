@@ -17,9 +17,37 @@ def _stub(monkeypatch, name, **attrs):
     return module
 
 
+def _load_real(monkeypatch, name, path, **overrides):
+    """把真实模块按路径加载进 sys.modules（不触发 app 包初始化）。
+
+    纯 Python 模块（base / errors）能独立加载时就不该造假：假模块会让被测代码
+    看到与生产不同的行为。
+    """
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"{path} spec not found")
+    module = importlib.util.module_from_spec(spec)
+    # 必须先注册进 sys.modules 再 exec：limits.py 用了 @dataclass，而 dataclasses
+    # 在解析字段类型时会 `sys.modules[cls.__module__].__dict__`，未注册就 AttributeError。
+    monkeypatch.setitem(sys.modules, name, module)
+    spec.loader.exec_module(module)
+    for key, value in overrides.items():
+        setattr(module, key, value)
+    return module
+
+
 class _Downloader:
+    """最小可用的 Downloader 替身。
+
+    只替换「真实基类里会碰磁盘/data 目录」的部分；`_resolve_output_dir` 必须提供，
+    否则被测代码走的是 stub 才有的降级分支，测不到生产行为。
+    """
+
     def __init__(self):
         self.cache_data = "/tmp"
+
+    def _resolve_output_dir(self, output_dir):
+        return output_dir or self.cache_data
 
 
 class _AudioDownloadResult:
@@ -33,13 +61,19 @@ def _load_downloader_module(monkeypatch):
     _stub(monkeypatch, "app.models")
     _stub(monkeypatch, "app.services")
     _stub(monkeypatch, "app.utils")
-    _stub(
+    # base.py 只依赖一个枚举，stub 掉枚举即可跑真实的 base.py。
+    _stub(monkeypatch, "app.enmus")
+    _stub(monkeypatch, "app.enmus.note_enums", DownloadQuality=str)
+    _load_real(
         monkeypatch,
         "app.downloaders.base",
+        ROOT / "app" / "downloaders" / "base.py",
         Downloader=_Downloader,
-        DownloadQuality=str,
-        YDL_RETRY_OPTS={"retries": 3, "fragment_retries": 3, "socket_timeout": 30},
     )
+    _load_real(monkeypatch, "app.downloaders.errors", ROOT / "app" / "downloaders" / "errors.py")
+    _load_real(monkeypatch, "app.downloaders.limits", ROOT / "app" / "downloaders" / "limits.py")
+    _load_real(monkeypatch, "app.services.cookie_policy", ROOT / "app" / "services" / "cookie_policy.py")
+    _load_real(monkeypatch, "app.services.cookie_manager", ROOT / "app" / "services" / "cookie_manager.py")
     _stub(monkeypatch, "app.downloaders.youtube_subtitle", YouTubeSubtitleFetcher=object)
     _stub(monkeypatch, "app.models.notes_model", AudioDownloadResult=_AudioDownloadResult)
     _stub(monkeypatch, "app.models.transcriber_model", TranscriptResult=object)

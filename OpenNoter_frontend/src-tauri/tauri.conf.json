@@ -1,0 +1,46 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "OpenNoter",
+  "version": "2.4.5",
+  "identifier": "com.jefferyhuang.opennoter",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:3015",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build -- --mode tauri"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "OpenNoter",
+        "width": 1600,
+        "height": 1000,
+        "resizable": true,
+        "fullscreen": false,
+        "devtools": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "externalBin": [
+      "bin/OpenNoterBackend/OpenNoterBackend"
+    ],
+    "resources": {
+    "bin/OpenNoterBackend/_internal":"_internal"
+    },
+    "macOS":{
+      "files": {
+               "Frameworks": "bin/OpenNoterBackend/_internal"
+      }
+    },
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/icon.ico",
+      "icons/icon.png"
+    ]
+  }
+}

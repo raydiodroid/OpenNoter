@@ -44,23 +44,18 @@ jobs:
             ./backend/build.sh
           fi
 
-      # 设置 pnpm
-      # 不能用 'latest'：pnpm 11+ 要求 Node 22+，与下方 Node 20 不兼容（ERR_UNKNOWN_BUILTIN_MODULE）。
-      # lockfile 是 pnpm 9 生成；统一 pin 到 9.15.0
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: '9.15.0'
-
       # 设置 Node 环境
+      # 前端用 npm + package-lock.json（OpenNoter_frontend 只提供 package-lock.json 这一份 lockfile）
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: OpenNoter_frontend/package-lock.json
 
       - name: Install frontend dependencies
-        working-directory: BillNote_frontend
-        run: pnpm install
+        working-directory: OpenNoter_frontend
+        run: npm ci --no-audit --no-fund
 
       # 设置 Rust 环境
       - name: Set up Rust
@@ -75,8 +70,8 @@ jobs:
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
-            BillNote_frontend/src-tauri/target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('BillNote_frontend/src-tauri/Cargo.lock') }}
+            OpenNoter_frontend/src-tauri/target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('OpenNoter_frontend/src-tauri/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
       # 从 tag 注入版本号到 tauri.conf.json：Tauri 取该文件的静态 version 作为
@@ -84,7 +79,7 @@ jobs:
       # github.ref_name 形如 v2.3.2，去掉前缀 v。workflow_dispatch（无 tag）时跳过，保留静态值。
       - name: Sync version from tag
         if: startsWith(github.ref, 'refs/tags/v')
-        working-directory: BillNote_frontend
+        working-directory: OpenNoter_frontend
         shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
@@ -93,16 +88,18 @@ jobs:
           node -e "console.log('tauri.conf.json version =', require('./src-tauri/tauri.conf.json').version)"
 
       # 打包 Tauri 应用
+      # 用 npx 直接调 @tauri-apps/cli 提供的 tauri 可执行文件：
+      # package.json 里没有 "tauri" script，npm run tauri 会报 missing script（npm 7+ 不再回退到 node_modules/.bin）。
       - name: Build Tauri App
-        working-directory: BillNote_frontend
-        run: pnpm tauri build
+        working-directory: OpenNoter_frontend
+        run: npx tauri build
 
       # 收集产物到统一目录
       - name: Collect release artifacts
         shell: bash
         run: |
           mkdir -p release-artifacts
-          BUNDLE_DIR="BillNote_frontend/src-tauri/target/release/bundle"
+          BUNDLE_DIR="OpenNoter_frontend/src-tauri/target/release/bundle"
 
           # macOS: .dmg
           find "$BUNDLE_DIR" -name "*.dmg" -exec cp {} release-artifacts/ \; 2>/dev/null || true
@@ -156,7 +153,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: BiliNote ${{ github.ref_name }}
+          name: OpenNoter ${{ github.ref_name }}
           draft: false
           prerelease: false
           generate_release_notes: true

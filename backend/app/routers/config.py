@@ -2,59 +2,188 @@ import os
 import platform
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, Request
+from pydantic import BaseModel, Field
 from typing import Optional
+from urllib.parse import urlsplit
+from app.db.models.users import User
+from app.services.auth import get_optional_user, require_admin
 from app.utils.response import ResponseWrapper as R
 from app.utils.logger import get_logger
 from app.utils.path_helper import get_model_dir
 
 from app.services.cookie_manager import CookieConfigManager
+from app.services.cookie_policy import (
+    cookie_entry_count,
+    cookie_hint_for_empty,
+    filter_downloader_cookies,
+)
+from app.services.cookie_transfer import (
+    COOKIE_PLATFORMS,
+    cookie_transfer_manager,
+    normalize_origin,
+)
+from app.services.bilibili_qr_login import BilibiliQrLoginError, BilibiliQrLoginManager
 from app.services.transcriber_config_manager import TranscriberConfigManager
 from app.transcriber import model_download_state as dl_state
 from ffmpeg_helper import ensure_ffmpeg_or_raise
 
 logger = get_logger(__name__)
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(get_optional_user)])
+# 健康检查与一次性扩展传输凭证接口不依赖浏览器会话
+public_router = APIRouter()
 cookie_manager = CookieConfigManager()
 transcriber_config_manager = TranscriberConfigManager()
+qr_login_manager = BilibiliQrLoginManager(cookie_manager.set)
 
 
 class CookieUpdateRequest(BaseModel):
     platform: str
-    cookie: str
+    cookie: str = Field(max_length=32768)
+
+
+class CookieTransferStartRequest(BaseModel):
+    platform: str
+
+
+class CookieTransferCompleteRequest(BaseModel):
+    transfer_id: str = Field(min_length=20, max_length=128)
+    page_origin: str = Field(max_length=512)
+    cookie: str = Field(min_length=1, max_length=32768)
 
 
 @router.get("/get_downloader_cookie/{platform}")
-def get_cookie(platform: str):
-    cookie = cookie_manager.get(platform)
-    if not cookie:
-        return R.success(msg='未找到Cookies')
-    return R.success(
-        data={"platform": platform, "cookie": cookie}
-    )
+def get_cookie(platform: str, admin: User = Depends(require_admin)):
+    if platform not in COOKIE_PLATFORMS:
+        raise HTTPException(status_code=400, detail="不支持的 Cookie 平台")
+    return R.success(data={"platform": platform, "cookie": cookie_manager.get(platform)})
 
 
 @router.post("/update_downloader_cookie")
-def update_cookie(data: CookieUpdateRequest):
-    cookie_manager.set(data.platform, data.cookie)
-    return R.success(
+def update_cookie(data: CookieUpdateRequest, admin: User = Depends(require_admin)):
+    if data.platform not in COOKIE_PLATFORMS:
+        raise HTTPException(status_code=400, detail="不支持的 Cookie 平台")
+    try:
+        cookie = filter_downloader_cookies(data.platform, data.cookie)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if data.cookie and not cookie:
+        # 提示文案要区分格式：
+        #   - netscape 平台（YouTube）→ 提示 cookies.txt 格式/条目问题
+        #   - header 平台且白名单为空 → 明确说「无需同步」
+        #   - header 平台有白名单 → 说「没有需要的登录项」
+        raise HTTPException(status_code=400, detail=cookie_hint_for_empty(data.platform))
+    cookie_manager.set(data.platform, cookie)
+    return R.success()
 
-    )
+
+@router.post("/create_browser_cookie_transfer")
+def create_browser_cookie_transfer(
+    data: CookieTransferStartRequest,
+    request: Request,
+    admin: User = Depends(require_admin),
+):
+    origin = request.headers.get("origin", "")
+    if not origin:
+        referer = request.headers.get("referer", "")
+        parsed = urlsplit(referer)
+        if parsed.scheme and parsed.netloc:
+            origin = f"{parsed.scheme}://{parsed.netloc}"
+    normalized_origin = normalize_origin(origin)
+    if not normalized_origin:
+        raise HTTPException(status_code=400, detail="无法确认浏览器页面来源")
+    try:
+        transfer_id = cookie_transfer_manager.issue(data.platform, admin.id, normalized_origin)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return R.success(data={"transfer_id": transfer_id, "expires_in": 90})
+
+
+@public_router.post("/complete_browser_cookie_transfer")
+def complete_browser_cookie_transfer(data: CookieTransferCompleteRequest):
+    """接收浏览器扩展同步过来的 Cookie。
+
+    已知限制（**扩展侧问题，后端无法修**）：
+    `OpenNoter_extension/src/logic/cookies.ts` 里 `COOKIE_NAME_ALLOWLISTS.youtube = []`，
+    所以 `readBrowserCookies('youtube')` 永远返回空串——浏览器一键同步对 YouTube
+    不生效。YouTube 目前只支持用户在设置页**手动粘贴 Netscape cookies.txt**
+    （这是 yt-dlp `cookiefile` 需要的格式，不能是 `name=value; ...` 请求头形式）。
+    要让一键同步支持 YouTube，得先改扩展的 allowlist，不在本文件的改动范围内。
+    """
+    transfer = cookie_transfer_manager.consume(data.transfer_id, data.page_origin, data.cookie)
+    if not transfer:
+        raise HTTPException(status_code=410, detail="浏览器 Cookie 请求已失效，请重新发起")
+    try:
+        cookie = filter_downloader_cookies(transfer.platform, data.cookie)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not cookie:
+        raise HTTPException(status_code=400, detail=cookie_hint_for_empty(transfer.platform))
+    cookie_manager.set(transfer.platform, cookie)
+    # 条目数必须按平台格式统计：netscape（YouTube）按行数，header 按 `; ` 分段。
+    # 历史实现直接 `len(cookie.split("; "))`，对 cookies.txt 会算成 1（甚至 0）。
+    return R.success(data={"platform": transfer.platform, "count": cookie_entry_count(transfer.platform, cookie)})
+
+
+@router.post("/bilibili_qr_login")
+def start_bilibili_qr_login(admin: User = Depends(require_admin)):
+    try:
+        return R.success(data=qr_login_manager.start(admin.id))
+    except BilibiliQrLoginError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.get("/bilibili_qr_login/{session_id}")
+def poll_bilibili_qr_login(session_id: str, admin: User = Depends(require_admin)):
+    try:
+        return R.success(data=qr_login_manager.poll(session_id, admin.id))
+    except BilibiliQrLoginError as exc:
+        raise HTTPException(status_code=410, detail=str(exc)) from exc
+
+
+@router.delete("/bilibili_qr_login/{session_id}")
+def cancel_bilibili_qr_login(session_id: str, admin: User = Depends(require_admin)):
+    qr_login_manager.cancel(session_id, admin.id)
+    return R.success()
 
 class TranscriberConfigRequest(BaseModel):
     transcriber_type: str
     whisper_model_size: Optional[str] = None
 
 
-AVAILABLE_TRANSCRIBER_TYPES = [
-    {"value": "fast-whisper", "label": "Faster Whisper（本地）"},
-    {"value": "bcut", "label": "必剪（在线）"},
-    {"value": "kuaishou", "label": "快手（在线）"},
-    {"value": "groq", "label": "Groq（在线）"},
-    {"value": "mlx-whisper", "label": "MLX Whisper（仅macOS）"},
-]
+def _build_transcriber_types():
+    """转写引擎清单。
+
+    `groq` 是代码里的槽位名（走 OpenAI 兼容的 /audio/transcriptions），
+    实际指向哪个服务取决于 providers 表中 id=groq 的 base_url：
+    可能是 Groq 云端，也可能是自建网关（如本地 FunASR）。标签按真实目标
+    生成，避免界面上写「Groq（在线）」而实际连的是本地服务。
+    """
+    base_url = ""
+    try:
+        from app.services.provider import ProviderService
+
+        provider = ProviderService.get_provider_by_id("groq")
+        base_url = (provider or {}).get("base_url") or ""
+    except Exception:
+        base_url = ""
+
+    if "groq.com" in base_url:
+        groq_label = "Groq（云端）"
+    elif base_url:
+        groq_label = "自建端点（OpenAI 兼容）"
+    else:
+        groq_label = "OpenAI 兼容端点"
+
+    return [
+        {"value": "fast-whisper", "label": "Faster Whisper（本地）"},
+        {"value": "bcut", "label": "必剪（在线）"},
+        {"value": "kuaishou", "label": "快手（在线）"},
+        {"value": "groq", "label": groq_label},
+        {"value": "mlx-whisper", "label": "MLX Whisper（仅macOS）"},
+    ]
+
 
 WHISPER_MODEL_SIZES = ["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo"]
 
@@ -63,12 +192,17 @@ WHISPER_MODEL_SIZES = ["tiny", "base", "small", "medium", "large-v3", "large-v3-
 def get_transcriber_config():
     from app.transcriber.transcriber_provider import MLX_WHISPER_AVAILABLE
     from app.transcriber.whisper_models import get_registry, BUILTIN_WHISPER_MODELS
+    from app.services.provider import ProviderService
 
     registry = get_registry()
     config = transcriber_config_manager.get_config()
     return R.success(data={
         **config,
-        "available_types": AVAILABLE_TRANSCRIBER_TYPES,
+        "available_types": _build_transcriber_types(),
+        # 前端据此展示「当前实际连的是哪个端点 / 哪个模型」
+        "resolved_endpoint": (ProviderService.get_provider_by_id("groq") or {}).get("base_url", ""),
+        "resolved_model": transcriber_config_manager.get_config().get("groq_model", ""),
+        "has_asr_key": bool((ProviderService.get_provider_by_id("groq") or {}).get("api_key")),
         # 内置可见档位 + 用户自定义模型，供前端下拉
         "whisper_model_sizes": registry.visible_model_names(),
         "whisper_builtin_models": BUILTIN_WHISPER_MODELS,
@@ -77,11 +211,50 @@ def get_transcriber_config():
     })
 
 
+
+class AsrEndpointRequest(BaseModel):
+    """在线转写（groq 槽位）的端点配置，按常规在线服务的方式在界面直接改。"""
+    base_url: str
+    api_key: Optional[str] = None
+    model: Optional[str] = None
+
+
+@router.post("/update_asr_endpoint")
+def update_asr_endpoint(data: AsrEndpointRequest, admin: User = Depends(require_admin)):
+    from app.services.provider import ProviderService
+
+    base_url = (data.base_url or "").strip()
+    if not base_url.lower().startswith(("http://", "https://")):
+        return R.error(msg="端点地址必须以 http:// 或 https:// 开头")
+
+    payload = {"base_url": base_url}
+    # 只传新 key 才覆盖；前端若回传掩码值（含 *），ProviderService 会自行忽略
+    if data.api_key:
+        payload["api_key"] = data.api_key.strip()
+    ProviderService.update_provider("groq", payload)
+
+    current = transcriber_config_manager.get_config()
+    model = (data.model or "").strip()
+    transcriber_config_manager.update_config(
+        transcriber_type=current.get("transcriber_type", "groq"),
+        whisper_model_size=None,
+        groq_model=model or None,
+    )
+
+    provider = ProviderService.get_provider_by_id("groq") or {}
+    return R.success(
+        msg="转写端点已更新",
+        data={
+            "base_url": provider.get("base_url", ""),
+            "has_api_key": bool(provider.get("api_key")),
+            "model": transcriber_config_manager.get_config().get("groq_model", ""),
+        },
+    )
+
+
 class WhisperCustomModelRequest(BaseModel):
     name: str
     target: str  # HF repo_id（如 Systran/faster-whisper-large-v3）或本地模型目录路径
-
-
 @router.get("/whisper_models")
 def list_whisper_models():
     """列出内置 + 用户自定义的 whisper 模型映射。"""
@@ -91,7 +264,7 @@ def list_whisper_models():
 
 
 @router.post("/whisper_models")
-def add_whisper_model(data: WhisperCustomModelRequest):
+def add_whisper_model(data: WhisperCustomModelRequest, admin: User = Depends(require_admin)):
     """新增自定义 whisper 模型映射（名称 → HF repo_id 或本地路径）。"""
     from app.transcriber.whisper_models import get_registry
     try:
@@ -102,7 +275,7 @@ def add_whisper_model(data: WhisperCustomModelRequest):
 
 
 @router.delete("/whisper_models/{name}")
-def delete_whisper_model(name: str):
+def delete_whisper_model(name: str, admin: User = Depends(require_admin)):
     """删除自定义 whisper 模型映射（不会删除已下载的模型文件）。"""
     from app.transcriber.whisper_models import get_registry
     custom = get_registry().remove_custom_model(name)
@@ -110,7 +283,7 @@ def delete_whisper_model(name: str):
 
 
 @router.post("/transcriber_config")
-def update_transcriber_config(data: TranscriberConfigRequest):
+def update_transcriber_config(data: TranscriberConfigRequest, admin: User = Depends(require_admin)):
     config = transcriber_config_manager.update_config(
         transcriber_type=data.transcriber_type,
         whisper_model_size=data.whisper_model_size,
@@ -138,7 +311,7 @@ def get_proxy_config():
 
 
 @router.post("/proxy_config")
-def update_proxy_config(data: ProxyConfigRequest):
+def update_proxy_config(data: ProxyConfigRequest, admin: User = Depends(require_admin)):
     from app.services.proxy_config_manager import ProxyConfigManager
     mgr = ProxyConfigManager()
     cfg = mgr.update_config(enabled=data.enabled, url=data.url)
@@ -369,7 +542,7 @@ def _do_download_mlx_whisper(model_size: str):
 
 
 @router.post("/transcriber_download")
-def download_transcriber_model(data: ModelDownloadRequest, background_tasks: BackgroundTasks):
+def download_transcriber_model(data: ModelDownloadRequest, background_tasks: BackgroundTasks, admin: User = Depends(require_admin)):
     """触发后台下载指定的 whisper 模型（fast-whisper 支持内置档位 + 自定义模型）。"""
     if data.transcriber_type == "mlx-whisper":
         # mlx 只认内置档位（mlx-community 的固定映射）
@@ -393,7 +566,7 @@ def download_transcriber_model(data: ModelDownloadRequest, background_tasks: Bac
     return R.success(msg="模型下载已开始")
 
 
-@router.get("/sys_health")
+@public_router.get("/sys_health")
 async def sys_health():
     """结构化健康状态——任何子项异常都不应让整个 endpoint 5xx。
 
@@ -442,7 +615,7 @@ async def sys_health():
     })
 
 
-@router.get("/sys_check")
+@public_router.get("/sys_check")
 async def sys_check():
     """轻量存活判定：后端进程能响应这个 endpoint 就算「起来了」，不查外部依赖。
 

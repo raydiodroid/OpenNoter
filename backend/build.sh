@@ -10,7 +10,7 @@ echo "当前工作目录：$(pwd)"
 
 # 清理旧的构建
 echo "清理旧的构建..."
-rm -rf backend/dist backend/build ./BillNote_frontend/src-tauri/bin/*
+rm -rf backend/dist backend/build ./OpenNoter_frontend/src-tauri/bin/*
 echo "清理完成。"
 
 TARGET_TRIPLE=$(rustc -Vv | grep host | cut -f2 -d' ')
@@ -26,9 +26,9 @@ cp .env.example backend/.env
 echo "开始 PyInstaller 打包..."
 pyinstaller \
   -y \
-  --name BiliNoteBackend \
+  --name OpenNoterBackend \
   --paths backend \
-  --distpath ./BillNote_frontend/src-tauri/bin \
+  --distpath ./OpenNoter_frontend/src-tauri/bin \
   --workpath backend/build \
   --specpath backend \
   --hidden-import uvicorn \
@@ -47,12 +47,12 @@ rm backend/.env
 
 # 重命名主执行文件以包含目标平台信息
 mv \
- ./BillNote_frontend/src-tauri/bin/BiliNoteBackend/BiliNoteBackend\
- ./BillNote_frontend/src-tauri/bin/BiliNoteBackend/BiliNoteBackend-$TARGET_TRIPLE
+ ./OpenNoter_frontend/src-tauri/bin/OpenNoterBackend/OpenNoterBackend\
+ ./OpenNoter_frontend/src-tauri/bin/OpenNoterBackend/OpenNoterBackend-$TARGET_TRIPLE
 
 echo "PyInstaller 打包完成。"
 echo "打包后的目录内容："
-ls -l ./BillNote_frontend/src-tauri/bin/BiliNoteBackend
+ls -l ./OpenNoter_frontend/src-tauri/bin/OpenNoterBackend
 
-echo "请检查 src-tauri/bin/BiliNoteBackend 目录，确认其中包含了名为 .env 的【文件】。"
+echo "请检查 src-tauri/bin/OpenNoterBackend 目录，确认其中包含了名为 .env 的【文件】。"
 

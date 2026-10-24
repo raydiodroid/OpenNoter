@@ -31,7 +31,7 @@ COPY ./backend /tmp/backend
 
 # === 阶段2：构建 Frontend ===
 # Node 18-alpine 跑不动 Tailwind v4 / Vite 6（前者要求 Node 20+，后者推荐 Node 20+），
-# 升到 node:20-alpine。alpine 走 musl，pnpm 会按 lockfile 拉 *-linux-x64-musl native binary。
+# 升到 node:20-alpine。alpine 走 musl，npm 会按 package-lock.json 拉 *-linux-x64-musl native binary。
 ARG BASE_REGISTRY=docker.io
 FROM ${BASE_REGISTRY}/library/node:20-alpine AS frontend-builder
 
@@ -39,24 +39,18 @@ FROM ${BASE_REGISTRY}/library/node:20-alpine AS frontend-builder
 ARG VITE_APP_VERSION=
 ENV VITE_APP_VERSION=${VITE_APP_VERSION}
 
-# pnpm 版本 pin 到 9 系列：
-# - lockfile (BillNote_frontend/pnpm-lock.yaml) 是 lockfileVersion '9.0'，由 pnpm 9 生成
-# - pnpm 11+ 要求 Node 22+，与 node:20 不兼容（ERR_UNKNOWN_BUILTIN_MODULE）
-# - 不用 @latest 避免上游 pnpm 升级悄悄破坏 CI
-RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
-
 WORKDIR /tmp/frontend
 
-# 先复制 package.json + lockfile 利用依赖层缓存
-# --frozen-lockfile 保证 CI 与本地开发依赖版本一致，杜绝 semver 漂移引入的破坏性升级
-COPY ./BillNote_frontend/package.json ./BillNote_frontend/pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile
+# 先复制 package.json + package-lock.json 利用依赖层缓存
+# npm ci 严格按 package-lock.json 安装，保证 CI 与本地开发依赖版本一致，杜绝 semver 漂移引入的破坏性升级
+COPY ./OpenNoter_frontend/package.json ./OpenNoter_frontend/package-lock.json ./
+RUN npm ci --no-audit --no-fund
 
-COPY ./BillNote_frontend /tmp/frontend
+COPY ./OpenNoter_frontend /tmp/frontend
 
 # 设置环境变量，告诉 vite.config.ts 这是 Docker 构建
 ENV DOCKER_BUILD=1
-RUN pnpm run build
+RUN npm run build
 
 # === 阶段3：完整应用镜像 ===
 ARG BASE_REGISTRY=docker.io
@@ -110,7 +104,7 @@ nodaemon=true
 user=root
 logfile=/var/log/supervisor/supervisord.log
 pidfile=/var/run/supervisord.pid
-environment=BACKEND_PORT="8483",BACKEND_HOST="0.0.0.0",TRANSCRIBER_TYPE="fast-whisper",WHISPER_MODEL_SIZE="tiny",FFMPEG_BIN_PATH="",HF_ENDPOINT="https://hf-mirror.com",STATIC="/static",OUT_DIR="./static/screenshots",DATA_DIR="data",NOTE_OUTPUT_DIR="data/note_results",DATABASE_URL="sqlite:////app/backend/data/bili_note.db",IMAGE_BASE_URL="/static/screenshots",ENV="production",GROQ_TRANSCRIBER_MODEL="whisper-large-v3-turbo"
+environment=BACKEND_PORT="8483",BACKEND_HOST="0.0.0.0",TRANSCRIBER_TYPE="fast-whisper",WHISPER_MODEL_SIZE="tiny",FFMPEG_BIN_PATH="",HF_ENDPOINT="https://hf-mirror.com",STATIC="/static",OUT_DIR="./static/screenshots",DATA_DIR="data",NOTE_OUTPUT_DIR="data/note_results",DATABASE_URL="sqlite:////app/backend/data/open_noter.db",IMAGE_BASE_URL="/static/screenshots",ENV="production",GROQ_TRANSCRIBER_MODEL="whisper-large-v3-turbo"
 
 [program:nginx]
 command=nginx -g "daemon off;"
@@ -133,7 +127,7 @@ EOF
 
 # 启动 supervisor
 # 推荐启动方式（覆盖默认 env）：
-#   docker run -d --name bilinote --env-file .env -p 8080:80 bilinote-aio
+#   docker run -d --name opennoter --env-file .env -p 8080:80 opennoter-aio
 # 单个变量覆盖：
 #   docker run -d -e TRANSCRIBER_TYPE=groq -e WHISPER_MODEL_SIZE=base ...
 EXPOSE 80

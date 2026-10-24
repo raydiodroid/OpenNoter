@@ -7,11 +7,34 @@ import chromadb
 from chromadb.config import Settings
 
 from app.utils.logger import get_logger
+from app.utils.note_paths import UnsafeTaskId, note_file
 
 logger = get_logger(__name__)
 
 NOTE_OUTPUT_DIR = os.getenv("NOTE_OUTPUT_DIR", "note_results")
 VECTOR_DB_DIR = os.getenv("VECTOR_DB_DIR", "vector_db")
+
+
+def _build_embedding_function():
+    """通过 OpenAI 兼容端点做向量化（本地 TEI / 统一网关）。
+
+    未配置 EMBEDDING_API_BASE 时返回 None，沿用 chromadb 内置模型
+    （首次使用会下载 ONNX 权重，离线环境容易卡住）。
+    """
+    api_base = os.getenv("EMBEDDING_API_BASE", "").strip()
+    if not api_base:
+        return None
+    try:
+        from chromadb.utils import embedding_functions
+
+        return embedding_functions.OpenAIEmbeddingFunction(
+            api_key=os.getenv("EMBEDDING_API_KEY", "none"),
+            api_base=api_base,
+            model_name=os.getenv("EMBEDDING_MODEL", "Qwen3-Embedding-0.6B"),
+        )
+    except Exception as exc:
+        logger.warning(f"外部 embedding 初始化失败，回退内置模型: {exc}")
+        return None
 
 
 def _chunk_markdown(markdown: str) -> list[dict]:
@@ -110,26 +133,59 @@ class VectorStoreManager:
             path=VECTOR_DB_DIR,
             settings=Settings(anonymized_telemetry=False),
         )
+        self._embedding_fn = _build_embedding_function()
+        # 外部 embedding 与内置模型维度不同（如 1024 vs 384），
+        # 用后缀隔离索引，避免新旧 collection 混用导致查询维度冲突。
+        default_suffix = "_ext" if self._embedding_fn is not None else ""
+        self._suffix = os.getenv("VECTOR_COLLECTION_SUFFIX", default_suffix)
 
     def _collection_name(self, task_id: str) -> str:
-        """ChromaDB collection 名称：直接使用 task_id（UUID 格式合法）。"""
-        return task_id
+        """ChromaDB collection 名称：task_id + 可选后缀。"""
+        return f"{task_id}{self._suffix}" if self._suffix else task_id
 
-    def index_task(self, task_id: str) -> None:
-        """读取笔记结果并建立向量索引。"""
-        result_path = os.path.join(NOTE_OUTPUT_DIR, f"{task_id}.json")
+    def _create_collection(self, name: str):
+        kwargs = {"name": name, "metadata": {"hnsw:space": "cosine"}}
+        if self._embedding_fn is not None:
+            kwargs["embedding_function"] = self._embedding_fn
+        return self._client.create_collection(**kwargs)
+
+    def _get_collection(self, name: str):
+        if self._embedding_fn is not None:
+            return self._client.get_collection(name, embedding_function=self._embedding_fn)
+        return self._client.get_collection(name)
+
+    def index_task(self, task_id: str) -> bool:
+        """读取笔记结果并建立向量索引。
+
+        返回 **是否真的建好了索引**。历史实现返回 None，且「笔记文件不存在」
+        与「内容为空」都静默 return —— 调用方（`_do_index`）只能靠「没抛异常」
+        猜成功，于是把「什么都没索引」报成 `indexed`，用户进到问答界面后每问
+        都是空上下文。
+
+        task_id 走 `note_file()` 沙箱：越界值直接判失败，不读目录外文件。
+        """
+        try:
+            result_path = note_file(NOTE_OUTPUT_DIR, str(task_id), ".json")
+        except UnsafeTaskId:
+            logger.error(f"拒绝索引越界 task_id: {task_id!r}")
+            return False
+
         if not os.path.exists(result_path):
             logger.warning(f"笔记文件不存在，跳过索引: {result_path}")
-            return
+            return False
 
         with open(result_path, "r", encoding="utf-8") as f:
             note_data = json.load(f)
 
-        markdown = note_data.get("markdown", "")
-        transcript = note_data.get("transcript", {})
-        segments = transcript.get("segments", [])
+        # markdown 可能是 null/非字符串（历史数据、异常写入），统一降级成空串，
+        # 否则 _chunk_markdown 里的 re.split 会抛 TypeError。
+        markdown = note_data.get("markdown") or ""
+        if not isinstance(markdown, str):
+            markdown = ""
+        transcript = note_data.get("transcript") or {}
+        segments = transcript.get("segments") or []
 
-        audio_meta = note_data.get("audio_meta", {})
+        audio_meta = note_data.get("audio_meta") or {}
 
         meta_chunks = _build_meta_chunk(audio_meta)
         md_chunks = _chunk_markdown(markdown)
@@ -137,8 +193,8 @@ class VectorStoreManager:
         all_chunks = meta_chunks + md_chunks + tr_chunks
 
         if not all_chunks:
-            logger.warning(f"笔记内容为空，跳过索引: {task_id}")
-            return
+            logger.warning(f"笔记内容为空，无法建立索引: {task_id}")
+            return False
 
         col_name = self._collection_name(task_id)
 
@@ -148,10 +204,7 @@ class VectorStoreManager:
         except Exception:
             pass
 
-        collection = self._client.create_collection(
-            name=col_name,
-            metadata={"hnsw:space": "cosine"},
-        )
+        collection = self._create_collection(col_name)
 
         documents = [c["text"] for c in all_chunks]
         metadatas = [c["metadata"] for c in all_chunks]
@@ -159,6 +212,7 @@ class VectorStoreManager:
 
         collection.add(documents=documents, metadatas=metadatas, ids=ids)
         logger.info(f"向量索引完成: task_id={task_id}, chunks={len(all_chunks)}")
+        return True
 
     def _parse_results(self, results: dict) -> list[dict]:
         """将 ChromaDB query 结果转换为 chunk 列表。"""
@@ -180,7 +234,7 @@ class VectorStoreManager:
         """
         col_name = self._collection_name(task_id)
         try:
-            collection = self._client.get_collection(col_name)
+            collection = self._get_collection(col_name)
         except Exception:
             logger.warning(f"Collection 不存在: {col_name}")
             return []
@@ -213,14 +267,21 @@ class VectorStoreManager:
             pass
 
     def is_indexed(self, task_id: str) -> bool:
-        """检查指定任务是否已建立完整索引（含 meta 信息）。"""
+        """指定任务是否已建立可用索引。
+
+        ## 为什么不要求必须有 meta chunk（历史行为改掉了）
+
+        旧实现要求 collection 里存在 `source_type=meta` 的 chunk，否则判 False。
+        但 meta chunk 依赖 `audio_meta` 有内容（本地视频、旧数据、部分平台都可能
+        拿不到），于是这类笔记**永远** is_indexed=False —— 前端 `/chat/status`
+        每次拿到 idle 就重新触发一次全量索引，形成无意义的重建循环。
+
+        检索本身并不依赖 meta 存在（`query()` 按来源分别取，缺哪个就少哪一项），
+        所以判据改为「collection 存在且非空」。
+        """
         col_name = self._collection_name(task_id)
         try:
-            col = self._client.get_collection(col_name)
-            if col.count() == 0:
-                return False
-            # 检查是否包含 meta chunk，旧索引可能缺失
-            meta = col.get(where={"source_type": "meta"}, limit=1)
-            return len(meta["ids"]) > 0
+            col = self._get_collection(col_name)
+            return col.count() > 0
         except Exception:
             return False

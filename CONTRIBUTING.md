@@ -1,6 +1,6 @@
 # 贡献指南
 
-欢迎为 BiliNote 贡献代码。本文档约定分支管理、提交规范、合并流程。新贡献者请通读一遍后再开 PR。
+欢迎为 OpenNoter 贡献代码。本文档约定分支管理、提交规范、合并流程。新贡献者请通读一遍后再开 PR。
 
 > 关联文档
 > - [README.md](./README.md)：项目概览、快速开始
@@ -17,8 +17,8 @@
 | 路径 | 内容 | 主要命令 |
 |---|---|---|
 | `backend/` | Python 3.11 + FastAPI | `pip install -r requirements.txt && python main.py` |
-| `BillNote_frontend/` | React 19 + Vite | `pnpm install && pnpm dev` |
-| `BillNote_extension/` | Vue 3 + Vite + WebExtension MV3 | `pnpm install && pnpm dev` |
+| `OpenNoter_frontend/` | React 19 + Vite | `npm ci && npm run dev` |
+| `OpenNoter_extension/` | Vue 3 + Vite + WebExtension MV3 | `pnpm install && pnpm dev`（插件确实用 pnpm） |
 
 详细结构与开发命令见 [CLAUDE.md](./CLAUDE.md)。提交时**单 PR 不要跨多个工作区做无关改动**，便于评审与回滚。
 
@@ -59,8 +59,8 @@ hotfix/<scope>-<事项>
 
 `<scope>` 优先用代码 scope（与 commit message scope 对齐，见 §5），常用：
 
-- `extension` — 浏览器插件（`BillNote_extension/`）
-- `frontend` — Web 前端（`BillNote_frontend/`）
+- `extension` — 浏览器插件（`OpenNoter_extension/`）
+- `frontend` — Web 前端（`OpenNoter_frontend/`）
 - `backend` — Python 后端（`backend/`）
 - `bilibili` / `youtube` / `douyin` / `kuaishou` — 平台特定改动
 - `transcriber` — 音频转写
@@ -143,7 +143,7 @@ git push -u origin release/<版本号>
 # 3. 进入冻结期，PR base=master 合并；同时 PR base=develop 回灌
 # 4. master 上打 tag
 git checkout master && git pull
-git tag -a v<版本号> -m "BiliNote v<版本号>" && git push origin v<版本号>
+git tag -a v<版本号> -m "OpenNoter v<版本号>" && git push origin v<版本号>
 
 # 5. release 分支已合入两边，删除
 git push origin --delete release/<版本号>
@@ -237,7 +237,7 @@ chore(ci): 优化 docker 构建缓存
 
 - 合并前必须**先同步**目标分支最新代码（`git pull --rebase` 或在 PR 上点 "Update branch"）。
 - 合并前必须完成**自测**，确保核心流程可用。
-- 后端改动需 `python -m py_compile` 至少通过；前端 / 插件改动需 `pnpm typecheck && pnpm build` 通过。
+- 后端改动需 `python -m py_compile` 至少通过；前端改动需 `npm run build` 通过，插件改动需 `pnpm typecheck && pnpm build` 通过。
 - **冲突由分支负责人解决**，不得留给评审人或发版人员。
 
 ### 6.2 评审
@@ -262,7 +262,7 @@ chore(ci): 优化 docker 构建缓存
 
 ## 7. Git 钩子注意事项
 
-`BillNote_extension/` 早期使用 `simple-git-hooks` 的 `postinstall`，会在仓库根目录 `.git/hooks/pre-commit` 注入 `pnpm lint-staged`，但仓库根没有 `package.json`，导致**任何 commit 都被钩子卡死**。**已在 v2.1.0 起移除**该 postinstall 配置。
+`OpenNoter_extension/` 早期使用 `simple-git-hooks` 的 `postinstall`，会在仓库根目录 `.git/hooks/pre-commit` 注入 `pnpm lint-staged`，但仓库根没有 `package.json`，导致**任何 commit 都被钩子卡死**。**已在 v2.1.0 起移除**该 postinstall 配置。
 
 如果你机器上还残留旧版本装下来的 hook：
 

@@ -1,304 +1,480 @@
-import datetime
-import json
+"""抖音下载器：免登录解析（x-tt-argus）+ 字段修复 + 流式下载。
+
+这一版是对旧实现的整体重写。旧实现的几个致命问题（都是实测确认过的）：
+
+1. **解析走不通**：依赖 a_bogus + msToken + WebSign 三件套，但详情接口现在
+   只需要 `x-tt-argus: 1` 这个头（见 `douyin_api.py` 的模块注释）。旧代码在这里
+   403 / 0 字节，等于整个抖音链路是死的。
+2. **音频取错源**：旧代码下 `aweme_detail.music.play_url.uri`，那是 BGM/原声，
+   `is_use_music=True` 的作品拿到的是别人的配乐，转写内容完全错。现在改成
+   「下视频流，用 ffmpeg `-vn` 抽音轨」。
+3. **时长单位错**：`video.duration` 是毫秒，旧代码当秒用，11.1s 的视频记成
+   185 分 23 秒。
+4. **标题取错字段**：`item_title` 实测是空串，真实标题在 `desc`。
+5. **封面会 KeyError**：`cover_original_scale` 在图文/分享页里不存在，且旧代码的
+   else 分支访问顶层 `video` 键（顶层没有这个键）。
+6. **视频地址带水印**：旧代码用 `download_addr`（720x720 正方裁剪 + 重编码 + 水印），
+   现在优先 `play_addr`（无水印）。
+7. **下载层没有 timeout / 全量进内存 / 只取候选第一条**：现在流式写盘、
+   `timeout=(5, 30)`、候选地址逐个回退、有体积/时长上限。
+
+字段语义和网络请求都在 `douyin_api.py`，本文件只管「落盘 + 转码 + 组装结果」。
+
+关于 `need_video=True`：调用方（note.py）在需要截图/视频理解时会先调
+`download_video()` 再调 `download()`。这里不会重复下载视频，而是直接复用它
+（同一个 `{aweme_id}.mp4` 命名规则），既省带宽也避免出现两份不同步的文件。
+"""
+
+from __future__ import annotations
+
 import os
-import re
-from typing import Union, Optional
-from urllib.parse import quote, urlencode
+import subprocess
+from typing import Any, Dict, List, Optional
 
-import httpx
 import requests
-from pydantic import BaseModel
 
-from app.downloaders.base import Downloader
-from app.downloaders.douyin_helper.abogus import ABogus
+from app.downloaders.base import Downloader, audio_bitrate_kbps, sanitize_filename_component
+from app.downloaders.douyin_api import (
+    DESKTOP_USER_AGENT,
+    WEB_REFERER,
+    DouyinAPI,
+    DouyinMedia,
+)
+from app.downloaders.errors import (
+    DownloadError,
+    DurationLimitExceeded,
+    RetryableDownloadError,
+    SizeLimitExceeded,
+)
 from app.enmus.note_enums import DownloadQuality
 from app.models.audio_model import AudioDownloadResult
 from app.services.cookie_manager import CookieConfigManager
-from app.utils.path_helper import get_data_dir
-from dotenv import load_dotenv
+from app.utils.logger import get_logger
+from app.utils.url_parser import extract_video_id
 
-load_dotenv()
-DOUYIN_DOMAIN = "https://www.douyin.com"
+logger = get_logger(__name__)
 
-cfm=CookieConfigManager()
-def get_timestamp(unit: str = "milli"):
-    """
-    根据给定的单位获取当前时间 (Get the current time based on the given unit)
+# 流式写盘的块大小：1MB。抖音单个作品通常是 1–100MB，这个粒度既不会让内存
+# 峰值跳变，也不会频繁 syscall。
+CHUNK_SIZE = 1024 * 1024
 
-    Args:
-        unit (str): 时间单位，可以是 "milli"、"sec"、"min" 等
-            (The time unit, which can be "milli", "sec", "min", etc.)
+# ffmpeg 抽音轨的超时（秒）。一段 5 分钟的视频在普通机器上 10 秒内能转完，
+# 这里留足余量；卡死时要能失败而不是挂住任务队列。
+FFMPEG_TIMEOUT = 300
 
-    Returns:
-        int: 根据给定单位的当前时间 (The current time based on the given unit)
-    """
+# 下载时额外带的头。CDN（douyinvod.com）对 Referer 不严格，但带上更稳（实测
+# 不带也能 200，带上是为了减少被当成脚本流量的机会）。
+_DOWNLOAD_HEADERS = {
+    "User-Agent": DESKTOP_USER_AGENT,
+    "Referer": WEB_REFERER,
+    "Accept": "*/*",
+}
 
-    now = datetime.datetime.utcnow() - datetime.datetime(1970, 1, 1)
-    if unit == "milli":
-        return int(now.total_seconds() * 1000)
-    elif unit == "sec":
-        return int(now.total_seconds())
-    elif unit == "min":
-        return int(now.total_seconds() / 60)
-    else:
-        raise ValueError("Unsupported time unit")
-
-
-class DouyinConfig:
-    HEADERS = {
-        "Accept-Language": "zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.212 Safari/537.36",
-        "Referer": "https://www.douyin.com/",
-        "Cookie": None
-    }
-
-    PROXIES = {
-        "http": None,
-        "https": None,
-    }
-
-    MS_TOKEN = {
-        "url": "https://mssdk.bytedance.com/web/report",
-        "magic": 538969122,
-        "version": 1,
-        "dataType": 8,
-        "strData": "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",
-        "User-Agent": "5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36 Edg/117.0.2045.47"
-    }
-
-    TTWID = {
-        "url": "https://ttwid.bytedance.com/ttwid/union/register/",
-        "data": '{"region":"cn","aid":1768,"needFid":false,"service":"www.ixigua.com","migrate_info":{"ticket":"","source":"node"},"cbUrlProtocol":"https","union":true}'
-    }
-
-
-class BaseRequestModel(BaseModel):
-    device_platform: str = "webapp"
-    aid: str = "6383"
-    channel: str = "channel_pc_web"
-    pc_client_type: int = 1
-    version_code: str = "290100"
-    version_name: str = "29.1.0"
-    cookie_enabled: str = "true"
-    screen_width: int = 1920
-    screen_height: int = 1080
-    browser_language: str = "zh-CN"
-    browser_platform: str = "Win32"
-    browser_name: str = "Chrome"
-    browser_version: str = "130.0.0.0"
-    browser_online: str = "true"
-    engine_name: str = "Blink"
-    engine_version: str = "130.0.0.0"
-    os_name: str = "Windows"
-    os_version: str = "10"
-    cpu_core_num: int = 12
-    device_memory: int = 8
-    platform: str = "PC"
-    downlink: str = "10"
-    effective_type: str = "4g"
-    from_user_page: str = "1"
-    locate_query: str = "false"
-    need_time_list: str = "1"
-    pc_libra_divert: str = "Windows"
-    publish_video_strategy_type: str = "2"
-    round_trip_time: str = "0"
-    show_live_replay_strategy: str = "1"
-    time_list_query: str = "0"
-    whale_cut_token: str = ""
-    update_version_code: str = "170400"
-    msToken: str = None
+# ISO BMFF（mp4 / m4a / mov）box 的魔数特征：第 4–8 字节是 b"ftyp"。
+# 实测抖音 CDN 的真实响应头是 `\x00\x00\x00 ftypisom`。
+_ISO_BMFF_FTYP_OFFSET = 4
+_ISO_BMFF_FTYP = b"ftyp"
+# 判魔数需要读的字节数：box size(4) + "ftyp"(4) + 之后随便一点。
+_MAGIC_READ_BYTES = 64
 
 
 class DouyinDownloader(Downloader):
-    def __init__(self, cookie=None):
+    """抖音下载器。
+
+    :param cookie: 可选的抖音 Cookie（`name=value; ...`）。默认从
+        `CookieConfigManager` 现读（工厂每次任务新建实例，所以改配置后下个任务生效）。
+        没有 Cookie 也能工作：ttwid 由 `DouyinAPI` 自行引导。
+    :param api: 注入的 `DouyinAPI` 实例（测试用）。
+    :param http: 注入的网络实现（默认 `requests`）。下载 CDN 也用它，测试里
+        传假实现就能完全离线。
+    """
+
+    def __init__(
+        self,
+        cookie: Optional[str] = None,
+        *,
+        api: Optional[DouyinAPI] = None,
+        http: Any = None,
+    ):
         super().__init__()
-        self.headers_config = DouyinConfig.HEADERS.copy()
-        self.headers_config["Cookie"] = cfm.get('douyin')
-        print(self.headers_config)
-        self.proxies_config = DouyinConfig.PROXIES.copy()
-        self.ttwid_config = DouyinConfig.TTWID.copy()
-        self.ms_token_config = DouyinConfig.MS_TOKEN.copy()
+        self._http = http if http is not None else requests
+        self._cookie = cookie if cookie is not None else self._load_cookie()
+        self._api = api if api is not None else DouyinAPI(cookie=self._cookie, http=self._http)
+
+    # ------------------------------------------------------------------
+    # 对外接口
+    # ------------------------------------------------------------------
+    def download(
+        self,
+        video_url: str,
+        output_dir: str = None,
+        quality: DownloadQuality = "medium",
+        need_video: Optional[bool] = False,
+        skip_download: bool = False,
+    ) -> AudioDownloadResult:
+        """下载音频（或只取元信息）。
+
+        :param skip_download: 只取元信息、不写任何文件。note.py 在「已有字幕、
+            不需要截图」时走这条路径。
+        :param need_video: 调用方是否还需要视频文件。为 True 时复用
+            `download_video()` 已经下好的视频，不重复下载。
+        """
+        aweme_id = self._resolve_aweme_id(video_url)
+        media = self._api.fetch_media(aweme_id)
+
+        output_dir = self._resolve_output_dir(output_dir)
+
+        if skip_download:
+            # 只取元信息时不落任何媒体，体积/时长上限对它没有意义：
+            # 在这里因为「视频太大」直接失败，反而会让 note.py 回退到完整下载，
+            # 然后在下一次调用里才真的撞上限（多一次网络请求 + 一条误导性的告警）。
+            logger.info("抖音：仅提取元信息（skip_download=True，不写任何文件）")
+            return self._build_result(media, file_path=self._audio_path(output_dir, media.aweme_id))
+
+        self._assert_limits(media)
+
+        if media.is_image_post:
+            audio_path = self._prepare_image_post_audio(media, output_dir, quality)
+            return self._build_result(media, file_path=audio_path)
+
+        video_path = self._video_path(output_dir, media.aweme_id)
+        if self._is_usable_file(video_path):
+            # 音频始终从视频流抽（music.play_url 是 BGM，不是视频音轨），所以
+            # 视频文件是必要中间产物。note.py 在需要截图时会先调 download_video()，
+            # 那次已经下好了；这里命中就不再重复下载。
+            logger.info("抖音：复用已存在的视频文件 %s（need_video=%s）", video_path, bool(need_video))
+        else:
+            self._download_to_file(media.video_candidates, video_path, what="视频")
+
+        audio_path = self._extract_audio(video_path, self._audio_path(output_dir, media.aweme_id), quality)
+        return self._build_result(media, file_path=audio_path, video_path=None)
+
+    def download_video(self, video_url: str, output_dir: Optional[str] = None) -> str:
+        """下载视频（含水印判断与体积上限），返回本地路径。"""
+        aweme_id = self._resolve_aweme_id(video_url)
+        output_dir = self._resolve_output_dir(output_dir)
+
+        # 文件名只由 aweme_id 决定，所以「已经下过」可以在**发请求之前**就判掉。
+        # 注意这里不能只判存在：0 字节残文件必须重下。
+        cached_path = self._video_path(output_dir, aweme_id)
+        if self._is_usable_file(cached_path):
+            logger.info("抖音：视频已存在，跳过解析与下载 %s", cached_path)
+            return cached_path
+
+        media = self._api.fetch_media(aweme_id)
+        self._assert_limits(media)
+        video_path = self._video_path(output_dir, media.aweme_id)
+        if self._is_usable_file(video_path):
+            logger.info("抖音：视频已存在，跳过下载 %s", video_path)
+            return video_path
+
+        if media.is_image_post:
+            # 图文作品没有视频轨。扩展名保持 mp4 会让调用方（截图/视频理解）
+            # 拿到一个无法解码的文件，所以明确报错而不是给个坏路径。
+            raise DownloadError("该抖音作品是图文作品，没有可下载的视频文件")
+
+        self._download_to_file(media.video_candidates, video_path, what="视频")
+        return video_path
+
+    # ------------------------------------------------------------------
+    # 元信息 / 结果组装
+    # ------------------------------------------------------------------
+    def _build_result(
+        self,
+        media: DouyinMedia,
+        *,
+        file_path: str,
+        video_path: Optional[str] = None,
+    ) -> AudioDownloadResult:
+        raw_info: Dict[str, Any] = {
+            "tags": list(media.tags),
+            "description": media.desc,
+            "uploader": media.author,
+            "webpage_url": media.webpage_url,
+            "title": media.title,
+            "view_count": _stat(media.statistics, "play_count"),
+            "like_count": _stat(media.statistics, "digg_count"),
+            "comment_count": _stat(media.statistics, "comment_count"),
+            "is_image_post": media.is_image_post,
+            "cover_url": media.cover_url,
+        }
+        # note.py 的 `_raise_if_skipped_by_limit` 靠 raw_info 里的
+        # filesize / filesize_approx 区分「被上限跳过」和「网络中断」。抖音没有
+        # 走 yt-dlp，这个信息只能我们自己填（详情里的 data_size，字节）。
+        if media.estimated_size:
+            raw_info["filesize_approx"] = media.estimated_size
+            raw_info["filesize"] = media.estimated_size
+        return AudioDownloadResult(
+            file_path=file_path,
+            title=media.title,
+            duration=media.duration,
+            cover_url=media.cover_url,
+            platform="douyin",
+            video_id=media.aweme_id,
+            raw_info=raw_info,
+            video_path=video_path,
+        )
+
+    # ------------------------------------------------------------------
+    # 路径
+    # ------------------------------------------------------------------
+    # 命名规则只有这一处：download / download_video / 存在性检查三处共用，
+    # 否则「已存在就跳过」永远不命中（B 站那边就踩过这个坑）。
+    # 用 aweme_id 而不是标题：标题会变（作者改文案），用标题命名会让同一作品
+    # 反复下载，还会因为含 `#` / emoji 在不同文件系统上行为不一致。
+    # 参数是 aweme_id 而不是 DouyinMedia，这样「只凭 URL 拼路径」也能用——
+    # download_video 需要在发解析请求之前就检查缓存。
+    def _video_path(self, output_dir: str, aweme_id: str) -> str:
+        return os.path.join(output_dir, f"{self._stem(aweme_id)}.mp4")
+
+    def _audio_path(self, output_dir: str, aweme_id: str) -> str:
+        return os.path.join(output_dir, f"{self._stem(aweme_id)}.mp3")
+
+    def _image_post_source_path(self, output_dir: str, aweme_id: str) -> str:
+        """图文作品的音频源文件（M4A）。"""
+        return os.path.join(output_dir, f"{self._stem(aweme_id)}.m4a")
 
     @staticmethod
-    def find_url(string: str) -> list:
-        url = re.findall('http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', string)
-        return url
+    def _stem(aweme_id: str) -> str:
+        return sanitize_filename_component(aweme_id, fallback="douyin")
 
-    def extract_video_id(self, url: str) -> str:
-        video_url = self.find_url(url)
+    @staticmethod
+    def _is_usable_file(path: str) -> bool:
+        """存在且非空才算可用（下载中断会留下 0 字节残文件）。"""
+        try:
+            return os.path.isfile(path) and os.path.getsize(path) > 0
+        except OSError:
+            return False
 
-        if len(video_url):
-            video_url = video_url[0]
+    # ------------------------------------------------------------------
+    # 下载
+    # ------------------------------------------------------------------
+    def _download_to_file(self, candidates: List[str], target_path: str, *, what: str) -> str:
+        """按候选顺序流式下载到 `target_path`，失败自动换下一个候选。
+
+        先把数据写到 `.part` 再原子改名：中途失败不会留下一个「看起来已下载完成」
+        的半截文件（否则下次进来会命中存在性检查直接返回坏文件）。
+        """
+        if not candidates:
+            raise DownloadError(f"抖音作品没有可用的{what}地址")
+
+        errors: List[str] = []
+        for index, url in enumerate(candidates):
             try:
-                response = requests.head(video_url, allow_redirects=True)
-                url = response.url
-            except Exception as e:
-                return ""
-        patterns = [
-            r'video/(\d+)',
-            r'aweme_id=(\d+)',
+                self._stream_download(url, target_path)
+            except SizeLimitExceeded:
+                raise
+            except (RetryableDownloadError, DownloadError) as exc:
+                errors.append(f"候选 {index + 1}/{len(candidates)}: {exc}")
+                logger.warning("抖音%s下载失败，换下一个候选：%s", what, exc)
+                continue
+            logger.info("抖音%s下载完成：%s", what, target_path)
+            return target_path
+
+        raise RetryableDownloadError(
+            f"抖音{what}下载失败（{len(candidates)} 个候选地址都不行）：{'; '.join(errors[:3])}"
+        )
+
+    def _stream_download(self, url: str, target_path: str) -> None:
+        """单个 URL 的流式下载：边下边写，超限立刻中止。"""
+        part_path = f"{target_path}.part"
+        limit = self.limits.max_size_bytes
+
+        try:
+            response = self._http.get(
+                url,
+                headers=_DOWNLOAD_HEADERS,
+                timeout=self._api.timeout,
+                stream=True,
+                allow_redirects=True,
+            )
+        except requests.RequestException as exc:
+            raise RetryableDownloadError(f"网络异常 {exc.__class__.__name__}") from exc
+
+        try:
+            status = getattr(response, "status_code", 0)
+            if status != 200:
+                raise RetryableDownloadError(f"HTTP {status}")
+
+            declared_size = _content_length(response)
+            if limit and declared_size and declared_size > limit:
+                raise SizeLimitExceeded(
+                    f"抖音媒体体积 {declared_size / 1024 / 1024:.1f}MB 超过上限 "
+                    f"{limit / 1024 / 1024:.0f}MB"
+                )
+
+            written = 0
+            head = b""
+            with open(part_path, "wb") as handle:
+                for chunk in response.iter_content(CHUNK_SIZE):
+                    if not chunk:
+                        continue
+                    written += len(chunk)
+                    # Content-Length 可能缺失（分块传输），所以边写边核对。
+                    if limit and written > limit:
+                        raise SizeLimitExceeded(
+                            f"抖音媒体体积超过上限 {limit / 1024 / 1024:.0f}MB"
+                        )
+                    # 只有第一块需要留样做魔数校验。CDN 在权限/风控问题上有时候
+                    # 会回 200 + 一小段 HTML/JSON（而不是 0 字节），那东西一旦
+                    # 落盘，下一轮存在性检查会认为「已经下载好了」。
+                    if len(head) < _MAGIC_READ_BYTES:
+                        head += chunk[: _MAGIC_READ_BYTES - len(head)]
+                    handle.write(chunk)
+
+            if written == 0:
+                # CDN 也会用「200 + 0 字节」表达权限/风控问题，和详情接口一样
+                # 当成可重试信号，换下一个候选。
+                raise RetryableDownloadError("CDN 返回空响应（200 + 0 字节）")
+
+            if not _looks_like_media(head):
+                raise RetryableDownloadError("CDN 返回的不是媒体文件（疑似风控页面）")
+
+            os.replace(part_path, target_path)
+        except SizeLimitExceeded:
+            _safe_remove(part_path)
+            raise
+        except BaseException:
+            _safe_remove(part_path)
+            raise
+        finally:
+            close = getattr(response, "close", None)
+            if callable(close):
+                close()
+
+    # ------------------------------------------------------------------
+    # 图文作品的音频
+    # ------------------------------------------------------------------
+    def _prepare_image_post_audio(self, media: DouyinMedia, output_dir: str, quality) -> str:
+        """图文作品：下载它的音频文件（不是 BGM，就是这条作品自己的声音）。
+
+        实测图文作品的 `video.play_addr` 指向一个 M4A（与 `music.play_url.uri`
+        逐字节相同），没有视频轨。ffmpeg 照常能 `-vn` 抽出 mp3，所以复用同一条
+        转码路径，只是输入扩展名不同。
+        """
+        source_path = self._image_post_source_path(output_dir, media.aweme_id)
+        if not self._is_usable_file(source_path):
+            self._download_to_file(media.audio_candidates, source_path, what="音频")
+
+        audio_path = self._audio_path(output_dir, media.aweme_id)
+        return self._extract_audio(source_path, audio_path, quality)
+
+    # ------------------------------------------------------------------
+    # ffmpeg 抽音轨
+    # ------------------------------------------------------------------
+    def _extract_audio(self, video_path: str, audio_path: str, quality) -> str:
+        """用 ffmpeg 从视频/音频容器里抽音轨。
+
+        参数与 `base.ydl_audio_postprocessor_args` 的语义保持一致（单声道 + 目标
+        码率），但这里必须手写：抖音没有 yt-dlp 这条路径。单声道是因为 whisper
+        只吃单声道，立体声纯属浪费一半带宽。
+        """
+        bitrate = audio_bitrate_kbps(quality)
+        command = [
+            "ffmpeg",
+            "-y",
+            "-i", video_path,
+            "-vn",                     # 丢弃视频轨
+            "-acodec", "libmp3lame",
+            "-ac", "1",                # 单声道，与 base.AUDIO_CHANNELS 一致
+            "-b:a", f"{bitrate}k",
+            audio_path,
         ]
-        for pattern in patterns:
-            match = re.search(pattern, url)
-            if match:
-                return match.group(1)
-        return ""
-
-    def gen_real_msToken(self) -> str:
+        logger.info("抖音：ffmpeg 抽取音轨 -> %s（%dkbps 单声道）", audio_path, bitrate)
         try:
-            payload = json.dumps(
-                {
-                    "magic": self.ms_token_config["magic"],
-                    "version": self.ms_token_config["version"],
-                    "dataType": self.ms_token_config["dataType"],
-                    "strData": self.ms_token_config["strData"],
-                    "tspFromClient": get_timestamp(),
-                }
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                timeout=FFMPEG_TIMEOUT,
+                check=False,
             )
-            headers = {
-                "User-Agent": self.headers_config["User-Agent"],
-                "Content-Type": "application/json",
-            }
-            transport = httpx.HTTPTransport(retries=5)
-            with httpx.Client(transport=transport) as client:
-                try:
-                    response = client.post(
-                        self.ms_token_config["url"], content=payload, headers=headers
-                    )
-                    response.raise_for_status()
+        except FileNotFoundError as exc:
+            raise DownloadError("未找到 ffmpeg，无法从抖音视频中抽取音频") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise RetryableDownloadError("ffmpeg 抽取音轨超时") from exc
 
-                    msToken = str(httpx.Cookies(response.cookies).get("msToken"))
-                    if len(msToken) not in [120, 128]:
-                        raise ValueError("响应内容：{0}， Douyin msToken API 的响应内容不符合要求。".format(msToken))
+        if result.returncode != 0 or not self._is_usable_file(audio_path):
+            stderr = (result.stderr or b"").decode("utf-8", errors="ignore")[-400:]
+            raise DownloadError(f"ffmpeg 抽取音轨失败：{stderr or '输出文件为空'}")
+        return audio_path
 
-                    return msToken
-                except Exception as e:
-                    raise ValueError("Douyin msToken API 请求失败：{0}".format(e))
-        except Exception as e:
-            raise ValueError("Douyin msToken API{0}".format(e))
-
-    def fetch_video_info(self, video_url: str) -> json:
-        try:
-
-            aweme_id = self.extract_video_id(video_url)
-            kwargs = self.headers_config
-            print("@kwargs:", kwargs)
-            base_params = BaseRequestModel().model_dump()
-            base_params["msToken"] = self.gen_real_msToken()
-
-            base_params["aweme_id"] = aweme_id
-            bogus = ABogus()
-            ab_value = bogus.get_value(base_params)
-            a_bogus = quote(ab_value, safe='')
-            print("@a_bogus:", a_bogus)
-            print(base_params)
-            query_str = urlencode(base_params)
-            full_url = f"{DOUYIN_DOMAIN}/aweme/v1/web/aweme/detail/?{query_str}&a_bogus={a_bogus}"
-
-            print("Request URL:", full_url)
-
-
-            response = requests.get(full_url, headers=kwargs)
-
-            print("Response JSON:", response.content)
-            return response.json()
-        except Exception as e:
-            print("请求失败:", e)
-            raise ValueError("请求失败:", e)
-        # print(kwargs)
-
-    def download(
-            self,
-            video_url: str,
-            output_dir: Union[str, None] = None,
-            quality: DownloadQuality = "fast",
-            need_video: Optional[bool] = False
-    ) -> AudioDownloadResult:
-        try:
-            print(
-                f"正在下载视频: {video_url}，保存路径: {output_dir}，质量: {quality}"
+    # ------------------------------------------------------------------
+    # 限制 / 工具
+    # ------------------------------------------------------------------
+    def _assert_limits(self, media: DouyinMedia) -> None:
+        """下载前先拒绝超限作品（解析阶段就能拿到时长和体积估算）。"""
+        limits = self.limits
+        if limits.duration_exceeds(media.duration):
+            raise DurationLimitExceeded(
+                f"抖音视频时长 {media.duration:.0f} 秒超过上限 {limits.max_duration_seconds} 秒"
             )
-            if output_dir is None:
-                output_dir = get_data_dir()
-            if not output_dir:
-                output_dir = self.cache_data
-            os.makedirs(output_dir, exist_ok=True)
-
-            output_path = os.path.join(output_dir, "%(id)s.%(ext)s")
-
-            video_data = self.fetch_video_info(video_url)
-            output_path = output_path % {
-                "id": video_data['aweme_detail']['aweme_id'],
-                "ext": "mp3",
-            }
-            url = video_data['aweme_detail']['music']['play_url']['uri']
-            # 下载音频
-            audio_data = requests.get(url)
-            with open(output_path, 'wb') as f:
-                f.write(audio_data.content)
-            print(url)
-            tags = []
-            for tag in video_data['aweme_detail']['video_tag']:
-                if tag['tag_name']:
-                    tags.append(tag['tag_name'])
-
-            return AudioDownloadResult(
-                file_path=output_path,
-                title=video_data['aweme_detail']['item_title'],
-                duration=video_data['aweme_detail']['video']['duration'],
-                cover_url=video_data['aweme_detail']['video']['cover_original_scale']['url_list'][0] if
-                video_data['aweme_detail']['video']['cover'] else video_data['video']['big_thumbs']['img_url'],
-                platform="douyin",
-                video_id=video_data['aweme_detail']['aweme_id'],
-                raw_info={
-                    'tags': video_data['aweme_detail']['caption'] + ''.join(tags),
-                },
-                video_path=None  # ❗音频下载不包含视频路径
+        if limits.size_exceeds(media.estimated_size):
+            raise SizeLimitExceeded(
+                f"抖音视频体积约 {(media.estimated_size or 0) / 1024 / 1024:.1f}MB "
+                f"超过上限 {limits.max_size_mb}MB"
             )
-        except Exception as e:
-            raise e
 
-    def download_video(self, video_url: str, output_dir: Union[str, None] = None) -> str:
+    def _resolve_aweme_id(self, video_url: str) -> str:
+        aweme_id = extract_video_id(video_url, "douyin")
+        if not aweme_id:
+            raise DownloadError(f"无法从链接中解析抖音作品 ID：{video_url}")
+        return aweme_id
 
+    @staticmethod
+    def _load_cookie() -> Optional[str]:
+        """现读 Cookie；读不到不报错（抖音免登录可用）。"""
         try:
+            return CookieConfigManager().get("douyin")
+        except Exception as exc:  # noqa: BLE001 - Cookie 读失败不该让下载失败
+            logger.warning("读取抖音 Cookie 失败，将使用匿名身份：%s", exc.__class__.__name__)
+            return None
 
-            if output_dir is None:
-                output_dir = get_data_dir()
-            if not output_dir:
-                output_dir = self.cache_data
-            os.makedirs(output_dir, exist_ok=True)
-
-            video_id = self.extract_video_id(video_url)
-            video_path = os.path.join(output_dir, f"{video_id}.mp4")
-            if os.path.exists(video_path):
-                return video_path
+    # 说明：这里没有单独的代理解析逻辑。requests 默认 trust_env=True，会读
+    # HTTP_PROXY / HTTPS_PROXY / ALL_PROXY；UI 里配置的代理由 config 路由在保存时
+    # 调 `ProxyConfigManager.apply_to_env()` 同步到环境变量，所以这条路已经通了。
 
 
-            output_path = os.path.join(output_dir, "%(id)s.%(ext)s")
-
-            video_data = self.fetch_video_info(video_url)
-            output_path = output_path % {
-                "id": video_data['aweme_detail']['aweme_id'],
-                "ext": "mp4",
-            }
-
-            url=video_data['aweme_detail']['video']['download_addr']['url_list'][0]
-            _data = requests.get(url,allow_redirects=True,headers=self.headers_config)
-
-            with open(output_path, 'wb') as f:
-                f.write(_data.content)
-
-            return output_path
-        except Exception as e:
-            print("请求失败:", e)
-            raise ValueError("请求失败:", e)
+def _stat(statistics: Dict[str, Any], key: str) -> Optional[int]:
+    """取统计数据（详情接口和分享页给的字段不一致，缺就返回 None）。"""
+    if not isinstance(statistics, dict):
+        return None
+    value = statistics.get(key)
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
+def _content_length(response: Any) -> Optional[int]:
+    headers = getattr(response, "headers", None) or {}
+    raw = headers.get("Content-Length") or headers.get("content-length")
+    if raw is None:
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
 
-if __name__ == '__main__':
-    dy = DouyinDownloader(
-        cookie='')
 
-    dy.download(
-        '7.43 11/16 gba:/ j@P.xS 以“马成钢”的视角打开《抓娃娃》笼中鸟，何时飞 # 独白 # 人物故事  https://v.douyin.com/0pcFVdG_lx4/ 复制此链接，打开Dou音搜索，直接观看视频！'
-    )
+def _looks_like_media(head: bytes) -> bool:
+    """判断响应开头的字节像不像媒体容器。
+
+    抖音 CDN 的真实响应是 ISO BMFF（mp4 / m4a），特征是第 4–8 字节为 `ftyp`。
+    这里只做「不像就拒绝」的粗筛：一是防止把风控 HTML/JSON 落盘成 .mp4
+    （那会让下一轮的存在性检查误判为已下载），二是比解析 Content-Type 更可靠
+    —— 实测 CDN 有时干脆不给 Content-Type。
+    """
+    if len(head) < _ISO_BMFF_FTYP_OFFSET + len(_ISO_BMFF_FTYP):
+        return False
+    return head[_ISO_BMFF_FTYP_OFFSET : _ISO_BMFF_FTYP_OFFSET + len(_ISO_BMFF_FTYP)] == _ISO_BMFF_FTYP
+
+
+def _safe_remove(path: str) -> None:
+    try:
+        if os.path.exists(path):
+            os.remove(path)
+    except OSError:
+        logger.debug("清理临时文件失败：%s", path)

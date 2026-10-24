@@ -180,8 +180,7 @@ class ModelService:
     @staticmethod
     def delete_model_by_id( model_id: int) -> bool:
         try:
-            delete_model(model_id)
-            return True
+            return delete_model(model_id)
         except Exception as e:
             print(f"[{model_id}] <UNK>: {e}")
             return False

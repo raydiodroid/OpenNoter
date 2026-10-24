@@ -8,6 +8,7 @@ import os
 from typing import Optional
 
 from app.utils.logger import get_logger
+from app.utils.note_paths import UnsafeTaskId, note_file
 
 logger = get_logger(__name__)
 
@@ -15,8 +16,18 @@ NOTE_OUTPUT_DIR = os.getenv("NOTE_OUTPUT_DIR", "note_results")
 
 
 def _load_note_data(task_id: str) -> Optional[dict]:
-    path = os.path.join(NOTE_OUTPUT_DIR, f"{task_id}.json")
-    if not os.path.exists(path):
+    """读 `{NOTE_OUTPUT_DIR}/{task_id}.json`。
+
+    task_id 来自 `/chat/ask` 的请求体，必须过沙箱：否则 `../xxx` 会让 LLM
+    通过 `get_note_content` 把 NOTE_OUTPUT_DIR 之外的任意 note 形 JSON
+    （其他实例的数据、备份盘里的笔记）原样读出来并复述给调用方。
+    """
+    try:
+        path = note_file(NOTE_OUTPUT_DIR, str(task_id), ".json")
+    except UnsafeTaskId:
+        logger.warning(f"拒绝读取越界笔记文件: task_id={task_id!r}")
+        return None
+    if not path.exists():
         return None
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
@@ -85,19 +96,42 @@ TOOLS = [
 # ── 工具执行 ──────────────────────────────────────────────────
 
 def execute_tool(task_id: str, tool_name: str, arguments: dict) -> str:
-    """执行工具调用，返回结果字符串。"""
+    """执行工具调用，返回结果字符串。
+
+    ## 为什么整体 try/except
+
+    LLM 的 `arguments` 是**模型生成的 JSON**，形状不可信：
+      - `arguments` 字面 `null` 时 `json.loads` 得 `None`
+      - `{"keyword": null}` 这类「key 存在但值为 null」很常见（schema 未禁 null）
+      - 真实数据里 `raw_info.description` 也可能是 None（yt-dlp 输出）
+
+    历史实现在这些情况下抛 `AttributeError` / `TypeError`，一路冒泡到
+    `/chat/ask` 变成 500「问答失败: 'NoneType' object has no attribute 'strip'」，
+    用户看到天书，而且整轮工具调用被浪费。这里统一降级成结构化错误，让模型
+    看到「参数无效」后自行重试。
+    """
+    if not isinstance(arguments, dict):
+        arguments = {}
+
     data = _load_note_data(task_id)
     if not data:
         return json.dumps({"error": "笔记数据不存在"}, ensure_ascii=False)
 
-    if tool_name == "lookup_transcript":
-        return _lookup_transcript(data, arguments)
-    elif tool_name == "get_video_info":
-        return _get_video_info(data)
-    elif tool_name == "get_note_content":
-        return _get_note_content(data)
-    else:
-        return json.dumps({"error": f"未知工具: {tool_name}"}, ensure_ascii=False)
+    try:
+        if tool_name == "lookup_transcript":
+            return _lookup_transcript(data, arguments)
+        elif tool_name == "get_video_info":
+            return _get_video_info(data)
+        elif tool_name == "get_note_content":
+            return _get_note_content(data)
+        else:
+            return json.dumps({"error": f"未知工具: {tool_name}"}, ensure_ascii=False)
+    except Exception as exc:  # noqa: BLE001 - 工具失败不该拖垮整条问答
+        logger.warning(f"工具执行失败 ({tool_name}, args={arguments}): {exc}")
+        return json.dumps(
+            {"error": f"工具 {tool_name} 执行失败，请调整参数后重试", "detail": str(exc)[:200]},
+            ensure_ascii=False,
+        )
 
 
 def _lookup_transcript(data: dict, args: dict) -> str:
@@ -108,7 +142,8 @@ def _lookup_transcript(data: dict, args: dict) -> str:
     position = args.get("position")
     start_time = args.get("start_time")
     end_time = args.get("end_time")
-    keyword = args.get("keyword", "").strip()
+    # 用 `or ""` 而不是 get 的默认值：`{"keyword": null}` 时 get 返回 None 不是 ""
+    keyword = (args.get("keyword") or "").strip()
 
     # 快捷位置
     if position == "start":
@@ -152,18 +187,23 @@ def _lookup_transcript(data: dict, args: dict) -> str:
 
 
 def _get_video_info(data: dict) -> str:
-    am = data.get("audio_meta", {})
+    am = data.get("audio_meta", {}) or {}
     raw = am.get("raw_info", {}) or {}
 
+    # 真实 yt-dlp 输出里 uploader/description/tags/webpage_url 经常是 None，
+    # 而 `bilibili_downloader._sanitize_raw_info()` 明确保留 None 值，
+    # 所以这里不能用 `raw.get(k, "")` 的默认值兜底 —— key 存在时它返回 None。
+    description = raw.get("description") or ""
+    tags = raw.get("tags")
     info = {
-        "title": am.get("title") or raw.get("title", ""),
-        "uploader": raw.get("uploader", ""),
-        "description": raw.get("description", "")[:1000],
-        "tags": raw.get("tags", [])[:20] if isinstance(raw.get("tags"), list) else [],
-        "duration_seconds": am.get("duration", 0),
-        "platform": am.get("platform", ""),
-        "video_id": am.get("video_id", ""),
-        "url": raw.get("webpage_url", ""),
+        "title": am.get("title") or raw.get("title") or "",
+        "uploader": raw.get("uploader") or "",
+        "description": str(description)[:1000],
+        "tags": tags[:20] if isinstance(tags, list) else [],
+        "duration_seconds": am.get("duration") or 0,
+        "platform": am.get("platform") or "",
+        "video_id": am.get("video_id") or "",
+        "url": raw.get("webpage_url") or "",
         "view_count": raw.get("view_count"),
         "like_count": raw.get("like_count"),
         "comment_count": raw.get("comment_count"),

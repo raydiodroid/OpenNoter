@@ -29,8 +29,8 @@ body:
       multiple: true
       options:
         - 后端 (backend/)
-        - Web 前端 (BillNote_frontend/)
-        - 浏览器插件 (BillNote_extension/)
+        - Web 前端 (OpenNoter_frontend/)
+        - 浏览器插件 (OpenNoter_extension/)
         - Tauri 桌面端
         - 不确定
   - type: textarea

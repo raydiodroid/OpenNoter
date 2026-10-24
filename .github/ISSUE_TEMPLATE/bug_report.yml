@@ -15,8 +15,8 @@ body:
       multiple: true
       options:
         - 后端 (backend/)
-        - Web 前端 (BillNote_frontend/)
-        - 浏览器插件 (BillNote_extension/)
+        - Web 前端 (OpenNoter_frontend/)
+        - 浏览器插件 (OpenNoter_extension/)
         - Tauri 桌面端
         - 文档 / 其他
     validations:
@@ -25,7 +25,7 @@ body:
     id: version
     attributes:
       label: 版本
-      description: BiliNote 版本号（README 顶部，例如 v2.1.0）
+      description: OpenNoter 版本号（README 顶部，例如 v2.1.0）
       placeholder: v2.1.0
     validations:
       required: true

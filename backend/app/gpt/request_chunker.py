@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import os
 from typing import Callable, List, Optional
 
 
@@ -9,10 +10,20 @@ class ChunkPayload:
 
 
 class RequestChunker:
-    def __init__(self, message_builder: Callable, max_bytes: int, size_estimator: Optional[Callable] = None):
+    def __init__(
+        self,
+        message_builder: Callable,
+        max_bytes: int,
+        size_estimator: Optional[Callable] = None,
+        max_images_per_chunk: Optional[int] = None,
+    ):
         self.message_builder = message_builder
         self.max_bytes = max_bytes
         self.size_estimator = size_estimator
+        configured_limit = max_images_per_chunk
+        if configured_limit is None:
+            configured_limit = int(os.getenv("OPENAI_MAX_IMAGES_PER_REQUEST", "1"))
+        self.max_images_per_chunk = max(1, int(configured_limit))
 
     def estimate(self, messages) -> int:
         if self.size_estimator:
@@ -29,16 +40,87 @@ class RequestChunker:
             return segment.get("text", "")
         return getattr(segment, "text", "")
 
-    def _make_segment(self, segment, text: str):
+    def _make_segment(self, segment, text: str, start=None, end=None):
         if isinstance(segment, dict):
             new_seg = dict(segment)
             new_seg["text"] = text
+            if start is not None:
+                new_seg["start"] = start
+            if end is not None:
+                new_seg["end"] = end
             return new_seg
         if hasattr(segment, "__dict__"):
             data = dict(segment.__dict__)
             data["text"] = text
+            if start is not None:
+                data["start"] = start
+            if end is not None:
+                data["end"] = end
             return type(segment)(**data)
-        return type(segment)(segment.start, segment.end, text)
+        seg_start = segment.start if start is None else start
+        seg_end = segment.end if end is None else end
+        return type(segment)(seg_start, seg_end, text)
+
+    @staticmethod
+    def _segment_field(segment, name: str, default=0.0):
+        if isinstance(segment, dict):
+            return segment.get(name, default)
+        return getattr(segment, name, default)
+
+    def _redistribute_segments(self, chunks, target_count: int, sample_image, **kwargs):
+        """把已有正文重新分配到 target_count 个 chunk，保证每个图片 chunk 都带文本。
+
+        原实现在 max_images_per_chunk 触顶后会新建 segments 为空的 chunk，
+        模型只能看到图片、看不到转写正文，从而凭空编造内容。
+        """
+        segments = [seg for chunk in chunks for seg in chunk.segments]
+        if not segments:
+            return [ChunkPayload(segments=[], image_urls=[]) for _ in range(target_count)]
+
+        # 完整正文 + 单张图仍能装进一次请求时，让每个 chunk 都携带完整正文，
+        # 模型因此始终拥有全局上下文；否则按时间比例切片，避免请求体积失控。
+        if self._messages_size(segments, [sample_image], **kwargs) <= self.max_bytes:
+            return [ChunkPayload(segments=list(segments), image_urls=[]) for _ in range(target_count)]
+
+        full_text = "".join(self._get_text(seg) for seg in segments)
+        if not full_text:
+            return [ChunkPayload(segments=[], image_urls=[]) for _ in range(target_count)]
+
+        template = segments[0]
+        span_start = self._segment_field(segments[0], "start")
+        span_end = self._segment_field(segments[-1], "end")
+        span = max(float(span_end) - float(span_start), 0.0)
+        total_chars = len(full_text)
+
+        result = []
+        for idx in range(target_count):
+            char_start = total_chars * idx // target_count
+            char_end = total_chars * (idx + 1) // target_count
+            piece = full_text[char_start:char_end]
+            if not piece:
+                result.append(ChunkPayload(segments=[], image_urls=[]))
+                continue
+            seg_start = float(span_start) + span * idx / target_count
+            seg_end = float(span_start) + span * (idx + 1) / target_count
+            result.append(
+                ChunkPayload(
+                    segments=[self._make_segment(template, piece, start=seg_start, end=seg_end)],
+                    image_urls=[],
+                )
+            )
+        return result
+
+    def _carry_segments(self, chunks, image, **kwargs):
+        """兜底：为新建的图片 chunk 选择正文，优先复用最近的完整正文。"""
+        for chunk in reversed(chunks):
+            if not chunk.segments:
+                continue
+            if self._messages_size(chunk.segments, [image], **kwargs) <= self.max_bytes:
+                return list(chunk.segments)
+            full_text = "".join(self._get_text(seg) for seg in chunk.segments)
+            if full_text:
+                return [self._make_segment(chunk.segments[0], full_text[: max(1, len(full_text) // 4)])]
+        return []
 
     def _split_segment_to_fit(self, segment, **kwargs):
         text = self._get_text(segment)
@@ -102,7 +184,10 @@ class RequestChunker:
                 appended = False
                 for chunk in chunks[-1:]:
                     candidate_images = chunk.image_urls + [image]
-                    if self._messages_size(chunk.segments, candidate_images, **kwargs) <= self.max_bytes:
+                    if (
+                        len(candidate_images) <= self.max_images_per_chunk
+                        and self._messages_size(chunk.segments, candidate_images, **kwargs) <= self.max_bytes
+                    ):
                         chunk.image_urls = candidate_images
                         appended = True
                         break
@@ -117,6 +202,14 @@ class RequestChunker:
 
         chunk_count = len(chunks)
         total_images = len(image_urls)
+
+        # 图片所需 chunk 数超过现有数量时，先把正文重新铺开，
+        # 否则容量触顶后每张图都会落到一个没有任何转写文本的新 chunk 上。
+        needed_chunks = (total_images + self.max_images_per_chunk - 1) // self.max_images_per_chunk
+        if needed_chunks > chunk_count:
+            chunks = self._redistribute_segments(chunks, needed_chunks, image_urls[0], **kwargs)
+            chunk_count = len(chunks)
+
         for idx, image in enumerate(image_urls):
             preferred_idx = min(chunk_count - 1, (idx * chunk_count) // total_images)
             placed = False
@@ -124,7 +217,10 @@ class RequestChunker:
             for chunk_idx in range(preferred_idx, len(chunks)):
                 chunk = chunks[chunk_idx]
                 candidate_images = chunk.image_urls + [image]
-                if self._messages_size(chunk.segments, candidate_images, **kwargs) <= self.max_bytes:
+                if (
+                    len(candidate_images) <= self.max_images_per_chunk
+                    and self._messages_size(chunk.segments, candidate_images, **kwargs) <= self.max_bytes
+                ):
                     chunk.image_urls = candidate_images
                     placed = True
                     break
@@ -134,7 +230,7 @@ class RequestChunker:
 
             if self._messages_size([], [image], **kwargs) > self.max_bytes:
                 raise ValueError("single image payload exceeds max_bytes")
-            chunks.append(ChunkPayload(segments=[], image_urls=[image]))
+            chunks.append(ChunkPayload(segments=self._carry_segments(chunks, image, **kwargs), image_urls=[image]))
 
         return chunks
 

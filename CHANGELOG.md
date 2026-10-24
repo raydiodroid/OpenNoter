@@ -2,6 +2,134 @@
 
 本项目所有重要变更记录于此。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### ⚠️ BREAKING — 升级到本版本前必读
+
+本版本默认行为有两处不兼容变更。**自托管用户请在升级前读完本节。**
+
+#### 1. 默认强制认证（匿名使用被关闭）
+
+`OPENNOTER_AUTH_ENFORCE` 默认值由 `false` 改为 **`true`**。
+升级后，未携带凭据的请求访问业务接口一律返回 **401**，
+包括此前匿名可用的「创建笔记任务」。
+
+**影响**：如果此前依赖匿名使用（从未配置过 `AUTH_ENFORCE`），
+升级后全站需要登录才能使用。
+
+**必须同时确认已配置签名密钥**（否则登录与加解密都会报错）：
+
+```bash
+# 二选一，至少设一个；值必须是长随机串
+OPENNOTER_JWT_SECRET=<random>
+OPENNOTER_SECRET_KEY=<random>
+
+# 生成方式
+python -c "import secrets;print(secrets.token_urlsafe(48))"
+```
+
+**仍想保留匿名（仅限内网单人自托管）**：
+
+```bash
+OPENNOTER_AUTH_ENFORCE=0
+```
+
+> 公网部署**绝对不要**关闭认证。
+
+#### 2. 数据库位置从代码目录迁到 `data/` 卷
+
+默认 `DATABASE_URL` 由 `sqlite:///open_noter.db`（即 `/app/open_noter.db`）
+改为 `sqlite:////app/data/open_noter.db`。
+
+**自动迁移覆盖不到所有情况**：新版 compose 只挂载 `./backend/data`，
+旧库位于 `./backend/open_noter.db`（**不在挂载范围内，容器内看不到**），
+所以 Docker 部署**必须在宿主机手动搬一次**：
+
+```bash
+cd /path/to/opennoter/backend
+cp -a open_noter.db data/open_noter.db
+python3 -c "import sqlite3;print(sqlite3.connect('data/open_noter.db').execute('PRAGMA integrity_check').fetchone())"
+# 应输出 ('ok',)
+docker compose up -d --force-recreate
+```
+
+搬完确认数据在（用户 / 供应商数量与升级前一致）后，旧文件可归档删除。
+
+**程序内的自动迁移**能处理这几种情况，其余会明确报错而非静默建空库：
+
+| 场景 | 行为 |
+|---|---|
+| 未设 `DATABASE_URL`，旧库在 cwd | 自动迁到 `data/` |
+| 显式 URL 指向 `data/open_noter.db`，目标为空 | 自动接管旧库 |
+| 显式 URL 指向其它目录 | **不动**（避免数据错位） |
+| 两个历史库（`bili_note.db` + `open_noter.db`）并存 | **拒绝自动迁移**，报错并沿用较新的 |
+| 迁移失败（权限等） | **回退旧库**，绝不给空库 |
+
+### Changed
+
+- **FFmpeg 改为按需下载，不再随仓库分发**。`scripts/fetch_ffmpeg.py` 新增：按平台给出下载源，支持 `--print-url` 只打印地址（便于审计）、`--dest` 指定目录，下载后提示设置 `FFMPEG_BIN_PATH`。`.gitignore` 补上 `/vendor/ffmpeg/`。README「依赖说明 → FFmpeg」重写为「包管理器优先 / 按需下载 / Docker 内置」三选一。
+  - **许可证**：官方预编译 FFmpeg 二进制多为 GPL 构建（含 `libx264`/`libx265`），而本项目是 MIT。此前仓库曾提交过一个 GPLv3 的 ffmpeg Windows 构建（289MB，commit `05fdc36` 引入、`49a1b3a` 删除），已造成许可证污染。现在明确约定：仓库不含 FFmpeg 二进制，用户自行获取，再分发受 FFmpeg 自身许可约束；商业闭源分发需改用 LGPL 构建或依赖系统已安装的 FFmpeg。
+  - ffmpeg 缺失时的报错文案同步更新：给出两种安装方式 + 许可证提醒，并指向 README。
+
+### Security
+
+- **修复 SSRF：任意 URL 可通过平台校验并被服务端实际请求**。`is_supported_video_url()` 原先用「URL 里包含 `douyin` / `kuaishou` 子串」判断平台，于是 `http://169.254.169.254/latest/meta-data/?x=douyin` 能通过校验，随后 `DouyinDownloader.extract_video_id()` 会真的对该地址发起 `requests.head`（可探测/访问云元数据端点）。现在改为按 `hostname` 精确匹配平台域名 + 路径形态校验，再过一遍内网地址黑名单（复用 `assert_safe_url`，传 `suffixes=()` 只做 IP 层校验，避免套用 image_proxy 的图片 CDN 白名单）。与 `detect_platform()` 的实现保持一致。
+- **不再把 Cookie 打进日志**。下载器里 20+ 处 `print()` 会打印完整 headers / 请求 URL / 响应体，其中 B 站与抖音的 headers 直接带 `Cookie`。全部改为 `logger.debug/info`，且不再输出凭据。
+
+### Fixed
+
+- **部署监控页 5 张卡的数据源，经逐个审计后重写**：
+  - **LLM 卡探的不是线上在用的供应商**：原实现取 `providers` 里「第一个 id != groq」的启用项，而真实生成笔记走 `resolve_model_selection()`（第一个「已启用且有模型」的供应商）。实测默认安装后会探 openai（空 key，请求根本没发出）而真实用 deepseek。改为复用同一口径。
+  - **转写端点卡与真实链路无关**：原实现无条件探 `providers['groq']`，但默认部署是本地 fast-whisper（`transcriber_type` 有 5 种取值，只有 groq 走供应商表）。改为按 `transcriber_type` 分 local / builtin / provider / unknown 四支渲染。
+  - **任务统计口径**：「进行中」把崩溃遗留的中间态永久计入（实测 6 个僵尸任务永不下降）；「累计任务」是状态文件数，用户删笔记会让它倒退；坏 JSON 计入总数但不计入任何分类（`total += 1` 在 `json.loads` 之前）；`failed_24h` 用文件 mtime，重试会刷新它、把旧失败洗成进行中。现分别修为：超 2h 中间态单列 `stale`、状态落库 + **软删除**保证累计不倒退、坏文件单列 `unreadable`、24h 窗口改用不可变的 `failed_at`。
+  - **磁盘卡可能探错盘**：原实现探 `/app` 或 cwd，在「单镜像 + 命名卷」部署下探的是容器 overlay（实测 overlay 报 30% 充足，真实数据卷已用 97%）。改为探 `NOTE_OUTPUT_DIR` 所在分区并回传 `probe_path`。
+  - **FFmpeg 卡是假告警**：`_probe_ffmpeg` 只认 PATH，不认 `FFMPEG_BIN_PATH`，而同进程的 `ffmpeg_helper` 认——同一时刻两套判定给出相反结论。改为复用 helper。
+  - **「探测超时 4 秒」失实**：4s 只是 httpx 单次读超时。实测分块慢速传输绕过它、请求跑 16s；ffmpeg 是 5s；`.result()` 与目录扫描无超时。改为模块级线程池 + 总预算，慢探测从 30s 降到 3s 内。
+- **一个畸形供应商响应能让整个监控接口 500**：`/models` 返回的 model dict 缺 `id` 时 `names` 里出现 `None`，随后 `None.lower()` 抛 `AttributeError`，5 张卡全部消失。现在只收非空字符串 id，且整个接口分项降级、单项失败只影响该项。
+- **监控页响应形状偏离契约就整站白屏**：`data?.storage.percent ?? 0` 只短路了 `data`，返回 `data: []` 时 `[].storage` 是 `undefined` → 未捕获 TypeError，且全前端没有 ErrorBoundary，连侧栏一起卸载。现在加了运行时契约校验 + 路由级 ErrorBoundary + 所有子对象 `?.` 收敛。
+- **监控页把「没数据」显示成健康**：`percent` 缺失 → `?? 0` → `0 < 90` → 绿色「充足」；而同一张卡下面又渲染红色错误。现在缺失/null 一律「未知」，`storage.error` 显示红「读取失败」，badge 与 Meter 共用同一阈值（80/90）。
+- **监控页失败后继续显示过期绿灯**：`updatedAt` 只在成功时更新，失败只写 errorMessage、旧 data 原样保留，全页没有过期提示。现在超 2 倍刷新周期即降级所有健康标并显示「已过期 N 分钟」。
+- **转写就绪门禁早已失效**：`transcriber_config_manager` 仍 import 被 `dl_state` 取代的 `_downloading`，`ImportError` 走到「保守放行」分支 → 对未下载模型恒返回 `ready=True`。改为从 `app.transcriber.model_download_state` 取。
+- **状态文件写盘失败会写坏 `.status.json`**：兜底分支把 `"Error writing status: ..."` 直接写进去，产出「合法但非 JSON」的坏文件——监控计入 unreadable、任务本身从此读不出状态、前端永远停在 PENDING。改为保留旧状态 + 错误落到旁路 `.err`。
+- **截图失败会让整篇笔记变空白但任务仍标 SUCCESS**：`_insert_screenshots` 任一张失败就 `return None`，调用方把 `None` 赋回 markdown。改为只跳过该标记，并让后处理对非字符串结果做防御。
+- **`ffmpeg_helper` 的 PATH 改写会无限膨胀**：每次调用都无条件前置、从不去重，而它被 `/sys_health` 反复触发（docker healthcheck 30s、Tauri 5s），实测 8579 次后 PATH 达 1MB，execve 报 `Argument list too long`。改为幂等。
+- **普通用户能看到「用户管理 / 部署监控」入口，点进去吃 403**：`SETTINGS_NAV` 是静态数组，未按 `is_superuser` 过滤。现在按权限过滤 + 路由外包 AdminGuard。
+- **扩展端保留着已被删掉的装饰性指标**：「后端 running」是后端硬编码字符串 + UI 写死绿色，证伪能力为 0（commit `1458860` 明说要从主前端删掉这类指标，主前端删了、扩展留着）。改为显示真实请求耗时，并把 `/sys_health` 的结构化子状态如实渲染。
+- **扩展在开启强制认证后整个不可用**：`OPENNOTER_AUTH_ENFORCE=1` 时插件不带任何凭据（localStorage 的 cookie 对 localhost 不生效）→ 所有接口 401。新增 API Key 设置项 + `x-api-key` 头。
+
+ → 现在免登录可用**。原实现依赖 `iesdouyin.com/web/api/v2/aweme/iteminfo/` 与自制 `a_bogus` / `msToken`，实测该接口现在返回 `{"status_code":11110,"status_msg":"encrypt_data_miss"}`，且 `aweme/v1/web/aweme/detail/` 缺风控头时返回 `403 Blocked by ArgusSecurityPlugin Uifid Not Found`。改为当前可用的最小方案：`GET /aweme/v1/web/aweme/detail/?aweme_id=<id>` + `x-tt-argus: 1` 头 + `Referer` + 自引导 `ttwid`（来自 `live.douyin.com`），**不需要任何密码学签名**。ttwid 进程内缓存复用；「HTTP 200 + 0 字节」判定为软拦截并抛可重试异常。
+- **抖音取错音频**：原实现用 `aweme_detail.music.play_url.uri` 当音频，那是 BGM/原声（`is_use_music=True` 的作品会拿到别人的配乐），转写结果完全不匹配。改为从无水印视频流用 ffmpeg 抽取音轨。
+- **抖音时长单位错误**：`video.duration` 是毫秒（如 395440），原实现当秒用，11 秒的视频会记成 185 分 23 秒，污染笔记元数据与 RAG 索引。改为毫秒换算；注意 `music.duration` 才是秒。
+- **抖音标题恒为空**：原实现读 `item_title`（实测为空字符串），真实标题在 `desc`。改为 `desc` 优先、`item_title` 兜底。
+- **抖音封面 KeyError**：图文作品没有 `cover_original_scale`，原实现的 else 分支还会访问不存在的顶层 `video` 键，直接抛 `KeyError`。改为 `cover_original_scale` → `origin_cover` → `cover` 逐级兜底。
+- **抖音下到带水印视频**：原实现用 `download_addr`（重编码带水印版）。改为 `play_addr`（无水印）优先，候选顺序 `play_addr` → `play_addr_h264` → `play_addr_265` → `download_addr`，并逐个候选回退。同时修正选流逻辑：`bit_rate[]` 里 `format == "dash"` 的档位是纯视频轨无音轨，且码率排序 ≠ 分辨率排序（540P 档码率可能高于 720P 档），改为按分辨率排序。
+- **抖音图文作品无法解析**：详情接口对图文返回 `aweme_detail: null` + `filter_detail.filter_reason: "images_base"`，新增回退到移动端分享页解析 `window._ROUTER_DATA`（分享页地址里的 `/playwm/` 替换为 `/play/` 得到无水印版）。
+- **抖音链接形态覆盖不足**：原实现只认 `/video/(\d+)`，`/note/`、`/slides/`、`modal_id=` 等形态全部返回空 ID。补齐所有形态（与 `astrbot_plugin_link_resolver` 的覆盖面对齐）。
+- **B 站音频码率被写死 64kbps**。`preferredquality` 硬编码 `'64'`，实测产出 64kbps，而 B 站源音频有 44k / 103k / 204k 三档，等于主动丢弃约 2/3 的信息量，转写与下游 LLM 都在吃这个损失。改为跟随 `quality` 参数：`fast→64` / `medium→128` / `slow→192`。
+- **B 站 `av` 号视频拼出 `None.mp4`**：`extract_video_id()` 只认 BV 正则，`av170001` 返回 `None`，随后被拼成缓存文件名 `None.mp4`（存在性检查永远 miss，极端情况下会串片）。新增 `app/utils/bilibili_ids.py`（av↔BV 互转，算法常量对齐 B 站前端公开转换表），`extract_video_id` 现在统一返回 BV 号。
+- **B 站多 P 视频「已缓存」判断永久失效**：`extract_video_id("...?p=2")` 返回 `BV1Ranw6DEYW`，而 yt-dlp 实际落盘 `BV1Ranw6DEYW_p2.mp4`，导致存在性检查对多 P 永远 False、每次重新下载。现在 download / download_video / 缓存探测共用同一套输出命名规则。
+- **B 站下载视频默认选集 AV1**：`bv*[ext=mp4]/...` 实测选中 `av01`，而产出视频用于浏览器预览与截图，Safari 等播放器不支持。格式选择器改为优先 `avc1`。
+- **B 站临时 Cookie 文件泄漏**：`_write_netscape_cookie_file()` 用 `NamedTemporaryFile(delete=False)` 落一个含 `SESSDATA` / `bili_jct` 明文的文件，且没有任何清理逻辑，长期运行会在临时目录堆积成百上千个。改为下载方法内的 `contextmanager` + `TemporaryDirectory`，`finally` 清理；同时把「用到时才写」取代「`__init__` 就写」。
+- **`skip_download` 参数导致 TypeError，省流量优化完全失效**：`NoteGenerator` 在「已有字幕、无需截图」时会传 `skip_download=True` 走元信息捷径，但 B 站 / 抖音下载器不接受这个参数，`TypeError` 被 `except Exception` 吞掉后静默回退**完整下载**。现在四个下载器统一签名并真正支持跳过媒体下载。
+- **前端「快速/标准/高质量」三个选项是纯装饰**：`QUALITY_MAP` 被 import 后从未参与任何 yt-dlp / ffmpeg 参数，各平台各自写死码率。现已真正串联到音频后处理。
+- **YouTube Cookie 被永久禁用**：`COOKIE_ALLOWLISTS["youtube"]` 是空元组，`filter_downloader_cookies()` 永远返回空串，接口还会提示「YouTube 下载器当前不使用 Cookie」，而 YouTube 恰恰是最需要 Cookie 的平台（年龄限制 / 会员 / 403 风控）。Cookie 策略层现在区分两种格式：B站/抖音/快手用 `header` 形式，YouTube 用 `netscape`（cookies.txt），各自校验。
+- **YouTube 无 403 回退**：新增 `player_client=web_embedded` 的回退重试。
+- **快手请求无超时、Cookie 为 None 时崩溃**：`requests.get/post` 全部补上 `timeout`；`cookies.strip()` 在无 Cookie 时会 `AttributeError`（原来只打日志就继续往下走），改为提前抛明确异常。
+- **`config/downloader.json` 改完不生效，需重启后端**：`SUPPORT_PLATFORM_MAP` 在 import 时就把所有下载器实例化，下载器 `__init__` 里读一次 Cookie 后不再重读。改为 `get_downloader(platform)` 工厂，每个任务新建实例、Cookie 现读。
+- **抖音 Cookie 白名单缺 `UIFID_TEMP` / `UIFID`**：浏览器一键同步过来的风控相关项会被过滤掉，导致「同步成功但没生效」。已补入白名单（`msToken` 仍会丢弃，那是每次请求动态生成的）。
+- **`xiaoyuzhoufm_download.py` 在 import 时发外网请求**：模块级直接 `requests.get()` + `print(response.json())`，任何 import 都会触发一次网络请求（无网环境直接抛异常）。改为占位实现，调试入口收进函数。
+- **`test_task_serial_executor.py` 长期失败**：`SerialTaskExecutor` 早已被 `ConcurrentTaskExecutor`（线程池）替换，但测试仍断言串行语义。改为断言当前真实承诺：结果返回、异常传播、并发度受 `max_workers` 约束。
+
+### Added
+
+- `app/downloaders/limits.py`：下载大小 / 时长 / 重试预算，支持 `DOWNLOAD_MAX_SIZE_MB`、`DOWNLOAD_MAX_DURATION_SECONDS`、`DOWNLOAD_RETRY_COUNT` 环境变量覆盖（默认 200MB / 300s / 2 次，与 `astrbot_plugin_link_resolver` 默认值对齐）。0 表示不限制。
+- `app/downloaders/errors.py`：失败分类（`RetryableDownloadError` / `SizeLimitExceeded` / `DurationLimitExceeded`）+ `is_retryable()`，供任务级重试决策使用。
+- `app/utils/bilibili_ids.py`：`av2bv` / `bv2av` / `normalize_bvid`。
+- 任务级重试：网络类异常按指数退避重试，确定性失败（超限）立即失败并给出可读消息。
+- 下载缓存 key 加入 `video_url + quality` 指纹，避免「前端重试复用 task_id + 改了链接」时命中旧视频的音频缓存。
+- 抖音 / B 站 / 快手 / YouTube 下载全部改为流式写盘（`iter_content`），不再把整个媒体读进内存。
+- `.env.example` 补充下载限制与各平台 Cookie 格式说明。
+
 ## [2.4.4] - 2026-06-23
 
 ### Security
@@ -51,13 +179,13 @@
 
 ### Added
 
-- **一对一搭建服务二维码**：新增「BiliNote AI 笔记系统一对一搭建服务」二维码（README + 关于页），扫码加微信、备注「搭建服务」即可咨询。
+- **一对一搭建服务二维码**：新增「OpenNoter AI 笔记系统一对一搭建服务」二维码（README + 关于页），扫码加微信、备注「搭建服务」即可咨询。
 
 ## [2.3.3] - 2026-05-22
 
 ### Fixed
 
-- **预构建 Docker 镜像数据持久化**：文档的 `docker run` 只挂了 `data/`（媒体缓存），而 SQLite 数据库（LLM 供应商配置 + 笔记历史）和笔记文件不在该卷下，导致删除 / 升级容器时丢失配置与历史。现将数据库重定向到 `/app/backend/data/bili_note.db`、笔记到 `data/note_results`（随 data 卷持久化）；README 更新为挂载 `data` / `config` / `static` / `models` 四个数据卷，并提示**勿**挂整个 `/app/backend`（命名卷会固化镜像内代码，导致 `docker pull` 升级不生效）。`docker-compose` 路径本就正确（`./backend:/app` 整目录绑挂），未受影响。
+- **预构建 Docker 镜像数据持久化**：文档的 `docker run` 只挂了 `data/`（媒体缓存），而 SQLite 数据库（LLM 供应商配置 + 笔记历史）和笔记文件不在该卷下，导致删除 / 升级容器时丢失配置与历史。现将数据库重定向到 `/app/backend/data/open_noter.db`、笔记到 `data/note_results`（随 data 卷持久化）；README 更新为挂载 `data` / `config` / `static` / `models` 四个数据卷，并提示**勿**挂整个 `/app/backend`（命名卷会固化镜像内代码，导致 `docker pull` 升级不生效）。`docker-compose` 路径本就正确（`./backend:/app` 整目录绑挂），未受影响。
 
 ## [2.3.2] - 2026-05-22
 
@@ -110,8 +238,8 @@
 
 ### Fixed
 
-- 前端 vite build 在 Docker / Tauri CI 中失败：`Rollup failed to resolve import '@tauri-apps/api/event'`。v2.2.0 加的 P1/P2 桌面端组件用了 `await import('@tauri-apps/api/event')` 与 `'@tauri-apps/api/core'`，但 `@tauri-apps/api` 只是 `@tauri-apps/plugin-shell` 的间接依赖，没在 `BillNote_frontend/package.json` 直接声明，Rollup 在 production build 时静态分析报"无法解析"
-  - `BillNote_frontend/package.json`：把 `@tauri-apps/api` 加为直接依赖（`^2.10.1`，与 lockfile 中已有的 transitive 版本一致）
+- 前端 vite build 在 Docker / Tauri CI 中失败：`Rollup failed to resolve import '@tauri-apps/api/event'`。v2.2.0 加的 P1/P2 桌面端组件用了 `await import('@tauri-apps/api/event')` 与 `'@tauri-apps/api/core'`，但 `@tauri-apps/api` 只是 `@tauri-apps/plugin-shell` 的间接依赖，没在 `OpenNoter_frontend/package.json` 直接声明，Rollup 在 production build 时静态分析报"无法解析"
+  - `OpenNoter_frontend/package.json`：把 `@tauri-apps/api` 加为直接依赖（`^2.10.1`，与 lockfile 中已有的 transitive 版本一致）
   - 本地 `DOCKER_BUILD=1 pnpm run build` 复现 + 验证修复
 
 ## [2.2.2] - 2026-05-09
@@ -129,7 +257,7 @@
 ### Fixed
 
 - Docker 镜像构建失败：`v2.2.0` tag 触发的 ghcr.io 推送在 frontend-builder 第 5/7 步 `pnpm install --frozen-lockfile` 报 `ERR_UNKNOWN_BUILTIN_MODULE`。根因：`corepack prepare pnpm@latest` 拉到了 pnpm 11.0.9，而 pnpm 11 要求 Node 22+，跟我们的 `node:20-alpine` 不兼容。
-  - `Dockerfile.complete` 与 `BillNote_frontend/Dockerfile` 的 pnpm 版本 pin 到 `9.15.0`（lockfile 由 pnpm 9 生成，匹配 Node 20）
+  - `Dockerfile.complete` 与 `OpenNoter_frontend/Dockerfile` 的 pnpm 版本 pin 到 `9.15.0`（lockfile 由 pnpm 9 生成，匹配 Node 20）
 
 ## [2.2.0] - 2026-05-09
 
@@ -145,7 +273,7 @@
 
 ### Added — 桌面客户端
 
-- **首启 4 步引导**（`/onboarding`）：后端连通性自检 → LLM 供应商 + 模型 → 转写引擎选择（默认推荐 Groq）→ Cookie 同步说明。完成后 `localStorage('bilinote-onboarded')` 标记，纯 web 端不打扰
+- **首启 4 步引导**（`/onboarding`）：后端连通性自检 → LLM 供应商 + 模型 → 转写引擎选择（默认推荐 Groq）→ Cookie 同步说明。完成后 `localStorage('opennoter-onboarded')` 标记，纯 web 端不打扰
 - **Sidecar 健康度面板**：右下角浮动状态点（绿/黄/红，5s 轮询 `/sys_health`），点开抽屉看最近 200 行后端日志、一键重启后端（新增 Tauri command `restart_backend_sidecar`）、复制日志
 - **启动期路径诊断**：Tauri `setup` 中检测安装路径含非 ASCII / 含空格 / 父目录不可写时，emit `backend-warning` 让前端顶端横幅显式告警，主动暴露 README 长期文字警告但无防御的"中文路径"等坑
 
@@ -168,7 +296,7 @@ CI 工程化修复，无运行时行为变化。
 
 ### Internal
 
-- 桌面端 Tauri 构建矩阵去掉 Linux（`ubuntu-22.04 / x86_64-unknown-linux-gnu`）。Linux 桌面端构建持续 17m+，且无对应分发渠道；Linux 用户继续可以走 Docker 镜像 (`ghcr.io/jefferyhcool/bilinote`)
+- 桌面端 Tauri 构建矩阵去掉 Linux（`ubuntu-22.04 / x86_64-unknown-linux-gnu`）。Linux 桌面端构建持续 17m+，且无对应分发渠道；Linux 用户继续可以走 Docker 镜像 (`ghcr.io/jefferyhcool/opennoter`)
 - commitlint workflow 去掉无效的 `firstParent` input（wagoid/commitlint-github-action@v6 不支持，被忽略并打 warn）
 - 规范 release merge commit 标题：`chore(release): vX.Y.Z`（合 master）/ `chore(release): merge release/X.Y.Z back into develop`（回灌 develop），让 commitlint 能正确识别。`RELEASING.md` §3 与 `CONTRIBUTING.md` §6.3 同步更新
 
@@ -190,9 +318,9 @@ CI 工程化修复，无运行时行为变化。
 ### Fixed
 
 - Docker 镜像构建失败：v2.1.1 tag 触发的 ghcr.io 推送在 frontend-builder 第 7/7 步 `pnpm run build` 挂掉（vite `loadConfigFromBundledFile` 加载 `@tailwindcss/vite` plugin 时 1.5s 内异常退出）。
-  - `Dockerfile.complete` 与 `BillNote_frontend/Dockerfile` 升 `node:18-alpine` → `node:20-alpine`：Tailwind v4 已不再支持 Node 18，Vite 6 也推荐 Node 20+
+  - `Dockerfile.complete` 与 `OpenNoter_frontend/Dockerfile` 升 `node:18-alpine` → `node:20-alpine`：Tailwind v4 已不再支持 Node 18，Vite 6 也推荐 Node 20+
   - `Dockerfile.complete` 的 frontend 阶段同时复制 `pnpm-lock.yaml` 并改用 `--frozen-lockfile`，杜绝每次构建重解析 semver 拉到比本地新的 native dep
-  - `BillNote_frontend/pnpm-lock.yaml` 强制入库（之前一直未提交，导致 CI / 本地依赖图持续漂移）
+  - `OpenNoter_frontend/pnpm-lock.yaml` 强制入库（之前一直未提交，导致 CI / 本地依赖图持续漂移）
 - README 联系社区段补上微信群二维码（之前只写"年会恢复更新以后放出最新社区地址"）
 
 ## [2.1.1] - 2026-05-07
@@ -211,7 +339,7 @@ CI 工程化修复，无运行时行为变化。
 ### Changed
 
 - 关于页二维码改为 `import @/assets/wechat.png`，不再依赖腾讯云 COS CDN，更新只需替换文件 + 跑构建
-- 群聊 QR 替换为最新版本（`doc/wechat.png` + `BillNote_frontend/src/assets/wechat.png`）
+- 群聊 QR 替换为最新版本（`doc/wechat.png` + `OpenNoter_frontend/src/assets/wechat.png`）
 
 ### Removed
 
@@ -222,14 +350,14 @@ CI 工程化修复，无运行时行为变化。
 
 本次发布的主线是**浏览器插件**和 **B 站字幕优先链路**。配合一些后端 / 前端体验修复。
 
-### Added — 浏览器插件 (`BillNote_extension/`)
+### Added — 浏览器插件 (`OpenNoter_extension/`)
 
 全新 Chrome / Edge / Firefox MV3 扩展。Vue 3 + Vite + UnoCSS，骨架基于 vitesse-webext。
 
 - **入口四件套**
   - 工具栏 popup：识别当前 tab → 一键提交，紧凑展示标题 + 封面 + 进度
   - 视频页悬浮按钮：仅在支持平台注入，点击即触发任务
-  - 右键菜单"用 BiliNote 总结此视频"：限定 4 个支持域名
+  - 右键菜单"用 OpenNoter 总结此视频"：限定 4 个支持域名
   - 侧边栏（side panel）：详情视图 + 三模式切换
 - **侧边栏三视图**
   - Markdown：渲染笔记，复制 / 下载 .md

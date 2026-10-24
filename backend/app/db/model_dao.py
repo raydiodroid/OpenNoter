@@ -45,13 +45,15 @@ def get_models_by_provider(provider_id: int):
         db.close()
 
 
-def delete_model(model_id: int):
+def delete_model(model_id: int) -> bool:
     db = next(get_db())
     try:
         model = db.query(Model).filter_by(id=model_id).first()
-        if model:
-            db.delete(model)
-            db.commit()
+        if not model:
+            return False
+        db.delete(model)
+        db.commit()
+        return True
     finally:
         db.close()
 

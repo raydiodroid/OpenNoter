@@ -56,7 +56,7 @@ git push -u origin release/X.Y.Z
 
 ```bash
 git checkout master && git pull origin master
-git tag -a vX.Y.Z -m "BiliNote vX.Y.Z
+git tag -a vX.Y.Z -m "OpenNoter vX.Y.Z
 
 主线：
 - ...
@@ -75,7 +75,7 @@ CI 默认会创建 / 更新 `vX.Y.Z` 对应的 Release。如果你想自己写 r
 2. Tag: 选 `vX.Y.Z`
 3. Title: `vX.Y.Z`
 4. Body: 直接贴 [`CHANGELOG.md`](./CHANGELOG.md) 的对应段
-5. CI 跑完后 Release 页面会自动出现 `bilinote-extension-X.Y.Z.zip` / `.xpi` / `.crx`
+5. CI 跑完后 Release 页面会自动出现 `opennoter-extension-X.Y.Z.zip` / `.xpi` / `.crx`
 
 ## 6. 上传到各商店（人工）
 
@@ -84,22 +84,22 @@ CI 默认会创建 / 更新 `vX.Y.Z` 对应的 Release。如果你想自己写 r
 ### Chrome Web Store
 
 1. https://chrome.google.com/webstore/devconsole
-2. 选 BiliNote → 左侧 **Package** → **Upload new package**
-3. 上传 `bilinote-extension-X.Y.Z.zip`
+2. 选 OpenNoter → 左侧 **Package** → **Upload new package**
+3. 上传 `opennoter-extension-X.Y.Z.zip`
 4. 检查 listing（描述 / 图标 / 截图无变化可保持），点 **Submit for review**
 
 ### Microsoft Edge Add-ons
 
 1. https://partner.microsoft.com/dashboard/microsoftedge
-2. 选 BiliNote → **New submission**
+2. 选 OpenNoter → **New submission**
 3. 上传同一份 `.zip`（Edge Add-ons 与 Chrome 完全兼容 MV3）
 4. 提交审核
 
 ### Firefox Add-ons (AMO)
 
 1. https://addons.mozilla.org/developers/
-2. 选 BiliNote → **Upload New Version**
-3. 上传 `bilinote-extension-X.Y.Z.xpi`
+2. 选 OpenNoter → **Upload New Version**
+3. 上传 `opennoter-extension-X.Y.Z.xpi`
 4. 选择"在 AMO 公开"或"自托管"
 5. 提交审核
 
@@ -159,3 +159,11 @@ git checkout -b hotfix/<scope>-<事项>
 |---|---|---|
 | 2.1.0 | 2026-05-07 | [`v2.1.0`](https://github.com/JefferyHcool/BiliNote/releases/tag/v2.1.0) |
 | 2.0.0 | (上游 web 端 v2.0.0) | [`v2.0.0`](https://github.com/JefferyHcool/BiliNote/releases/tag/v2.0.0) |
+
+---
+
+## 部署提醒（安全 / 扩展）
+
+- 公网请设置 `OPENNOTER_AUTH_ENFORCE=true`（见 `.env.example`）。
+- compose 数据卷与镜像代码已分离；SQLite 默认在 `./backend/data/`。
+- **多副本后端**需要 Postgres（或等价）+ 外置队列/限流，不能直接复制 SQLite 单机布局。详见 [README.md](./README.md)「多副本 / 水平扩展」。
