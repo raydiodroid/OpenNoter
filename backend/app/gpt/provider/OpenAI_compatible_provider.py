@@ -5,9 +5,17 @@ from app.utils.openai_client import build_openai_client
 
 logging= get_logger(__name__)
 class OpenAICompatibleProvider:
-    def __init__(self, api_key: str, base_url: str, model: Union[str, None]=None):
+    def __init__(self, api_key: str, base_url: str, model: Union[str, None]=None,
+                 *, timeout: Optional[float] = None,
+                 max_retries: Optional[int] = None):
         # build_openai_client：注入全局代理 + 校验 api_key 非空
-        self.client = build_openai_client(api_key, base_url, key_label="模型供应商的 API Key")
+        self.client = build_openai_client(
+            api_key,
+            base_url,
+            key_label="模型供应商的 API Key",
+            timeout=timeout,
+            max_retries=max_retries,
+        )
         self.model = model
 
     @property

@@ -2,17 +2,16 @@ aiohappyeyeballs==2.6.1
 aiohttp==3.11.16
 aiosignal==1.3.2
 altgraph==0.17.4
-amqp==5.3.1
 annotated-types==0.7.0
 anyio==4.9.0
 async-timeout==5.0.1
 attrs==25.3.0
 av==14.2.0
+bcrypt==4.3.0
+cryptography==44.0.3
 beautifulsoup4==4.13.4
-billiard==4.2.1
 blinker==1.9.0
 Brotli==1.1.0
-celery==5.5.1
 certifi==2025.1.31
 cffi==1.17.1
 charset-normalizer==3.4.1
@@ -39,7 +38,6 @@ fonttools==4.58.4
 frozenlist==1.5.0
 fsspec==2025.3.2
 future==1.0.0
-gmssl==3.2.2
 h11==0.14.0
 hf-xet==1.0.0
 httpcore==1.0.7
@@ -51,7 +49,6 @@ humanize==4.12.2
 idna==3.10
 Jinja2==3.1.6
 jiter==0.9.0
-kombu==5.5.2
 lxml==5.4.0
 macholib==1.16.3
 Markdown==3.8
@@ -82,6 +79,7 @@ pydantic_core==2.33.1
 pydyf==0.11.0
 PyExecJS==1.5.1
 Pygments==2.19.1
+PyJWT==2.10.1
 pyinstaller==6.13.0
 pyinstaller-hooks-contrib==2025.2
 PyMuPDF==1.25.3
@@ -94,7 +92,6 @@ python-multipart==0.0.20
 pytz==2025.2
 pywin32-ctypes==0.2.3
 PyYAML==6.0.2
-redis==5.2.1
 requests==2.32.4
 rich==14.0.0
 rich-toolkit==0.14.1
@@ -117,7 +114,6 @@ tzdata==2025.2
 urllib3==2.3.0
 uvicorn==0.34.0
 uvloop==0.21.0; sys_platform != "win32"
-vine==5.1.0
 watchfiles==1.0.4
 wcwidth==0.2.13
 weasyprint==65.1
@@ -125,5 +121,10 @@ webencodings==0.5.1
 websockets==15.0.1
 yarl==1.19.0
 youtube-transcript-api>=1.0.0
+# 下界不能低于 2026.07.04：该版本（PR #13730 / commit e8de28e）才把 `_dm_params`
+# 抽成 property 并用于 `x/player/wbi/playurl`。低于此版本时 playurl 会稳定返回 412
+# （实测：缺少 dm_img_* 这组字段就 412，带任意一个就 200 —— B 站只校验字段是否存在，
+# 不校验内容）。bilibili_dm_patch.py 是为低版本兜底的 monkey-patch，
+# 装到 2026.07.04+ 之后它会自动跳过。
 yt-dlp>=2026.7.4
 zopfli==0.2.3.post1

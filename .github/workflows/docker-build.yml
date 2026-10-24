@@ -36,11 +36,15 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # latest 必须在 v* tag 推送时产出：本 workflow 的主要触发方式就是 tag，
+          # 而 README / 下方用法提示都让用户 pull :latest。
+          # {{is_default_branch}} 只在分支推送时为真，tag 推送永远拿不到 :latest，
+          # 故改成「v* tag 或默认分支」二者其一。
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha,prefix=
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') || github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
 
       - name: Resolve app version
         id: app-version
@@ -77,11 +81,11 @@ jobs:
           echo ""
           echo "Run the container:"
           echo "  docker run -d -p 80:80 \\"
-          echo "    -v bilinote-data:/app/backend/data \\"
-          echo "    -v bilinote-config:/app/backend/config \\"
-          echo "    -v bilinote-static:/app/backend/static \\"
-          echo "    -v bilinote-models:/app/backend/models \\"
-          echo "    --name bilinote \\"
+          echo "    -v opennoter-data:/app/backend/data \\"
+          echo "    -v opennoter-config:/app/backend/config \\"
+          echo "    -v opennoter-static:/app/backend/static \\"
+          echo "    -v opennoter-models:/app/backend/models \\"
+          echo "    --name opennoter \\"
           echo "    ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
           echo ""
           echo "Access the application at: http://localhost"

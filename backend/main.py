@@ -1,8 +1,9 @@
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.staticfiles import StaticFiles
@@ -11,6 +12,9 @@ from dotenv import load_dotenv
 from app.db.init_db import init_db
 from app.db.provider_dao import seed_default_providers
 from app.exceptions.exception_handlers import register_exception_handlers
+from app.middlewares.api_key_usage import ApiKeyUsageMiddleware
+from app.services.api_key_runtime import usage_logger
+from app.services.auth import flush_all_activity
 # from app.db.model_dao import init_model_table
 # from app.db.provider_dao import init_provider_table
 from app.utils.logger import get_logger
@@ -23,7 +27,6 @@ logger = get_logger(__name__)
 load_dotenv()
 
 # 读取 .env 中的路径
-static_path = os.getenv('STATIC', '/static')
 out_dir = os.getenv('OUT_DIR', './static/screenshots')
 
 # 自动创建本地目录（static 和 static/screenshots）
@@ -67,30 +70,94 @@ async def lifespan(app: FastAPI):
         if _proxy:
             logger.info(f"           已应用全局代理到环境变量: {_proxy}")
 
+        # 静默把历史明文 Cookie 转成密文（幂等）。
+        # 放在这里而不是首次读写时：避免「读一次写一次」的隐式落盘，
+        # 也让升级后第一时间消除明文。
+        try:
+            from app.services.cookie_manager import CookieConfigManager
+
+            migrated = CookieConfigManager().migrate_plaintext()
+            if migrated:
+                logger.info(f"           已加密 {migrated} 个平台的存量 Cookie（明文 → 密文）")
+        except Exception as exc:
+            # 迁移失败不该阻止启动；下次再试
+            logger.warning(f"           Cookie 明文迁移失败（下次启动重试）：{exc}")
+
+        # 静默把 providers.api_key 存量明文转成密文（幂等；复用 secret_box / Fernet）。
+        try:
+            from app.db.provider_dao import migrate_plaintext_api_keys
+
+            migrated_keys = migrate_plaintext_api_keys()
+            if migrated_keys:
+                logger.info(
+                    f"           已加密 {migrated_keys} 个 Provider api_key（明文 → 密文）"
+                )
+        except Exception as exc:
+            logger.warning(f"           Provider api_key 明文迁移失败（下次启动重试）：{exc}")
+
         logger.info("[startup 5/5] 启动完成，等待请求")
+
+        # 上次进程可能被 SIGKILL/OOM 干掉，shutdown 钩子没跑到：把残留进行中任务标 FAILED。
+        try:
+            from app.services.task_interrupt import (
+                DEFAULT_STARTUP_MESSAGE,
+                fail_interrupted_tasks,
+            )
+
+            n = fail_interrupted_tasks(reason=DEFAULT_STARTUP_MESSAGE)
+            if n:
+                logger.info(f"           启动清理：{n} 个中断任务已标 FAILED")
+        except Exception as exc:
+            logger.warning(f"           启动清理中断任务失败：{exc}")
+
     except Exception:
         logger.exception("[startup FAILED] 后端启动期异常，详见堆栈；容器会退出并由 restart 策略决定是否重试")
         raise
 
+    # 用量日志写入线程（启动序列之外，失败不影响主流程）
+    try:
+        usage_logger.start()
+    except Exception:
+        logger.warning("API Key 用量日志线程启动失败，用量统计将不可用", exc_info=True)
+
     yield
+
+    # 优雅退出：进行中的 BackgroundTasks 不会被续跑，先标 FAILED 避免前端空转。
+    try:
+        from app.services.task_interrupt import (
+            DEFAULT_SHUTDOWN_MESSAGE,
+            fail_interrupted_tasks,
+        )
+
+        fail_interrupted_tasks(reason=DEFAULT_SHUTDOWN_MESSAGE)
+    except Exception:
+        logger.warning("退出前标记中断任务失败", exc_info=True)
+
+    # 退出前把活动记录缓冲刷进库，别丢掉最后一段使用痕迹
+    try:
+        from app.db.engine import SessionLocal
+
+        db = SessionLocal()
+        try:
+            flush_all_activity(db)
+        finally:
+            db.close()
+    except Exception:
+        logger.warning("退出前刷新 API Key 活动记录失败", exc_info=True)
+    try:
+        usage_logger.stop()
+    except Exception:
+        pass
 
 app = create_app(lifespan=lifespan)
 
-# 允许的源：本地 web 端 + Tauri 桌面端 + 浏览器扩展（chrome/edge/firefox）
-# 用 regex 是因为 chrome-extension://<id> 的 id 在每次开发版加载时不固定
-# Tauri 2 不同平台 webview origin 不一样，必须全列：
-#   - macOS:   tauri://localhost  （自定义协议）
-#   - Windows: https://tauri.localhost  （Edge WebView2）
-#   - Linux:   http://tauri.localhost   （WebKitGTK）
-# 漏掉哪个都会导致桌面端 fetch 返回 200 但 browser 因为 CORS 拒绝读响应，
-# 表现为前端「连不上后端」但后端日志一片 200 OK。
-CORS_ORIGIN_REGEX = (
-    r"^chrome-extension://[a-z]+$"
-    r"|^moz-extension://.+$"
-    r"|^http://(localhost|127\.0\.0\.1)(:\d+)?$"
-    r"|^tauri://localhost$"
-    r"|^https?://tauri\.localhost$"
-)
+# CORS：本地 web + Tauri 始终放行；浏览器扩展默认只放行
+# OPENNOTER_CORS_EXTENSION_IDS 白名单（生产）。开发版 ID 不固定时再开
+# OPENNOTER_CORS_ALLOW_ANY_EXTENSION=true（切勿用于公网）。
+# Tauri 2 各平台 origin：tauri://localhost / https://tauri.localhost / http://tauri.localhost。
+from app.utils.cors_origins import build_cors_origin_regex
+
+CORS_ORIGIN_REGEX = build_cors_origin_regex()
 
 app.add_middleware(
     CORSMiddleware,
@@ -100,9 +167,96 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(GZipMiddleware, minimum_size=1000)
+# API Key 用量日志：读 request.state.api_key（鉴权依赖挂上去的），异步写明细
+app.add_middleware(ApiKeyUsageMiddleware)
 register_exception_handlers(app)
-app.mount(static_path, StaticFiles(directory=static_dir), name="static")
-app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
+
+
+# /static：**不走匿名 StaticFiles**，改为鉴权路由（R1）。
+#
+# 背景：截图（含视频画面）属于用户笔记内容。原先 app.mount(StaticFiles)
+# 意味着任何人只要猜到 URL 就能读他人的截图；虽然文件名带 UUID 难猜，
+# 但 URL 会出现在笔记 markdown（分享、导出、日志）里，不是可靠访问控制。
+#
+# 归属判定策略（渐进式，避免老数据全 404）：
+#   - 新格式 `screenshots/<task_id>/xxx.jpg`：从路径取 task_id，复用
+#     _can_access_task 做归属校验
+#   - 旧格式 `screenshots/xxx.jpg`（历史遗留，文件名不含 task_id）：
+#     无法反查归属，按「无归属」放行（与历史行为一致）
+#   - `AUTH_ENFORCE=false`（单机自托管）时一律放行
+@app.get("/static/{file_path:path}")
+async def serve_static(file_path: str, request: Request):
+    from fastapi import HTTPException
+    from fastapi.responses import FileResponse
+
+    from app.db.engine import SessionLocal
+    from app.services.auth import auth_enforced, get_optional_user
+    from app.routers.note import _can_access_task
+    from app.utils.path_safety import resolve_under_dir
+
+    # 强制认证时未登录 → 401
+    db = SessionLocal()
+    try:
+        user = get_optional_user(request, db)
+    finally:
+        db.close()
+
+    try:
+        target = resolve_under_dir(Path(static_dir), file_path)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="文件不存在")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="文件不存在")
+
+    if auth_enforced():
+        # 从路径推断 task_id：screenshots/<task_id>/<name>.<ext>
+        parts = Path(file_path).parts
+        task_id = None
+        if len(parts) >= 3 and parts[0] == "screenshots":
+            candidate = parts[1]
+            # task_id 形态：UUID 或简单标识；文件名本身（含 .jpg）不是 task_id
+            if "." not in candidate:
+                task_id = candidate
+        if task_id is not None and not _can_access_task(task_id, user):
+            raise HTTPException(status_code=403, detail="无权访问该图片")
+
+    return FileResponse(target)
+
+
+# /uploads 不再用匿名 StaticFiles：统一走鉴权下载，并强制路径落在 uploads 根内。
+# AUTH_ENFORCE=false 时匿名仍可读（与本地上传→生成链路一致）；开启后需登录。
+@app.get("/uploads/{file_path:path}")
+async def serve_upload(file_path: str, request: Request):
+    from fastapi import HTTPException
+    from fastapi.responses import FileResponse
+
+    from app.db.engine import SessionLocal
+    from app.services.auth import get_optional_user
+    from app.utils.upload_paths import resolve_under_uploads
+
+    from app.services.auth import auth_enforced
+    from app.utils.upload_paths import can_read_upload
+
+    db = SessionLocal()
+    try:
+        # 复用 get_optional_user：强制认证时未登录 → 401
+        user = get_optional_user(request, db)
+    finally:
+        db.close()
+
+    try:
+        target = resolve_under_uploads(f"/uploads/{file_path}")
+    except ValueError:
+        raise HTTPException(status_code=404, detail="文件不存在")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="文件不存在")
+
+    # 归属校验（R2）：登录只解决「你是谁」，不解决「这个文件是不是你的」。
+    # 历史文件没有侧车，按无归属放行，避免老部署全部 404。
+    if not can_read_upload(target, user, auth_enforced=auth_enforced()):
+        raise HTTPException(status_code=403, detail="无权访问该文件")
+
+    return FileResponse(target)
 
 
 

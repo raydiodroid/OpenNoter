@@ -39,9 +39,37 @@ def _stub(name, **attrs):
     return module
 
 
+def _load_real(name, path, **overrides):
+    """把真实模块按路径加载进 sys.modules（不触发 app 包初始化）。
+
+    这些纯 Python 模块（base / errors）能独立加载，就没必要造假：造假会让被测
+    代码看到与生产不同的行为，也逼迫生产代码为假环境写兼容分支。
+    """
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"{path} spec not found")
+    module = importlib.util.module_from_spec(spec)
+    # 必须先注册进 sys.modules 再 exec：limits.py 用了 @dataclass，而 dataclasses
+    # 在解析字段类型时会 `sys.modules[cls.__module__].__dict__`，未注册就 AttributeError。
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    for key, value in overrides.items():
+        setattr(module, key, value)
+    return module
+
+
 class _Downloader:
+    """最小可用的 Downloader 替身。
+
+    只替换「真实基类里会碰磁盘/data 目录」的部分；`_resolve_output_dir` 必须提供，
+    否则被测代码走的是 stub 才有的降级分支，测不到生产行为。
+    """
+
     def __init__(self):
         self.cache_data = "/tmp"
+
+    def _resolve_output_dir(self, output_dir):
+        return output_dir or self.cache_data
 
 
 class _AudioDownloadResult:
@@ -51,17 +79,27 @@ class _AudioDownloadResult:
 
 def _load_youtube_downloader():
     """Load the module with its app-level dependencies stubbed out."""
+    # 只 stub 真正的第三方/平台依赖，让被测模块拿到真实的
+    # app.downloaders.base / errors / limits —— 它们是纯 Python 模块，
+    # 可以脱离 app 包直接按路径加载，没必要造假。
     _stub("app")
     _stub("app.downloaders")
     _stub("app.models")
     _stub("app.services")
     _stub("app.utils")
-    _stub(
+    # base.py 只依赖一个枚举（DownloadQuality），把它 stub 掉即可让真实的
+    # base.py 跑起来——这样被测代码看到的是生产实现，而不是手工假模块。
+    _stub("app.enmus")
+    _stub("app.enmus.note_enums", DownloadQuality=str)
+    _load_real(
         "app.downloaders.base",
+        ROOT / "app" / "downloaders" / "base.py",
         Downloader=_Downloader,
-        DownloadQuality=str,
-        YDL_RETRY_OPTS={"retries": 3, "fragment_retries": 3, "socket_timeout": 30},
     )
+    _load_real("app.downloaders.errors", ROOT / "app" / "downloaders" / "errors.py")
+    _load_real("app.downloaders.limits", ROOT / "app" / "downloaders" / "limits.py")
+    _load_real("app.services.cookie_policy", ROOT / "app" / "services" / "cookie_policy.py")
+    _load_real("app.services.cookie_manager", ROOT / "app" / "services" / "cookie_manager.py")
     _stub("app.downloaders.youtube_subtitle", YouTubeSubtitleFetcher=object)
     _stub("app.models.notes_model", AudioDownloadResult=_AudioDownloadResult)
     _stub("app.models.transcriber_model", TranscriptResult=object)

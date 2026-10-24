@@ -41,18 +41,27 @@ class TranscriberConfigManager:
                 "whisper_model_size",
                 os.getenv("WHISPER_MODEL_SIZE", "tiny"),
             ),
+            # 在线转写（groq 槽位）使用的模型名。允许在界面上改，
+            # 缺省回落到环境变量，兼容老的 .env 配置。
+            "groq_model": data.get(
+                "groq_model",
+                os.getenv("GROQ_TRANSCRIBER_MODEL", ""),
+            ),
         }
 
     def update_config(
         self,
         transcriber_type: str,
         whisper_model_size: Optional[str] = None,
+        groq_model: Optional[str] = None,
     ) -> Dict[str, Any]:
         """更新转写器配置并持久化。"""
         data = self._read()
         data["transcriber_type"] = transcriber_type
         if whisper_model_size is not None:
             data["whisper_model_size"] = whisper_model_size
+        if groq_model is not None:
+            data["groq_model"] = groq_model
         self._write(data)
         return self.get_config()
 
@@ -84,24 +93,29 @@ class TranscriberConfigManager:
         if ttype not in ("fast-whisper", "mlx-whisper"):
             return result  # 在线引擎无需本地模型
 
-        # 延迟 import 避免与 routers.config 的循环依赖；只取纯函数，不触发路由副作用
+        # 延迟 import 避免与 routers.config 的循环依赖；只取纯函数，不触发路由副作用。
+        #
+        # 注意：下载状态必须从 app.transcriber.model_download_state 取。
+        # config.py 里的 `_downloading` 字典在 commit 4a87c5b 被 dl_state 模块整体取代，
+        # 继续 import 会抛 ImportError → 落到下面的「保守放行」分支 →
+        # 门禁对「模型未下载」恒返回 ready=True，等于没拦（审计 P0-4）。
         try:
             from app.routers.config import (
                 _check_whisper_model_exists,
                 _check_mlx_whisper_model_exists,
-                _downloading,
             )
+            from app.transcriber import model_download_state as dl_state
         except Exception as e:
-            # 拿不到检查函数时保守放行，不要把用户卡死
+            # 拿不到检查函数时保守放行，不要把用户卡死；原因如实带出，便于排查
             result["reason"] = f"无法检查模型状态: {e}"
             return result
 
         if ttype == "fast-whisper":
             downloaded = _check_whisper_model_exists(size, "whisper")
-            downloading = _downloading.get(size) == "downloading"
+            downloading = dl_state.is_downloading(size)
         else:  # mlx-whisper
             downloaded = _check_mlx_whisper_model_exists(size)
-            downloading = _downloading.get(f"mlx-{size}") == "downloading"
+            downloading = dl_state.is_downloading(f"mlx-{size}")
 
         result["downloading"] = downloading
         if downloaded:

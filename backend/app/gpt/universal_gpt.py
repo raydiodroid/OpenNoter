@@ -24,6 +24,14 @@ class UniversalGPT(GPT):
         self.screenshot = False
         self.link = False
         self.max_request_bytes = int(os.getenv("OPENAI_MAX_REQUEST_BYTES", str(45 * 1024 * 1024)))
+        self.max_images_per_request = max(1, int(os.getenv("OPENAI_MAX_IMAGES_PER_REQUEST", "1")))
+        # 输出上限：不设时由服务端决定（vLLM 会放宽到 max_model_len - prompt），
+        # 单次请求可能生成数千 token；设置后能显著压缩总耗时与费用。
+        max_tokens_raw = os.getenv("OPENAI_MAX_TOKENS", "").strip()
+        self.max_tokens = int(max_tokens_raw) if max_tokens_raw else None
+        # 推理型模型（如 vLLM 上的 qwen3）默认可能开启思考链，思考内容不进正文却计入耗时，
+        # 这里允许显式关闭；仅对支持的推理后端生效，不支持的会降级重试。
+        self.disable_thinking = os.getenv("OPENAI_DISABLE_THINKING", "").strip().lower() in ("1", "true", "yes")
         self.checkpoint_dir = Path(os.getenv("NOTE_OUTPUT_DIR", "note_results"))
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
         # 初始化时缓存重试配置，避免每次请求重复读取环境变量
@@ -196,22 +204,62 @@ class UniversalGPT(GPT):
             or "only the default" in raw
         )
 
+    def _optional_request_kwargs(self) -> dict:
+        """输出上限与思考开关：仅在显式配置时下发，避免改变其他后端的默认行为。"""
+        kwargs = {}
+        if self.max_tokens:
+            kwargs["max_tokens"] = self.max_tokens
+        if self.disable_thinking:
+            # vLLM 通过 chat_template_kwargs 控制思考链，经 extra_body 透传
+            kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": False}}
+        return kwargs
+
+    @staticmethod
+    def _is_param_rejection(exc: Exception) -> bool:
+        """后端不接受某个请求参数时返回 400/422，此时允许就地降级重试。"""
+        status = getattr(exc, "status_code", None) or getattr(exc, "status", None)
+        if status in {400, 422}:
+            return True
+        raw = str(exc).lower()
+        return "invalid_request_error" in raw or "unrecognized" in raw or "unexpected keyword" in raw
+
     def _do_create(self, messages: list):
-        """单次调用。如果模型拒绝自定义 temperature，就地去掉该参数再试一次
-        （不消耗外层的重试次数预算），仍失败则把异常抛给外层重试逻辑。"""
+        """单次调用。可选参数被后端拒绝时就地降级，不消耗外层重试次数预算：
+        temperature 不被支持 → 去掉；max_tokens/思考开关不被支持 → 去掉。"""
+        optional = self._optional_request_kwargs()
         try:
             return self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
                 temperature=self.temperature,
+                **optional,
             )
         except Exception as exc:
             if self._is_temperature_unsupported_error(exc):
                 print(f"[universal_gpt] 模型 {self.model} 不支持自定义 temperature，改用默认值重试")
+                if optional:
+                    try:
+                        return self.client.chat.completions.create(
+                            model=self.model,
+                            messages=messages,
+                            **optional,
+                        )
+                    except Exception:
+                        pass
                 return self.client.chat.completions.create(
                     model=self.model,
                     messages=messages,
                 )
+            if optional and self._is_param_rejection(exc):
+                print(f"[universal_gpt] 模型 {self.model} 不接受 max_tokens/思考开关，降级重试")
+                try:
+                    return self.client.chat.completions.create(
+                        model=self.model,
+                        messages=messages,
+                        temperature=self.temperature,
+                    )
+                except Exception:
+                    pass
             raise
 
     def _chat_completion_create(self, messages: list):
@@ -276,7 +324,12 @@ class UniversalGPT(GPT):
         def message_builder(segments, image_urls, **kwargs):
             return self.create_messages(segments, video_img_urls=image_urls, **kwargs)
 
-        chunker = RequestChunker(message_builder, self.max_request_bytes, self._estimate_messages_bytes)
+        chunker = RequestChunker(
+            message_builder,
+            self.max_request_bytes,
+            self._estimate_messages_bytes,
+            max_images_per_chunk=self.max_images_per_request,
+        )
 
         try:
             chunks = chunker.chunk(

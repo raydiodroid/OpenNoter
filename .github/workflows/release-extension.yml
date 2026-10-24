@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: BillNote_extension
+        working-directory: OpenNoter_extension
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -33,7 +33,7 @@ jobs:
         with:
           node-version: 20
           cache: pnpm
-          cache-dependency-path: BillNote_extension/pnpm-lock.yaml
+          cache-dependency-path: OpenNoter_extension/pnpm-lock.yaml
 
       - name: Install
         run: pnpm install --frozen-lockfile
@@ -62,18 +62,18 @@ jobs:
       - name: Rename artifacts with version suffix
         run: |
           VERSION="${GITHUB_REF#refs/tags/v}"
-          [ -f extension.zip ] && mv extension.zip "bilinote-extension-${VERSION}.zip"
-          [ -f extension.xpi ] && mv extension.xpi "bilinote-extension-${VERSION}.xpi"
-          [ -f extension.crx ] && mv extension.crx "bilinote-extension-${VERSION}.crx"
+          [ -f extension.zip ] && mv extension.zip "opennoter-extension-${VERSION}.zip"
+          [ -f extension.xpi ] && mv extension.xpi "opennoter-extension-${VERSION}.xpi"
+          [ -f extension.crx ] && mv extension.crx "opennoter-extension-${VERSION}.crx"
           ls -la *.zip *.xpi *.crx 2>/dev/null || true
 
       - name: Attach to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            BillNote_extension/bilinote-extension-*.zip
-            BillNote_extension/bilinote-extension-*.xpi
-            BillNote_extension/bilinote-extension-*.crx
+            OpenNoter_extension/opennoter-extension-*.zip
+            OpenNoter_extension/opennoter-extension-*.xpi
+            OpenNoter_extension/opennoter-extension-*.crx
           fail_on_unmatched_files: false
           generate_release_notes: false
 
@@ -86,7 +86,7 @@ jobs:
 #      - uses: actions/download-artifact@v4
 #      - uses: mnao305/chrome-extension-upload@v5
 #        with:
-#          file-path: BillNote_extension/bilinote-extension-${{ github.ref_name }}.zip
+#          file-path: OpenNoter_extension/opennoter-extension-${{ github.ref_name }}.zip
 #          extension-id: ${{ secrets.CHROME_EXTENSION_ID }}
 #          client-id: ${{ secrets.CHROME_CLIENT_ID }}
 #          client-secret: ${{ secrets.CHROME_CLIENT_SECRET }}
@@ -99,7 +99,7 @@ jobs:
 #      - uses: wdzeng/edge-addon@v2
 #        with:
 #          product-id: ${{ secrets.EDGE_PRODUCT_ID }}
-#          zip-path: BillNote_extension/bilinote-extension-${{ github.ref_name }}.zip
+#          zip-path: OpenNoter_extension/opennoter-extension-${{ github.ref_name }}.zip
 #          client-id: ${{ secrets.EDGE_CLIENT_ID }}
 #          api-key: ${{ secrets.EDGE_API_KEY }}
 #
@@ -110,6 +110,6 @@ jobs:
 #      - uses: trmcnvn/firefox-addon@v3
 #        with:
 #          uuid: ${{ secrets.FIREFOX_ADDON_UUID }}
-#          xpi: BillNote_extension/bilinote-extension-${{ github.ref_name }}.xpi
+#          xpi: OpenNoter_extension/opennoter-extension-${{ github.ref_name }}.xpi
 #          api-key: ${{ secrets.FIREFOX_API_KEY }}
 #          api-secret: ${{ secrets.FIREFOX_API_SECRET }}

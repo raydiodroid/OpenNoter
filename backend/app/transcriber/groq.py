@@ -18,6 +18,23 @@ def compress_audio(input_path: str, target_bitrate='64k') -> str:
     ffmpeg.input(input_path).output(output_path, audio_bitrate=target_bitrate).run(quiet=True, overwrite_output=True)
     return output_path
 
+
+def _resolve_groq_model() -> str:
+    """在线转写用的模型名。
+
+    优先取「音频转写配置」页保存到 config/transcriber.json 的值，
+    回落到环境变量 GROQ_TRANSCRIBER_MODEL，保证老部署无需改动。
+    """
+    try:
+        from app.services.transcriber_config_manager import TranscriberConfigManager
+
+        value = TranscriberConfigManager().get_config().get("groq_model")
+        if value:
+            return value
+    except Exception:
+        pass
+    return os.getenv("GROQ_TRANSCRIBER_MODEL", "")
+
 class GroqTranscriber(Transcriber, ABC):
 
 
@@ -44,7 +61,7 @@ class GroqTranscriber(Transcriber, ABC):
         with open(filename, "rb") as file:
             transcription = client.audio.transcriptions.create(
                 file=(filename, file.read()),
-                model=os.getenv('GROQ_TRANSCRIBER_MODEL'),
+                model=_resolve_groq_model(),
                 response_format="verbose_json",
             )
             print(transcription.text)

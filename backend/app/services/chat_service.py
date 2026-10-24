@@ -1,4 +1,6 @@
 import json
+import os
+import time
 from typing import Optional
 
 from app.gpt.gpt_factory import GPTFactory
@@ -9,6 +11,16 @@ from app.services.chat_tools import TOOLS, execute_tool
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+# 单次 chat/completions 的 HTTP 超时（秒）。前端 axios 是 60s，这里取 45s，
+# 让后端先超时并返回结构化错误，而不是前端先断开、后端继续烧 token。
+CHAT_REQUEST_TIMEOUT = float(os.getenv("CHAT_REQUEST_TIMEOUT_SECONDS", "45"))
+# 整条 `/chat/ask` 的时间预算（秒）。最多 3 轮工具调用 + 1 次兜底 = 4 次
+# create，所以这里按「单次超时 × 1.5」左右给，避免 4 次全用满。
+CHAT_TOTAL_TIMEOUT = float(os.getenv("CHAT_TOTAL_TIMEOUT_SECONDS", "90"))
+# 单次问答最多触发几次工具调用。3 轮 × 每次 1 个工具，足够覆盖
+# 「先查元信息 → 再查原文 → 最后作答」的典型路径。
+CHAT_MAX_TOOL_ROUNDS = int(os.getenv("CHAT_MAX_TOOL_ROUNDS", "3"))
 
 SYSTEM_PROMPT = """你是一个视频笔记问答助手。你拥有以下能力：
 
@@ -66,6 +78,40 @@ def _build_sources(chunks: list[dict]) -> list[dict]:
     return sources
 
 
+def _sanitize_history(history: list[dict]) -> list[dict]:
+    """把客户端传来的历史消息收敛成「最多 20 条、只含 user/assistant、按轮成对」。
+
+    ## 三个历史包袱，一次收敛掉
+
+    1. **role 注入**：`/chat/ask` 的 `ChatMessage.role` 已改成枚举，但这里是
+       第二道防线 —— 内部调用方/未来新增端点也可能传裸 dict。
+    2. **重复当前问题**：前端在请求失败后会留下「没有回答的 user 消息」，
+       用户重问同一句时 history 里就带着它，后端再 append 一次 → 同一句
+       question 在上下文里出现两遍，模型容易自我复述。
+    3. **按条截断会切出孤立 assistant**：`history[-20:]` 可能从一条 assistant
+       开始，导致「助手先说话」的异常序列；按轮对齐更稳。
+
+    只保留最后 20 条，且若截断后首条是 assistant 则丢弃它（保证从 user 开始）。
+    """
+    cleaned: list[dict] = []
+    for msg in history or []:
+        if not isinstance(msg, dict):
+            continue
+        role = msg.get("role")
+        content = msg.get("content")
+        if role not in ("user", "assistant") or not isinstance(content, str):
+            continue
+        if not content.strip():
+            continue
+        cleaned.append({"role": role, "content": content})
+
+    trimmed = cleaned[-20:]
+    # 截断后若以 assistant 开头，丢掉它 —— 对话必须从 user 开始
+    while trimmed and trimmed[0]["role"] == "assistant":
+        trimmed.pop(0)
+    return trimmed
+
+
 def chat(
     task_id: str,
     question: str,
@@ -91,8 +137,7 @@ def chat(
     system_msg = SYSTEM_PROMPT.format(context=context)
     messages = [{"role": "system", "content": system_msg}]
 
-    for msg in history[-20:]:
-        messages.append({"role": msg["role"], "content": msg["content"]})
+    messages.extend(_sanitize_history(history))
 
     messages.append({"role": "user", "content": question})
 
@@ -108,19 +153,32 @@ def chat(
         provider=provider["type"],
         name=provider["name"],
     )
-    gpt = GPTFactory.from_config(config)
+    # 显式短超时 + 关闭 SDK 自动重试：这是「用户在前台等」的接口，
+    # 不能用 600s × 3 次的默认策略（最坏 2 小时，且会占满线程池）。
+    gpt = GPTFactory.from_config(
+        config, timeout=CHAT_REQUEST_TIMEOUT, max_retries=0,
+    )
 
     logger.info(f"Chat: task_id={task_id}, model={model_name}")
 
-    # 4. Tool calling 循环（最多 3 轮）
-    max_rounds = 3
-    for round_i in range(max_rounds):
-        response = gpt.client.chat.completions.create(
+    deadline = time.monotonic() + CHAT_TOTAL_TIMEOUT
+
+    def _remaining() -> float:
+        return max(1.0, deadline - time.monotonic())
+
+    def _create(**extra):
+        """带剩余预算的单次 create。"""
+        return gpt.client.chat.completions.create(
             model=gpt.model,
             messages=messages,
-            tools=TOOLS,
             temperature=0.7,
+            timeout=_remaining(),
+            **extra,
         )
+
+    # 4. Tool calling 循环
+    for round_i in range(CHAT_MAX_TOOL_ROUNDS):
+        response = _create(tools=TOOLS)
 
         msg = response.choices[0].message
 
@@ -138,7 +196,7 @@ def chat(
             except json.JSONDecodeError:
                 fn_args = {}
 
-            logger.info(f"Tool call [{round_i+1}/{max_rounds}]: {fn_name}({fn_args})")
+            logger.info(f"Tool call [{round_i+1}/{CHAT_MAX_TOOL_ROUNDS}]: {fn_name}({fn_args})")
 
             result = execute_tool(task_id, fn_name, fn_args)
 
@@ -148,11 +206,18 @@ def chat(
                 "content": result,
             })
 
-    # 超过最大轮次，做最后一次不带 tools 的调用
-    response = gpt.client.chat.completions.create(
-        model=gpt.model,
-        messages=messages,
-        temperature=0.7,
-    )
+    # 超过最大轮次，做最后一次不带 tools 的调用。
+    # 注意仍带着前面几轮的 assistant.tool_calls + tool 结果 —— 部分兼容端点
+    # 会因此报 400（消息序列「有 tool 结果但没有 tools 声明」）。这类失败不该
+    # 变成 500，降级为「把已拿到的信息拼成答案」的兜底。
+    try:
+        response = _create()
+    except Exception as exc:  # noqa: BLE001 - 兜底失败时返回结构化错误
+        logger.warning(f"工具轮次耗尽后的收尾调用失败，返回降级结果: {exc}")
+        return {
+            "answer": "（这轮对话检索了较多原文，已达工具调用上限但未能生成最终回答，"
+                      "请把问题问得更具体一些再试。）",
+            "sources": sources,
+        }
 
     return {"answer": response.choices[0].message.content or "", "sources": sources}

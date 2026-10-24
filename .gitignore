@@ -9,7 +9,7 @@ lerna-debug.log*
 .DS_Store
 # Diagnostic reports (https://nodejs.org/api/report.html)
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
-BiliNote/pnpm-lock.yaml
+OpenNoter/pnpm-lock.yaml
 # Runtime data
 pids
 *.pid
@@ -62,7 +62,7 @@ web_modules/
 .rts2_cache_cjs/
 .rts2_cache_es/
 .rts2_cache_umd/
-.BiliNote-dev/*
+.OpenNoter-dev/*
 # Optional REPL history
 .node_repl_history
 
@@ -309,6 +309,7 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 /backend/data/*
+!/backend/data/.gitkeep
 /backend/static/*
 /backend/note_tasks.db
 /backend/bin/
@@ -316,14 +317,21 @@ cython_debug/
 /backend/note_results
 /backend/models
 /backend/.idea/*
+/backend/open_noter.db
+# 旧名保留忽略：改名后存量部署仍可能产生该文件，不该进版本库
 /backend/bili_note.db
 /backend/uploads/*
 /backend/.idea/*
 /backend/config/*
 /backend/vector_db/
-/BiliNote_frontend/.idea/*
-/BiliNote_frontend/src-tauri/bin/
+/OpenNoter_frontend/.idea/*
+/OpenNoter_frontend/src-tauri/bin/
 
 # FFmpeg 构建文件（不应该提交到仓库）
+# 原因：官方预编译二进制多为 GPL 构建，提交进 MIT 仓库会造成许可证污染，
+# 且体积达数百 MB。用 `python scripts/fetch_ffmpeg.py` 按需下载到本地。
 ffmpeg*/
 ffmpg*/
+/vendor/ffmpeg/
+/vendor/*.zip
+/vendor/*.tar.xz
