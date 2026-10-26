@@ -118,6 +118,7 @@ def chat(
     history: list[dict],
     provider_id: str,
     model_name: str,
+    user_id: int | None = None,
 ) -> dict:
     """
     RAG + Tool Calling 问答。
@@ -142,16 +143,30 @@ def chat(
     messages.append({"role": "user", "content": question})
 
     # 3. 获取 LLM client
-    provider = ProviderService.get_provider_by_id(provider_id)
-    if not provider:
-        raise ValueError(f"未找到模型供应商: {provider_id}")
+    #
+    # BYOK：统一走 credential_resolver（唯一「用谁的 key」入口）。
+    # ``provider_id`` 形如 ``own:llm`` 时表示用当前用户自带凭据。
+    from app.services.credential_resolver import resolve as resolve_credential
+
+    capability = "llm"
+    site_provider_id = provider_id
+    if provider_id and provider_id.startswith("own:"):
+        capability = provider_id.split(":", 1)[1] or "default"
+        site_provider_id = None
+
+    cred = resolve_credential(
+        user_id,
+        capability,
+        model_name=model_name,
+        site_provider_id=site_provider_id,
+    )
 
     config = ModelConfig(
-        api_key=provider["api_key"],
-        base_url=provider["base_url"],
-        model_name=model_name,
-        provider=provider["type"],
-        name=provider["name"],
+        api_key=cred.api_key,
+        base_url=cred.base_url,
+        model_name=cred.model_name or model_name,
+        provider=cred.source,
+        name=cred.source,
     )
     # 显式短超时 + 关闭 SDK 自动重试：这是「用户在前台等」的接口，
     # 不能用 600s × 3 次的默认策略（最坏 2 小时，且会占满线程池）。
@@ -159,7 +174,10 @@ def chat(
         config, timeout=CHAT_REQUEST_TIMEOUT, max_retries=0,
     )
 
-    logger.info(f"Chat: task_id={task_id}, model={model_name}")
+    logger.info(
+        f"Chat: task_id={task_id}, model={cred.model_name or model_name}, "
+        f"source={cred.source}"
+    )
 
     deadline = time.monotonic() + CHAT_TOTAL_TIMEOUT
 
