@@ -110,6 +110,38 @@ async def lifespan(app: FastAPI):
         except Exception as exc:
             logger.warning(f"           启动清理中断任务失败：{exc}")
 
+        # F49：启动一个后台协程，定期清理「运行期」产生的僵尸任务。
+        #
+        # 启动时的 fail_interrupted_tasks 只覆盖「进程正常重启」。若进程被
+        # kill -9 / OOM killer 杀掉，后来的那个进程在启动时确实能清掉旧僵尸；
+        # 但**同一个进程运行期间**也可能产生僵尸（例如某个任务的工作线程
+        # 因未捕获异常静默死掉，而状态文件没被更新）—— 那种只有定期扫描能发现。
+        try:
+            import asyncio
+
+            async def _stale_task_reaper():
+                interval = int(os.getenv("TASK_REAP_INTERVAL_SECONDS", "300"))
+                # 先等一会儿再开始扫：刚启动时线程池是空的，
+                # 立刻扫会把「刚提交、还没来得及登记」的任务误判成僵尸。
+                await asyncio.sleep(min(60, interval))
+                while True:
+                    try:
+                        from app.services.task_interrupt import reap_stale_tasks
+
+                        stats = await asyncio.to_thread(
+                            reap_stale_tasks, dry_run=False,
+                        )
+                        if stats.get("reaped"):
+                            logger.info(f"           僵尸任务清理：{stats['reaped']} 个")
+                    except Exception as exc:  # noqa: BLE001 - 清理失败不能打死整个循环
+                        logger.warning(f"           僵尸任务清理失败：{exc}")
+                    await asyncio.sleep(interval)
+
+            app.state.stale_reaper_task = asyncio.create_task(_stale_task_reaper())
+            logger.info("           已启动僵尸任务定期清理（默认每 300 秒）")
+        except Exception as exc:  # noqa: BLE001 - 起不来也不该让服务启动失败
+            logger.warning(f"           启动僵尸任务清理失败（不影响主服务）：{exc}")
+
     except Exception:
         logger.exception("[startup FAILED] 后端启动期异常，详见堆栈；容器会退出并由 restart 策略决定是否重试")
         raise
@@ -193,31 +225,106 @@ async def serve_static(file_path: str, request: Request):
     from app.services.auth import auth_enforced, get_optional_user
     from app.routers.note import _can_access_task
     from app.utils.path_safety import resolve_under_dir
+    from app.utils.static_signing import (
+        TOKEN_PARAM,
+        has_token,
+        static_resource_key,
+        verify_resource_token,
+        verify_token,
+    )
 
-    # 强制认证时未登录 → 401
+    # 从路径推断 task_id：screenshots/<task_id>/<name>.<ext>
+    #
+    # ⚠️ 必须基于**解析后的真实路径**，不能用 URL 里的字面量。
+    #
+    # 历史实现用 `Path(file_path).parts[1]` 取 task_id，但真正的文件读取走
+    # `resolve_under_dir()`（会折叠 `..`）。两者不是同一个对象，于是出现
+    # 授权对象 ≠ 读取对象的经典绕过：
+    #
+    #     /static/screenshots/A/%2e%2e/B/b.jpg?t=<A 的令牌>
+    #       → parts[1] = "A"        ⇒ 令牌校验通过（授权给 A）
+    #       → resolve 后指向 B/b.jpg ⇒ 实际读到 B 的文件
+    #
+    # 明文 `..` 会被 Starlette 规范化掉，但 **URL 编码的 `%2e%2e`** 会原样
+    # 传进来，再由 `Path.resolve()` 折叠 —— 实测可读其它 task 的截图，
+    # 甚至用单张令牌读 `static/` 根下的任意文件。
+    #
+    # 修法：先 resolve（越界直接 404），再从**真实路径**相对 static_root
+    # 反推 task_id。这样授权对象与读取对象必然一致，且签名模式与 Cookie 模式
+    # 同时修好（旧逻辑在 F9 之前就有同样的不一致，只是危害面小）。
+    from pathlib import Path as _Path
+
+    static_root = _Path(static_dir).resolve()
+    try:
+        target = resolve_under_dir(static_root, file_path)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="文件不存在")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="文件不存在")
+
+    path_task_id = None
+    # 令牌绑定对象：("task", task_id) 或 ("cover", filename) 或 None（不需令牌）
+    resource_spec = None
+    try:
+        rel_parts = target.relative_to(static_root).parts
+    except ValueError:
+        raise HTTPException(status_code=404, detail="文件不存在")
+
+    # 一律用**真实相对路径**反推，保证与上面 resolve 出来的 target 完全一致。
+    #
+    # 注意要拼回 `/static/` 前缀：rel_parts 是 target 相对 static_root 的段
+    # （形如 ("screenshots","<task>","x.jpg")），而 static_resource_key()
+    # 认的是完整 URL 路径（`/static/screenshots/...`）。漏了这层前缀会让
+    # 所有令牌都解析不出绑定对象 → 正确令牌也被判 403。
+    rel_path = "/static/" + "/".join(rel_parts)
+    if len(rel_parts) >= 3 and rel_parts[0] == "screenshots":
+        candidate = rel_parts[1]
+        # task_id 形态：UUID 或简单标识；文件名本身（含 .jpg）不是 task_id
+        if "." not in candidate:
+            path_task_id = candidate
+    # 静态路径 → 令牌绑定键（截图按 task、封面按文件名）
+    resource_spec = static_resource_key(rel_path)
+
+    # ------------------------------------------------------------------
+    # 1) 先验令牌（必须在 get_optional_user **之前**）
+    # ------------------------------------------------------------------
+    # 为什么顺序不能反：`<img src>` 是浏览器发起的裸 GET，**不带 Cookie 也不带
+    # Authorization**。而 `get_optional_user` 在 AUTH_ENFORCE 下遇到无凭据会直接
+    # raise 401 —— 如果先调它，Tauri/扩展的截图请求会先吃 401，令牌校验**永远
+    # 轮不到执行**。那样表面上看"已经加了签名"，实际截图依然全挂。
+    #
+    # 令牌语义（见 app/utils/static_signing.py）：
+    #   - 是 per-task 的**长期**令牌，不含时间成分。因为截图 URL 在生成笔记时
+    #     就被写进 markdown 并持久化（note_results/*.json + 前端 IndexedDB），
+    #     带过期的签名会让历史笔记的截图永久破图。
+    #   - 拿到 URL 即可读该 task 的截图（能力凭证），与 task_id 的暴露面相当。
+    token_present = has_token(request.query_params)
+    if token_present:
+        supplied = request.query_params.get(TOKEN_PARAM, "")
+        # target 已在上方 resolve 并校验过存在性（基于真实路径反推），
+        # 这里不再重复 resolve —— 重复一次只会让「授权对象 vs 读取对象」再次分叉。
+        if resource_spec is not None:
+            resource, key_value = resource_spec
+            if verify_resource_token(resource, key_value, supplied):
+                return FileResponse(target)
+        # 带了令牌但不匹配/已停用 —— 用 403 而不是 401。
+        #
+        # 401 会触发前端 lib/api.ts 的"跳登录页"拦截器：用户只是打开一篇旧笔记
+        # 看截图，就被踢下线，是极难排查的体验事故。403 会被当作普通业务错误
+        # （图片位置显示裂图），不影响登录态。
+        raise HTTPException(status_code=403, detail="图片链接无效或已过期")
+
+    # ------------------------------------------------------------------
+    # 2) 没带令牌 → 走原有的凭据鉴权（Cookie / API-Key / Bearer）
+    # ------------------------------------------------------------------
     db = SessionLocal()
     try:
         user = get_optional_user(request, db)
     finally:
         db.close()
 
-    try:
-        target = resolve_under_dir(Path(static_dir), file_path)
-    except ValueError:
-        raise HTTPException(status_code=404, detail="文件不存在")
-    if not target.is_file():
-        raise HTTPException(status_code=404, detail="文件不存在")
-
     if auth_enforced():
-        # 从路径推断 task_id：screenshots/<task_id>/<name>.<ext>
-        parts = Path(file_path).parts
-        task_id = None
-        if len(parts) >= 3 and parts[0] == "screenshots":
-            candidate = parts[1]
-            # task_id 形态：UUID 或简单标识；文件名本身（含 .jpg）不是 task_id
-            if "." not in candidate:
-                task_id = candidate
-        if task_id is not None and not _can_access_task(task_id, user):
+        if path_task_id is not None and not _can_access_task(path_task_id, user):
             raise HTTPException(status_code=403, detail="无权访问该图片")
 
     return FileResponse(target)
