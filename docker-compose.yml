@@ -34,8 +34,18 @@ services:
     # 用 unless-stopped 而非 on-failure:N，避免任何短暂崩溃把容器永久打死后
     # 再也接收不到用户修过的 .env。手动 docker-compose stop 仍可正常停下。
     restart: unless-stopped
+    # 探活打 /api/sys_check（轻量），**不要**打 /api/sys_health。
+    #
+    # 原因（F54）：`/api/sys_health` 会调 `ensure_ffmpeg_or_raise()`，
+    # 而它内部执行 `subprocess.run(["ffmpeg", "-version"])` —— 也就是
+    # **每 30 秒 fork 一个 ffmpeg 子进程**。在 `mem_limit: 4g` + Whisper
+    # 占满内存时，这个额外进程可能成为 OOM 的最后一击。
+    #
+    # `/api/sys_check` 只返回 200 + `{code:0}`（不碰 ffmpeg / DB），
+    # 它才是「进程还活着吗」该问的问题。要查细项请打开设置页
+    # 或直接 `curl /api/sys_health`（此时按需触发，而不是常驻轮询）。
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:${BACKEND_PORT}/api/sys_health"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:${BACKEND_PORT}/api/sys_check"]
       interval: 30s
       timeout: 10s
       retries: 3

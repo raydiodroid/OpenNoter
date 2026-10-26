@@ -270,6 +270,46 @@ engine = create_engine(
 # 权衡：WAL 会在库旁多出 -wal / -shm 两个文件；备份时要一起带上
 # （或用 `VACUUM INTO` / `.backup` 做一致性快照，见 README）。
 if DATABASE_URL.startswith("sqlite"):
+    # 从 DATABASE_URL 解析出库文件的绝对路径（供下面的权限收紧用）。
+    # sqlite URL 形如 `sqlite:////app/data/x.db`（四个斜杠 = 绝对路径）
+    # 或 `sqlite:///rel.db`（三个斜杠 = 相对路径）。
+    def _sqlite_file_path() -> "Path | None":
+        """从 DATABASE_URL 解析出库文件路径；解析不出来返回 None。
+
+        注意 SQLAlchemy 的 sqlite URL 里斜杠的含义：
+
+            sqlite:////app/data/x.db   → 绝对路径 /app/data/x.db
+            sqlite:///rel.db           → 相对路径 ./rel.db
+            sqlite:///:memory:         → 内存库（无文件）
+
+        `urlparse` 对第一种返回的 `path` 是 `//app/data/x.db`（**两个**前导斜杠），
+        直接 `Path(raw)` 会得到 `//app/...` 这种UNC-ish 路径。所以要按「URI 里
+        第一个 `/` 是分隔符」的规则手工剥。
+        """
+        try:
+            from pathlib import Path
+            from urllib.parse import urlparse
+
+            parsed = urlparse(DATABASE_URL)
+            if parsed.netloc:
+                return None  # 不该有 netloc；有说明不是我们支持的形态
+
+            raw = parsed.path or ""
+            if not raw or ":memory:" in raw:
+                return None
+
+            # urlparse 保留的形态：绝对路径是 "//abs/path"，相对路径是 "/rel.db"
+            if raw.startswith("//"):
+                # 绝对路径：剥掉一个前导斜杠即可（不是两个 —— 第一个是 URI 分隔符）
+                return Path(raw[1:])
+            if raw.startswith("/"):
+                # 相对路径（sqlite:///rel.db）
+                return Path.cwd() / raw.lstrip("/")
+            return Path.cwd() / raw
+        except Exception:  # noqa: BLE001 - 解析失败就别管权限
+            return None
+
+    sqlite_db_path = _sqlite_file_path()
 
     @event.listens_for(engine, "connect")
     def _sqlite_pragmas(dbapi_connection, _connection_record):
@@ -288,6 +328,27 @@ if DATABASE_URL.startswith("sqlite"):
         except Exception:
             # 只读文件系统/特殊环境设置失败时不要炸启动，降级为默认行为
             pass
+
+        # F47：把库文件权限收紧到 0600（仅属主可读写）。
+        #
+        # 为什么需要：SQLite 默认按 umask 创建（常见 0644）—— 同容器/同宿主上的
+        # 其他用户能**直接读走**整个库，里面含 bcrypt 哈希、API Key 的 SHA-256、
+        # 用户邮箱、笔记元数据。Cookie 文件早就 `0o600` 了（见 cookie_manager），
+        # 数据库却一直没做，是不一致。
+        #
+        # WAL 模式下还有 -wal / -shm 两个旁文件，它们同样含**未合并的新数据**
+        # （包括刚写入的用户记录），所以三个都要一起收紧。
+        #
+        # 失败只警告不抛：某些只读挂载/root squash 的卷会 chmod 失败，
+        # 那不该让服务起不来（chmod 是"尽力而为"的加固，不是正确性依赖）。
+        if sqlite_db_path is not None:
+            for suffix in ("", "-wal", "-shm"):
+                candidate = sqlite_db_path.with_name(sqlite_db_path.name + suffix) if suffix else sqlite_db_path
+                try:
+                    if candidate.exists():
+                        os.chmod(candidate, 0o600)
+                except OSError:
+                    pass  # 见上方说明
 
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

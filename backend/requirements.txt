@@ -15,7 +15,7 @@ Brotli==1.1.0
 certifi==2025.1.31
 cffi==1.17.1
 charset-normalizer==3.4.1
-chromadb>=0.5.0
+chromadb==1.5.9   # 钉死：**生产实际运行验证过**的版本（见下方说明）
 click==8.1.8
 click-didyoumean==0.3.1
 click-plugins==1.1.1
@@ -53,7 +53,6 @@ lxml==5.4.0
 macholib==1.16.3
 Markdown==3.8
 markdown-it-py==3.0.0
-markdown_pdf==1.7
 MarkupSafe==3.0.2
 mdurl==0.1.2
 modelscope==1.25.0
@@ -65,7 +64,6 @@ onnxruntime==1.21.0
 openai==1.70.0
 orjson==3.10.16
 packaging==24.2
-pdfkit==1.0.0
 pefile==2023.2.7
 pillow==11.0.0
 prometheus_client==0.21.1
@@ -86,7 +84,6 @@ PyMuPDF==1.25.3
 pyphen==0.17.2
 pyreadline3==3.5.4
 python-dateutil==2.9.0.post0
-python-docx==1.2.0
 python-dotenv==1.1.0
 python-multipart==0.0.20
 pytz==2025.2
@@ -116,15 +113,51 @@ uvicorn==0.34.0
 uvloop==0.21.0; sys_platform != "win32"
 watchfiles==1.0.4
 wcwidth==0.2.13
-weasyprint==65.1
 webencodings==0.5.1
 websockets==15.0.1
 yarl==1.19.0
-youtube-transcript-api>=1.0.0
+youtube-transcript-api==1.2.4   # 钉死：1.x 当前稳定版
 # 下界不能低于 2026.07.04：该版本（PR #13730 / commit e8de28e）才把 `_dm_params`
 # 抽成 property 并用于 `x/player/wbi/playurl`。低于此版本时 playurl 会稳定返回 412
 # （实测：缺少 dm_img_* 这组字段就 412，带任意一个就 200 —— B 站只校验字段是否存在，
 # 不校验内容）。bilibili_dm_patch.py 是为低版本兜底的 monkey-patch，
 # 装到 2026.07.04+ 之后它会自动跳过。
-yt-dlp>=2026.7.4
+yt-dlp==2026.10.21   # 钉死：生产实际运行版本；⚠️ 见下方说明，需定期评估升级
 zopfli==0.2.3.post1
+
+# 已移除的导出相关依赖（F43）：
+#   markdown_pdf / pdfkit / python-docx / weasyprint
+# 原因：它们只被 `app/utils/export.py` 引用，而那个文件
+#   - 全仓零引用（死代码）；
+#   - 内部 `_to_html` / `_to_word` / `_to_image` 三个方法根本不存在，
+#     任何调用都必 AttributeError。
+# 文件已删除，依赖一并移除（省镜像体积，也避免"看起来支持导出"的误导）。
+# 若将来要做笔记导出，请重新引入并**实现完整**，不要恢复这个残缺文件。
+
+# ---------------------------------------------------------------------------
+# 关于版本钉死（F36）
+# ---------------------------------------------------------------------------
+# 此前 `chromadb` / `youtube-transcript-api` / `yt-dlp` 用 `>=`，其余 124 个
+# 依赖全是 `==` —— 结果是**重建镜像不可复现**：今天能跑的构建，三个月后重建
+# 可能拉到不兼容的新版本。
+#
+# ## 钉哪个版本：以「生产实际跑过」为准，不要凭报告或记忆猜
+#
+# 踩过一次坑：最初按「报告说 >=0.5.0」钉了 `chromadb==0.5.23`，结果构建直接
+# 失败 —— 它要求 `tokenizers <=0.20.3`，而本文件钉的是 `tokenizers==0.21.1`，
+# ResolutionImpossible。
+#
+# 后来查了生产容器里实际在跑的版本：
+#     chromadb 1.5.9 / tokenizers 0.21.1 / youtube-transcript-api 1.2.4 / yt-dlp 2026.10.21
+# 所以这里钉的是**已被生产验证过**的组合，既保证可复现，又不会引入未验证的
+# 大版本跃迁。
+#
+# ⚠️ `yt-dlp` 的特殊性：
+# 它更新频繁，且平台适配常依赖新版（B 站/YouTube 改版后旧版会失效）。
+# 钉死是**为了可复现**，不是"永不升级"。建议：
+#   - 每季度评估一次升级；
+#   - 升级前用真实短链跑一次 downloader 冒烟（CI 里若有这类定时任务更好）；
+#   - 不要因为"怕坏"而长期冻结 —— 那会让平台改版后整条下载链路失效。
+#
+# 若需要更灵活：用 `pip freeze > constraints.txt` 在**可工作环境**里生成约束
+# 文件，CI 用 `pip install -r requirements.txt -c constraints.txt`。

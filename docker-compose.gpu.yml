@@ -33,14 +33,37 @@ services:
       - "${BACKEND_PORT}"  # 不再对外暴露，用于 nginx 内部通信
     # 用 unless-stopped 避免短暂崩溃把容器永久打死后再也读不到 .env 修改
     restart: unless-stopped
+    # 探活打 /api/sys_check（轻量），**不要**打 /api/sys_health。
+    #
+    # 原因（F54）：`/api/sys_health` 会调 `ensure_ffmpeg_or_raise()`，
+    # 而它内部执行 `subprocess.run(["ffmpeg", "-version"])` —— 也就是
+    # **每 30 秒 fork 一个 ffmpeg 子进程**。在 `mem_limit: 4g` + Whisper
+    # 占满内存时，这个额外进程可能成为 OOM 的最后一击。
+    #
+    # `/api/sys_check` 只返回 200 + `{code:0}`（不碰 ffmpeg / DB），
+    # 它才是「进程还活着吗」该问的问题。要查细项请打开设置页
+    # 或直接 `curl /api/sys_health`（此时按需触发，而不是常驻轮询）。
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:${BACKEND_PORT}/api/sys_health"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:${BACKEND_PORT}/api/sys_check"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 30s   # GPU 镜像首次加载 CUDA 比 CPU 慢，给久一点
     # GPU 部署默认跑较大模型，把内存限制提到 8g 避免 host OOM
     mem_limit: 8g
+    # GPU 预留（F55）
+    #
+    # 这份写法是 **Docker 官方推荐**，`docker compose up`（Compose v2）从
+    # 2.0.0 起就支持 `deploy.resources.reservations.devices`，会正确翻译成
+    # 容器的 DeviceRequest。
+    #
+    # ⚠️ 它**在已废弃的 `docker-compose` v1（Python 版 1.29.x）下不生效** ——
+    # 那版只读顶层的 `device_requests`。若你用 v1，会看到「GPU 没传进容器」
+    # 但没有任何报错。判断版本：`docker compose version`（v2）vs
+    # `docker-compose version`（v1）。请优先用 v2。
+    #
+    # 另外还需要宿主机装好 nvidia-container-toolkit 并配置 runtime，
+    # 否则即使声明了也拿不到 GPU。
     deploy:
       resources:
         reservations:

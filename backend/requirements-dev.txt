@@ -1,0 +1,11 @@
+# 开发/测试依赖 —— **不要**装进生产镜像。
+#
+# 生产环境只需要 `requirements.txt`；这份文件给本地开发和 CI 用。
+# 这样既能让 `pytest` 在 CI 里可用（F51），又不会让生产镜像
+# 带上测试框架（那是无谓的体积与攻击面）。
+#
+# 用法：
+#   pip install -r requirements.txt -r requirements-dev.txt
+#   python -m pytest -q
+
+pytest==8.3.4

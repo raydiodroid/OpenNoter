@@ -64,6 +64,12 @@ def save_cover_to_static(local_cover_path: str, subfolder: Optional[str] = "cove
     target_path = os.path.join(target_dir, file_name)
     shutil.copy2(local_cover_path, target_path)  # 保留原时间戳、权限
     image_relative_path = f"/static/{subfolder}/{file_name}".replace("\\", "/")
-    url_path = f"{BACKEND_BASE_URL.rstrip('/')}/{image_relative_path.lstrip('/')}"
-    # 返回前端可访问的路径
-    return url_path
+    # 只返回站内相对路径，由各端自己拼后端 origin：
+    #   1) 绝对地址会被前端当成「外部图片」丢进 /api/image_proxy，而 assert_safe_url
+    #      先拦 loopback、再查 CDN 白名单（不含 localhost）⇒ 本地视频封面恒定 400；
+    #   2) Web（nginx 同源）/ Tauri（127.0.0.1:8483）/ 浏览器扩展（用户自定义 backendUrl）
+    #      三端各自的后端地址不同，服务端无法猜对；
+    #   3) 截图（app/services/note.py）本来就是相对路径，封面与之对齐。
+    # 历史数据里残留的绝对地址（http://localhost:8483/static/...）由前端的
+    # resolveCoverUrl / ownStaticPath 兼容。
+    return image_relative_path
