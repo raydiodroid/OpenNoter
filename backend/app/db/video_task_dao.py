@@ -114,10 +114,21 @@ def get_task_ids_by_video(video_id: str, platform: str) -> list[str]:
 
 
 # 按 task_id 查任务记录，不存在返回 None
-def get_task_by_id(task_id: str):
+def get_task_by_id(task_id: str, *, include_deleted: bool = False):
+    """按 task_id 查任务。
+
+    **默认排除软删除行**：软删行保留 ``user_id``，如果查得到就会让已经删除的
+    任务仍通过 ACL、并在 ``get_task_status`` 里落到「PENDING 排队中」分支
+    （没有任何状态文件/结果文件，DB 却有行）。已删除任务对外应当等价于不存在。
+
+    ``include_deleted=True`` 仅供审计/运维场景（当前没有调用方使用）。
+    """
     db = next(get_db())
     try:
-        return db.query(VideoTask).filter_by(task_id=task_id).first()
+        q = db.query(VideoTask).filter(VideoTask.task_id == task_id)
+        if not include_deleted:
+            q = q.filter(VideoTask.deleted_at.is_(None))
+        return q.first()
     except Exception as e:
         logger.error(f"Failed to get task by task_id: {e}")
         return None
@@ -270,6 +281,7 @@ def list_tasks_for_user(
     limit: int = 50,
     offset: int = 0,
     status: str | None = None,
+    note_dir: "str | os.PathLike | None" = None,
 ) -> tuple[list[dict], int]:
     """按用户查任务列表（走 DB 索引，不扫文件）。
 
@@ -278,9 +290,45 @@ def list_tasks_for_user(
     归属规则与接口层一致：
       - 有 user_id：必须等于当前用户
       - 无 user_id：仅管理员可见（历史数据）
+
+    ## `has_result` 为什么在 DAO 里算
+
+    列表项必须同时告诉前端「正文在不在」，否则前端只能对每条任务再发一次
+    `GET /tasks/{id}`（N+1）。文件扫描分支一直有这个字段，DB 分支漏了——
+    而 `db_total > 0` 时路由层直接返回 DB 结果，于是生产上**只有**缺字段的
+    那一版在跑，前端 `has_result` 恒为 undefined。
+
+    算在 DAO 里而不是路由层，是为了让两个分支的 item 形状由同一个地方定义，
+    避免以后再裂。`note_dir` 由调用方传入（路由层已持有 `NOTE_OUTPUT_DIR`），
+    未传时按环境变量取，与 `note_file()` 的口径一致。
     """
     from sqlalchemy import func as sa_func
     from sqlalchemy import or_
+
+    # 延迟 import：DAO 的其它函数都不依赖 pathlib/env，放模块顶上会扩大
+    # sqlite 会话模块的 import 面（测试里有按文件路径单独加载 DAO 的场景）。
+    import os
+    from pathlib import Path
+
+    from app.utils.note_paths import UnsafeTaskId, note_file
+
+    root = Path(note_dir) if note_dir is not None else Path(
+        os.getenv("NOTE_OUTPUT_DIR", "note_results")
+    )
+
+    def _has_result(task_id: str) -> bool:
+        """结果文件在不在。
+
+        必须过 `note_file()` 沙箱：DB 里的 task_id 理论上都是服务端生成的
+        uuid4，但历史数据/手工插入的行不能假定安全——这里只做存在性判断，
+        越界值直接按「没有结果」处理，不读目录外文件。
+        """
+        try:
+            return note_file(root, str(task_id), ".json").is_file()
+        except UnsafeTaskId:
+            return False
+        except OSError:
+            return False
 
     db = next(get_db())
     try:
@@ -319,6 +367,8 @@ def list_tasks_for_user(
                     "message": row.error,
                     "platform": row.platform,
                     "video_id": row.video_id,
+                    # 与文件扫描分支的字段对齐（GET /tasks 的 item 契约）
+                    "has_result": _has_result(row.task_id),
                     "updated_at": updated.isoformat() if updated else None,
                     "failed_at": row.failed_at.isoformat() if row.failed_at else None,
                 }

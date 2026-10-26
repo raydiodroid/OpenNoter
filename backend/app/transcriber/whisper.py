@@ -145,8 +145,19 @@ class WhisperTranscriber(Transcriber):
             )
             # self.on_finish(file_path, result)
             return result
-        except Exception as e:
-            print(f"转写失败：{e}")
+        except Exception as exc:
+            # F24：**必须**重新抛出，不能吞掉后返回 None。
+            #
+            # 旧实现 `print` 一句就 return None，调用方拿到 None 之后：
+            #   - 构造结果时 `asdict(None)` 抛 TypeError（错误信息完全指不出
+            #     真实原因是转写失败）；
+            #   - 或者被下载器的重试逻辑当成「可重试失败」，把一次确定的
+            #     模型/显存错误重试 2 次，白烧时间与配额。
+            #
+            # 包成 TranscriptionError 是为了让上层能区分「转写引擎自身失败」
+            # 与「其它 bug」，同时保留原始异常链（`raise ... from exc`）。
+            logger.error("转写失败 (file=%s): %s", file_path, exc, exc_info=True)
+            raise RuntimeError(f"转写失败: {exc}") from exc
 
 
     def on_finish(self,video_path:str,result: TranscriptResult)->None:

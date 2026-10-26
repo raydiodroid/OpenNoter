@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 from typing import Iterable
 
@@ -114,3 +115,129 @@ def _fail_interrupted_tasks_locked(*, reason: str, root: Path) -> int:
     if marked:
         logger.info("已将 %s 个进行中任务标记为 FAILED（%s）", marked, reason[:80])
     return marked
+
+
+# ---------------------------------------------------------------------------
+# 运行期僵尸任务清理（F49）
+# ---------------------------------------------------------------------------
+# 启动时的 `fail_interrupted_tasks()` 只覆盖「进程正常重启」这一种情况。
+# 如果进程被 `kill -9`、被 OOM killer 杀掉、或者宿主机断电，那些任务的状态
+# 文件会**永久停在执行中**：
+#   - 前端每 3 秒轮询一个永远不会变化的任务，永远转圈；
+#   - 该任务的配额槽位可能一直占着，用户被自己的僵尸任务卡住；
+#   - 用户只能手动删任务才能恢复。
+#
+# 在「4GB 容器 + Whisper + 500MB 上传」的部署下这不是罕见场景。
+
+# 默认判定阈值：状态文件的 mtime 超过这么久**且**任务不在池里，才认为是僵尸。
+#
+# 为什么不能只看 mtime：一个正常的长任务（大视频下载 + 转写 + 长文总结）
+# 可能 10 分钟都不更新状态（中间没有状态切换）。阈值太小会误杀。
+# 默认 30 分钟远大于任何「无状态切换」的合法间隔。
+DEFAULT_STALE_AFTER_SECONDS = int(os.getenv("TASK_STALE_AFTER_SECONDS", str(30 * 60)))
+
+
+def reap_stale_tasks(
+    *,
+    stale_after: float = DEFAULT_STALE_AFTER_SECONDS,
+    note_dir: Path | None = None,
+    dry_run: bool = True,
+) -> dict:
+    """把「状态说还在跑、但其实已经没人跑」的任务标为 FAILED。
+
+    ## 双条件判定（缺一不可）
+
+      1. 状态文件 mtime 距今超过 ``stale_after`` 秒；
+      2. **该 task_id 不在本进程的线程池里**（`task_serial_executor.is_active`）。
+
+    只看 (1) 会误杀正常长任务；只看 (2) 会把「刚重启、任务确实丢了」的
+    情况也放过（池是空的，但状态文件写着 DOWNLOADING）。
+
+    ## 问不到池状态时保守跳过
+
+    如果 executor 没有跟踪能力（例如某些测试里替换了实现），
+    `is_active` 可能缺失 —— 那种情况下**不清理**，宁可留一个僵尸任务，
+    也不要误杀正在跑的任务。
+
+    :param dry_run: 默认 True，只统计不改写。定时任务应显式传 False。
+    :return: 统计字典（scanned / stale / reaped / skipped_active / errors）
+    """
+    from app.services.task_serial_executor import task_serial_executor
+
+    root = note_dir if note_dir is not None else _note_output_dir()
+    stats = {
+        "scanned": 0,
+        "stale": 0,
+        "reaped": 0,
+        "skipped_active": 0,
+        "errors": 0,
+        "dry_run": dry_run,
+    }
+
+    now = time.time()
+
+    # 拿一次池的活跃快照，避免每条都加锁
+    active_ids: frozenset[str] | None
+    try:
+        active_ids = task_serial_executor.active_task_ids()
+    except Exception:  # noqa: BLE001 - 换个实现就没有跟踪能力
+        logger.warning("线程池不支持活跃任务查询，本次跳过僵尸清理（避免误杀）")
+        return stats
+
+    for path in iter_status_files(root):
+        stats["scanned"] += 1
+        data = _read_status(path)
+        if not data:
+            stats["errors"] += 1
+            continue
+        status = str(data.get("status") or "").upper()
+        if status not in IN_PROGRESS_STATUSES:
+            continue
+
+        task_id = path.name[: -len(".status.json")]
+        if not task_id:
+            continue
+
+        try:
+            age = now - path.stat().st_mtime
+        except OSError:
+            stats["errors"] += 1
+            continue
+
+        if age < stale_after:
+            # 刚更新过 —— 可能真的在跑，也可能刚启动。无论如何不动。
+            continue
+
+        stats["stale"] += 1
+
+        # 条件 2：在池里就不碰（这是「双条件」里最关键的一条）
+        if task_id in active_ids:
+            stats["skipped_active"] += 1
+            continue
+
+        if dry_run:
+            logger.info(
+                "发现疑似僵尸任务 (task_id=%s, status=%s, 静默 %.0f 秒)",
+                task_id, status, age,
+            )
+            continue
+
+        try:
+            # 复用与启动时一致的状态写入路径（文件 + DB 同步）
+            from app.services.note import NoteGenerator
+
+            gen = NoteGenerator.__new__(NoteGenerator)
+            gen._update_status(  # noqa: SLF001 - 与 fail_interrupted_tasks 同一入口
+                task_id,
+                TaskStatus.FAILED,
+                message=f"任务已中断（超过 {int(stale_after / 60)} 分钟无进展，已自动清理）",
+            )
+            stats["reaped"] += 1
+            logger.info("已清理僵尸任务 (task_id=%s)", task_id)
+        except Exception:  # noqa: BLE001
+            stats["errors"] += 1
+            logger.warning("清理僵尸任务失败 (task_id=%s)", task_id, exc_info=True)
+
+    if stats["reaped"]:
+        logger.info("僵尸任务清理完成：%s 个", stats["reaped"])
+    return stats
