@@ -20,6 +20,9 @@ from typing import Optional, Dict
 
 from app.services.cookie_policy import COOKIE_PLATFORMS, filter_downloader_cookies
 from app.utils import secret_box
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class CookieConfigManager:
@@ -77,19 +80,57 @@ class CookieConfigManager:
                     continue
                 payload[platform] = {"cookie": secret_box.encrypt(cookie)}
         except RuntimeError:
-            # 没配密钥（本地开发/单测环境）：退化为明文，但大声警告。
-            # 生产环境必然有 JWT_SECRET，不会走到这里。
-            import logging
+            # 没配密钥时**不能**默默退化为明文 —— SESSDATA 是可直接登录账号的凭据，
+            # 而「没配密钥」不等于「不在意安全」：可能只是有人漏配了 .env。
+            #
+            # 区分两种部署（与 static_signing 的降级原则一致）：
+            #   * 开了鉴权（AUTH_ENFORCE=1）→ 这是**配置错误**，必须 fail-closed。
+            #     否则用户以为 Cookie 加密了，实际是明文躺在磁盘/备份/容器层里。
+            #   * 没开鉴权（AUTH_ENFORCE=0，单人内网自托管）→ 允许明文，
+            #     但大声警告，并在 README 写清。
+            from app.services.auth import auth_enforced
 
-            logging.getLogger(__name__).warning(
+            if auth_enforced():
+                raise RuntimeError(
+                    "无法加密 Cookie：未配置 OPENNOTER_SECRET_KEY / OPENNOTER_JWT_SECRET。\n"
+                    "你已开启鉴权（AUTH_ENFORCE=1），Cookie（含 B 站 SESSDATA）必须加密存储。\n"
+                    "请生成密钥并写入 .env：\n"
+                    '  python -c "import secrets;print(secrets.token_urlsafe(48))"'
+                )
+
+            logger.warning(
                 "未配置 OPENNOTER_SECRET_KEY / OPENNOTER_JWT_SECRET，"
-                "Cookie 将以**明文**存储。生产环境请务必配置密钥！"
+                "且鉴权未开启（AUTH_ENFORCE=0）—— Cookie 将以**明文**存储。"
+                "若要加密，请配置密钥。"
             )
             payload = {}
             for platform, entry in data.items():
                 cookie = (entry or {}).get("cookie") if isinstance(entry, dict) else None
                 if cookie:
                     payload[platform] = {"cookie": cookie}
+
+        tmp = self.path.with_name(self.path.name + ".tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.fchmod(fd, 0o600)
+        except Exception:
+            os.close(fd)
+            raise
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, self.path)
+
+    def _write_plaintext(self, data: Dict[str, Dict[str, str]]):
+        """不加密直接原子写入（仅供 `get()` 的回写降级路径使用）。
+
+        与 `_write()` 的区别只有「不做加密」：权限、原子写、过滤逻辑完全一致。
+        **不要**用它处理新写入的 Cookie —— 那必须走 `_write()`（fail-closed）。
+        """
+        payload: Dict[str, Dict[str, str]] = {}
+        for platform, entry in data.items():
+            cookie = (entry or {}).get("cookie") if isinstance(entry, dict) else None
+            if cookie:
+                payload[platform] = {"cookie": cookie}
 
         tmp = self.path.with_name(self.path.name + ".tmp")
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -116,7 +157,21 @@ class CookieConfigManager:
                 data[platform] = {"cookie": filtered}
             else:
                 data.pop(platform, None)
-            self._write(data)
+            # 回写发生在「读到一个需要规范的旧值」时（例如把 tracking 参数过滤掉）。
+            # 它有两个目的：① 下次省一次过滤；② **把不该留的字段从磁盘上清掉**。
+            # 第 ② 点是安全相关的，所以不能因为加密不可用就整段跳过。
+            #
+            # 但如果这种情况又恰逢「开启鉴权 + 没配密钥」，`_write()` 会按设计
+            # fail-closed 抛错。这里的取舍是：**回写允许降级为明文**（只是把
+            # 已经存在于磁盘上的旧值重写一遍，不引入新的明文风险），
+            # 而不是让「下载带 Cookie 的视频」整个不可用、报错点还离真实原因很远。
+            try:
+                self._write(data)
+            except RuntimeError as exc:
+                logger.warning(
+                    "配置了鉴权但缺少密钥，Cookie 回写降级为明文（请尽快配置密钥）：%s", exc,
+                )
+                self._write_plaintext(data)
         return filtered or None
 
     def set(self, platform: str, cookie: str):

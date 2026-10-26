@@ -135,13 +135,27 @@ def test_symlink_escape_is_rejected(utils):
 # ---------------------------------------------------------------------------
 # upload 归属
 # ---------------------------------------------------------------------------
-def test_upload_without_owner_is_readable(utils):
-    """历史文件没有侧车：放行（否则老部署全部 404）。"""
+def test_upload_without_owner_is_readable_when_logged_in(utils):
+    """历史文件没有侧车：强制认证下**至少要登录**。
+
+    F17：旧行为是「无归属 → 无条件放行」，等于任何登录用户只要知道文件名
+    （uuid4 hex，但会经日志/分享链接泄露）就能读别人的历史上传。
+    现在收紧为「强制认证时要求已登录」—— 不再对匿名开放，同时不锁死老文件。
+    """
     f = utils["tmp"] / "old.mp4"
     f.write_text("data")
     assert utils["get_upload_owner"](f) is None
+    # 登录用户可以读（不锁死老部署）
     assert utils["can_read_upload"](f, U(1), auth_enforced=True) is True
-    assert utils["can_read_upload"](f, None, auth_enforced=True) is True
+    # 匿名用户不能读（F17 修复点）
+    assert utils["can_read_upload"](f, None, auth_enforced=True) is False
+
+
+def test_upload_without_owner_readable_when_auth_disabled(utils):
+    """未开启鉴权的单人部署：无归属文件仍放行（与改动前一致）。"""
+    f = utils["tmp"] / "old2.mp4"
+    f.write_text("data")
+    assert utils["can_read_upload"](f, None, auth_enforced=False) is True
 
 
 def test_owner_can_read_own_upload(utils):

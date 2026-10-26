@@ -215,5 +215,68 @@ class TestBilibiliQrLogin(unittest.TestCase):
         ))
 
 
+
+class TestCookieTransferUserBinding(unittest.TestCase):
+    """F40：ticket 必须与签发者绑定，且「拒绝」不能消耗 ticket。
+
+    背景：`issue()` 一直记录 `user_id`，但 `consume()` 从不比对。ticket 虽由
+    管理员签发（90s TTL、单次、绑 origin），可一旦从前端 JS / 日志 / 扩展消息
+    里泄漏，任何拿到它的人都能把 Cookie 写进系统（写入是全局的，影响所有用户）。
+    """
+
+    def setUp(self):
+        from app.services.cookie_transfer import CookieTransferManager
+
+        self.manager = CookieTransferManager()
+        self.origin = "https://opennoter.example"
+
+    def test_issuer_can_consume(self):
+        ticket = self.manager.issue("bilibili", 7, self.origin)
+        got = self.manager.consume(
+            ticket, self.origin, "SESSDATA=a", expected_user_id=7,
+        )
+        self.assertIsNotNone(got)
+
+    def test_other_user_is_rejected(self):
+        ticket = self.manager.issue("bilibili", 7, self.origin)
+        got = self.manager.consume(
+            ticket, self.origin, "SESSDATA=a", expected_user_id=99,
+        )
+        self.assertIsNone(got, "别人拿 ticket 竟然能写入 Cookie")
+
+    def test_rejection_does_not_burn_the_ticket(self):
+        """被拒绝的尝试**不能**消耗 ticket，否则攻击者无需知道 ticket
+        内容就能做拒绝服务（试探一下就让合法请求 410）。"""
+        ticket = self.manager.issue("bilibili", 7, self.origin)
+        # 攻击者用错误身份试探
+        self.assertIsNone(self.manager.consume(
+            ticket, self.origin, "SESSDATA=a", expected_user_id=99,
+        ))
+        # 本人的合法请求仍应成功
+        self.assertIsNotNone(self.manager.consume(
+            ticket, self.origin, "SESSDATA=a", expected_user_id=7,
+        ))
+
+    def test_wrong_origin_does_not_burn_the_ticket(self):
+        ticket = self.manager.issue("bilibili", 7, self.origin)
+        self.assertIsNone(self.manager.consume(
+            ticket, "https://attacker.example", "SESSDATA=a",
+        ))
+        self.assertIsNotNone(self.manager.consume(ticket, self.origin, "SESSDATA=a"))
+
+    def test_successful_consume_is_single_use(self):
+        ticket = self.manager.issue("bilibili", 7, self.origin)
+        self.assertIsNotNone(self.manager.consume(ticket, self.origin, "SESSDATA=a"))
+        self.assertIsNone(
+            self.manager.consume(ticket, self.origin, "SESSDATA=a"),
+            "ticket 应该只能成功消费一次",
+        )
+
+    def test_no_identity_keeps_backward_compatible(self):
+        """不提供身份时保持原行为（该端点设计上免登录，扩展拿不到凭据）。"""
+        ticket = self.manager.issue("bilibili", 7, self.origin)
+        self.assertIsNotNone(self.manager.consume(ticket, self.origin, "SESSDATA=a"))
+
+
 if __name__ == "__main__":
     unittest.main()

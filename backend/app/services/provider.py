@@ -1,3 +1,6 @@
+import logging
+
+logger = logging.getLogger(__name__)
 from fastapi.encoders import jsonable_encoder
 import uuid as _uuid_mod
 
@@ -84,7 +87,7 @@ class ProviderService:
             logo = 'custom'
             return insert_provider(id, name, api_key, base_url, logo, type_, enabled)
         except Exception as  e:
-            print('创建模式失败',e)
+            logger.error("创建模式失败: %s", e, exc_info=True)
             raise
     @staticmethod
     def provider_to_dict(p: Provider):
@@ -138,7 +141,11 @@ class ProviderService:
             # 如果用户未重新输入直接保存，带星号的值不应覆盖原 key。
             if 'api_key' in filtered_data and '*' in str(filtered_data.get('api_key', '')):
                 filtered_data.pop('api_key')
-            print('更新模型供应商',filtered_data)
+            # 日志里**永远**不能出现明文 api_key。
+            # 旧实现直接 print(filtered_data)：脱敏条件只是「值里含 * 才 pop」，
+            # 而管理员输入的是真实 key（不含 *），于是明文被写进容器日志 —— 
+            # 日志常被采集/转发，等同泄漏。这里改成只记字段名。
+            logger.info("更新模型供应商 id=%s fields=%s", id, sorted(filtered_data.keys()))
             update_provider(id, **filtered_data)
             # 获取更新后的供应商信息
             updated_provider = get_provider_by_id(id)
@@ -148,7 +155,7 @@ class ProviderService:
             }
 
         except Exception as e:
-            print('更新模型供应商失败：',e)
+            logger.error("更新模型供应商失败 (id=%s): %s", id, e, exc_info=True)
             return None
 
     @staticmethod

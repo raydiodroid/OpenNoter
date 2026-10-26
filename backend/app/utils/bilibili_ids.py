@@ -50,26 +50,55 @@ def resolve_short_url(short_url: str, *, timeout=SHORT_LINK_TIMEOUT) -> Optional
     整个任务挂掉。
     """
     headers = {"User-Agent": SHORT_LINK_USER_AGENT, "Referer": "https://www.bilibili.com/"}
+
+    # ⚠️ 不能用 `allow_redirects=True`。
+    #
+    # `assert_safe_url()` 只校验**传入的那一个 URL**；让 requests 自己跟随 302
+    # 之后，后续每一跳都不会再校验。而短链服务的跳转目标由**服务端**决定
+    # （b23.tv 返回什么、甚至短链服务被劫持/开放重定向），于是
+    # `https://b23.tv/xxx` 可能把 worker 带到 `http://169.254.169.254/...`。
+    #
+    # `is_supported_video_url()` 里对 SHORT_LINK_HOSTS 是「只看域名就放行」
+    # （短链的 path 形态不固定，无法做路径校验），所以这里**必须**逐跳兜住。
+    #
+    # 复用 `safe_get()`（与 image_proxy / probe_endpoint 同一实现）：
+    #   - 每跳重新 assert_safe_url(suffixes=()) —— 只做 IP 层拦截，不加域名白名单；
+    #   - 不自动跟随，避免绕过校验；
+    #   - 有跳转次数上限。
     try:
-        response = requests.head(
-            short_url,
-            allow_redirects=True,
-            timeout=timeout,
-            headers=headers,
-        )
-        # HEAD 被拒（405/412）或没拿到跳转时改用 GET。
-        if response.status_code >= 400:
-            response = requests.get(
+        from app.utils.url_safety import TooManyRedirects, UnsafeUrlError, safe_get
+
+        try:
+            response = safe_get(
                 short_url,
-                allow_redirects=True,
+                suffixes=(),
+                method="HEAD",
                 timeout=timeout,
                 headers=headers,
-                stream=True,
             )
-            response.close()
+            # HEAD 被拒（405/412）时改用 GET —— 有些短链服务不支持 HEAD。
+            if response.status_code >= 400:
+                response = safe_get(
+                    short_url,
+                    suffixes=(),
+                    method="GET",
+                    timeout=timeout,
+                    headers=headers,
+                    stream=True,
+                )
+                response.close()
+        except UnsafeUrlError as exc:
+            # 跳转到了不安全地址（内网/元数据）—— 这是明确的攻击信号，
+            # 不能像普通网络错误那样静默兜底。
+            logger.warning("短链跳转到不安全地址，已拒绝: %s (%s)", short_url, exc)
+            return None
+
         return response.url
     except requests.RequestException as exc:
         logger.warning("解析 B 站短链失败: %s (%s)", short_url, exc)
+        return None
+    except TooManyRedirects as exc:
+        logger.warning("短链跳转次数过多，已拒绝: %s (%s)", short_url, exc)
         return None
 
 
