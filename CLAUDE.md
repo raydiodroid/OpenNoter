@@ -24,6 +24,8 @@ npm ci            # 仓库只跟踪 package-lock.json（没有 pnpm-lock.yaml）
 npm run dev       # Dev server on port 3015, proxies /api to backend
 npm run build     # Production build
 npm run lint      # ESLint
+# 注意：前端目前**没有** test script（无 Vitest）；`lib/urls.ts` 的纯函数是零依赖的，
+# 可直接被将来的测试引入。
 ```
 
 ### Docker
@@ -64,20 +66,22 @@ Load unpacked at `chrome://extensions/` → select `OpenNoter_extension/extensio
 - `app/transcriber/` — Speech-to-text engines (fast-whisper, groq, bcut, kuaishou, mlx-whisper) with factory in `transcriber_provider.py`. YouTube path prefers existing subtitles and skips audio download when available.
 - `app/gpt/` — LLM integration with factory pattern (`gpt_factory.py`), prompt templates (`prompt.py`, `prompt_builder.py`), and `request_chunker.py` for long transcripts
 - `app/db/` — SQLite + SQLAlchemy: DAO pattern (`provider_dao.py`, `model_dao.py`, `video_task_dao.py`), models in `models/`
-- `app/utils/` — `response.py` (ResponseWrapper for consistent JSON), `video_helper.py` (screenshots via FFmpeg), `export.py` (PDF/DOCX), `ppt_generator.py`, `minio_client.py`
+- `app/utils/` — `response.py` (ResponseWrapper), `video_helper.py` (screenshots via FFmpeg), `secret_box.py` (Fernet/HKDF encryption for cookies & provider keys), `static_signing.py` (per-task static-asset tokens), `path_safety.py` / `note_paths.py` / `upload_paths.py` (path sandboxing), `url_safety.py` (`assert_safe_url` + `safe_get` with per-hop redirect validation)
+- `app/cli.py` — ops CLI (`python -m app.cli create-admin|promote|list-users`); the only way to bootstrap the first admin when OIDC auto-promotion is disabled
 - `app/validators/video_url_validator.py` — URL → platform detection (mirrored client-side in the extension)
 - `app/exceptions/` — `BizException` + handlers wired in `main.py` via `register_exception_handlers`
 - `backend/events/` — Blinker signal system for post-processing (e.g., temp file cleanup after transcription); registered in `lifespan` startup
 - `backend/ffmpeg_helper.py` — `ensure_ffmpeg_or_raise` is called at startup; respects `FFMPEG_BIN_PATH`
 
-**Frontend** (`OpenNoter_frontend/src/`) — React 19 + Vite + Tailwind + shadcn/ui:
-- `pages/HomePage/` — Main note generation UI: `NoteForm.tsx` (input), `MarkdownViewer.tsx` (preview), `MarkmapComponent.tsx` (mind map)
-- `pages/SettingPage/` — LLM provider management, system monitoring, transcriber config
-- `store/` — Zustand stores: `taskStore`, `modelStore`, `configStore`, `providerStore`. Persists to IndexedDB.
+**Frontend** (`OpenNoter_frontend/src/`) — React 19 + Vite + **@react-spectrum/s2** (Adobe Spectrum 2):
+- `pages/workbench/` — Main note UI: `NoteForm.tsx` (input), `NotePreview.tsx` + `MarkdownArticle.tsx` (preview), `MindmapView.tsx` (mind map via markmap), `VideoBanner.tsx`, `HistoryPanel.tsx`
+- `pages/settings/` — LLM provider / transcriber / downloader / API-key / user / monitor settings
+- `pages/LoginPage.tsx`, `pages/OnboardingPage.tsx`, `pages/WorkbenchPage.tsx`
+- `store/` — Zustand stores: `taskStore`, `authStore`, `modelStore`, `providerStore`, `chatStore`, `themeStore`. `taskStore` persists to IndexedDB via `idb-keyval`.
+- `lib/api.ts` — axios instance + response interceptor; desktop auth uses an **in-memory** token sent as `Authorization: Bearer` (web relies on same-origin cookies). `lib/urls.ts` holds the zero-dependency URL helpers (kept separate so they are unit-testable — `api.ts` pulls in `@react-spectrum/s2`'s parcel macros, which fail to load in plain node).
 - `services/` — Axios API clients matching backend routes
-- `hooks/useTaskPolling.ts` — Polls task status every 3 seconds
-- `components/ui/` — shadcn/ui (Radix-based) components
-- `i18n/` — `react-i18next` setup with locale JSON in `i18n/locales/`; toggled via `components/LanguageSwitcher.tsx`
+- `hooks/useTaskPolling.ts` — Polls task status every 3 seconds; also hydrates placeholder tasks that are SUCCESS server-side but have no local body
+- UI is **@react-spectrum/s2** (not Tailwind/shadcn). Chinese copy is hard-coded — there is **no i18n layer**.
 - Path alias: `@` → `./src`
 
 **Core Workflow**: User submits URL → task queued → download video → extract audio (FFmpeg) → transcribe (Whisper/Groq/etc) → generate notes (LLM) → frontend polls for completion → display Markdown + mind map.
