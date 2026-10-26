@@ -1,0 +1,131 @@
+name: Tests
+
+# 为什么需要这个 workflow
+#
+# 之前仓库里**没有任何地方跑测试**：
+#   - main.yml              → 只做 Tauri 打包（tag 触发）
+#   - docker-build.yml      → 只 build & push 镜像
+#   - release-extension.yml → 只 pnpm build
+#
+# `backend/` 下 47 个测试文件、760+ 条用例，以及扩展的 vitest 用例，
+# **从未在 CI 里执行过**。这直接导致过一个严重问题长期存在：
+#
+#   `NoteGenerator._update_status` 里 `_parse_iso(...)` 是类内的
+#   `@staticmethod`，方法体内的裸名字解析为 global ⇒ `NameError` ⇒ 被紧邻的
+#   `except` 吞成 `logger.debug` ⇒ **整个「状态同步到 DB」从未执行过**。
+#   `video_tasks.status` 恒 NULL，`list_tasks` 的 DB 分支把所有任务都显示成
+#   PENDING。没有任何测试断言「`_update_status` 之后 DB 里 status 有值」，
+#   也没有 CI 去跑那 47 个文件。
+#
+# 所以这个 workflow 的价值不只是"跑测试"，而是「让下一个这类静默失效能被发现」。
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  # 同一个 PR 连续 push 时取消旧的一轮，省额度
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (pytest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # 生产依赖 + 测试依赖分开装：pytest 不该进 requirements.txt
+          # （那会让生产镜像带上测试框架）。
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Run tests
+        # `python -m pytest` 而不是 `pytest`：确保 backend/ 进入 sys.path
+        # （pytest.ini 里已设 pythonpath = .，两者一致）。
+        run: python -m pytest -q
+
+  extension:
+    name: Extension (typecheck + vitest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: OpenNoter_extension
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          # 与 package.json 的 packageManager 字段对齐
+          version: 9.7.1
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+          cache-dependency-path: OpenNoter_extension/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Unit tests
+        run: pnpm test
+
+      # e2e（Playwright）暂不进门禁：
+      #   - 需要下载浏览器，单次 1~2 分钟；
+      #   - `e2e/basic.spec.ts` 目前仍是 Vitesse 模板（断言 "Vitesse WebExt"），
+      #     跟产品无关，跑它只会在红灯里制造噪音。
+      # 等 e2e 换成真实的 popup/options 用例后再单独开 nightly job。
+
+  frontend:
+    name: Frontend (build + lint)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: OpenNoter_frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: OpenNoter_frontend/package-lock.json
+
+      - name: Install dependencies
+        # 仓库只跟踪 package-lock.json（没有 pnpm-lock.yaml）
+        run: npm ci
+
+      - name: Typecheck & build
+        # `npm run build` 本身就是 `tsc -b && vite build`，
+        # 类型错误会让 build 失败，所以不需要单独的 tsc 步骤。
+        run: npm run build
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests
+        # 只测零依赖模块（`src/lib/urls.ts` 等），跑的是独立的
+        # `vitest.config.ts`（不带 @react-spectrum/s2 的 parcel 宏）。
+        run: npm test
