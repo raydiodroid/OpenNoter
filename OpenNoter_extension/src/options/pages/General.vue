@@ -111,8 +111,14 @@ onMounted(async () => {
         >
       </div>
       <p class="text-xs text-gray-500">
-        后端未开启强制认证（默认）时可留空。开启 OPENNOTER_AUTH_ENFORCE=1 后所有业务接口都需要凭据，
-        插件会用这里填的 Key 走 x-api-key 头。仅保存在浏览器本地存储，不上传。
+        <strong>后端默认就要求认证</strong>（<code>OPENNOTER_AUTH_ENFORCE</code> 默认开启），
+        所以这里通常<strong>必须</strong>填一个 API Key —— 留空会导致右键菜单/弹窗
+        调接口时返回 401。
+        插件会用这里填的 Key 走 <code>x-api-key</code> 头。
+        Key 在「设置 → API 密钥」里创建；仅保存在浏览器本地存储，不上传。
+        <br>
+        只有当你显式把后端配成 <code>OPENNOTER_AUTH_ENFORCE=0</code>（单人内网自托管）
+        时才可以留空。
       </p>
     </section>
 

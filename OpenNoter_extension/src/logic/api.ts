@@ -27,7 +27,15 @@ function backendUrl(): string {
  * 鉴权头：后端开了强制认证时，除 /sys_health 外的接口都要求凭据。
  * 插件没有浏览器 cookie（cookies 对 localhost 不适用），所以走 API Key。
  */
-function authHeaders(): Record<string, string> {
+/**
+ * 认证头（F3）。
+ *
+ * **必须导出**：`background/main.ts` 的右键菜单 / `opennoter-start` 消息走的是
+ * 独立 `fetch`，不在本模块的 `request()` 覆盖范围内。它原先只带
+ * `Content-Type`，默认 `AUTH_ENFORCE=true` 的后端会稳定 401 ——
+ * 表现为「弹窗能用、右键菜单不能用」这种时好时坏的怪象。
+ */
+export function authHeaders(): Record<string, string> {
   const key = (settings.value?.apiKey || '').trim()
   return key ? { 'x-api-key': key } : {}
 }
@@ -124,7 +132,9 @@ export async function addModel(providerId: string, modelName: string): Promise<v
 }
 
 export async function deleteModel(modelId: number | string): Promise<void> {
-  await request(`/api/models/delete/${modelId}`)
+  // 后端只保留 `DELETE /api/models/{id}`（旧的 `/api/models/delete/{id}` 已下线）。
+  // 用旧路径会稳定 404 —— 表现是「设置页删模型点了没反应」。
+  await request(`/api/models/${modelId}`, { method: 'DELETE' })
 }
 
 // ---- Transcriber ----

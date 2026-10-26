@@ -4,7 +4,17 @@ import type { TaskStatus } from '~/logic/types'
 
 const props = defineProps<{ status: TaskStatus, message?: string }>()
 
-const STAGE_ORDER: TaskStatus[] = ['PENDING', 'PARSING', 'DOWNLOADING', 'TRANSCRIBING', 'SUMMARIZING', 'FORMATTING', 'SAVING', 'SUCCESS']
+// 进度条只展示**后端真的会写入**的状态。
+//
+// `FORMATTING` 在后端枚举/配额/中断集合里都存在，但 `NoteGenerator` 从来不写
+// 它（`_update_status` 只发 PENDING/PARSING/DOWNLOADING/TRANSCRIBING/
+// SUMMARIZING/SAVING/SUCCESS/FAILED）。放进 STAGE_ORDER 会让进度条在
+// SUMMARIZING → SAVING 之间**空跳一格**，看起来像「卡住了」。
+//
+// 注意：`STAGE_LABELS` 仍保留 FORMATTING（它是 `Record<TaskStatus, string>`，
+// 少一项 TS 会报错），只是不再参与进度计算。若将来后端真的开始写该状态，
+// 把它加回本数组即可。
+const STAGE_ORDER: TaskStatus[] = ['PENDING', 'PARSING', 'DOWNLOADING', 'TRANSCRIBING', 'SUMMARIZING', 'SAVING', 'SUCCESS']
 const STAGE_LABELS: Record<TaskStatus, string> = {
   PENDING: '排队中',
   PARSING: '解析中',
