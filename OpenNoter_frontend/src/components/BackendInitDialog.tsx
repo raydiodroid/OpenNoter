@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Button, Content, Heading, Link, ProgressCircle, Text } from '@react-spectrum/s2'
 import { style } from '@react-spectrum/s2/style' with { type: 'macro' }
 import { useBackendEvents } from '@/components/BackendHealth/useBackendEvents'
@@ -48,7 +48,41 @@ export default function BackendInitDialog({
       .map(entry => entry.text)
   }, [failed, logs])
 
-  const isOpen = open || failed
+  // ---------------------------------------------------------------
+  // 延迟显示（只在 Web 端生效）
+  // ---------------------------------------------------------------
+  // ## 为什么需要
+  //
+  // `useCheckBackend` 的初始状态是 `loading: true`，而探测是异步的
+  // （`useEffect` 里才发第一个 `/sys_check`）。所以**首帧必然**是
+  // 「后端正在初始化」—— 哪怕后端早就在跑、`/sys_check` 只要 2ms。
+  //
+  // Web 部署（docker compose）下后端是常驻的，根本没「解压 10-30 秒」这回事。
+  // 结果就是每次打开/刷新页面都会闪一个全屏 Modal 遮罩，虽然很短但很难看，
+  // 而且文案（首次启动解压依赖）对 Web 用户是误导。
+  //
+  // ## 做法
+  //
+  // 给一个很短的宽限期（300ms）：
+  //   - 后端正常（< 300ms 就绪）→ **从不显示** Modal，页面直接出来；
+  //   - 后端真的慢/没起 → 300ms 后照常显示「正在初始化」。
+  //
+  // 桌面端**不加延迟**：sidecar 解压确实要 5-15 秒，早点给用户反馈更好，
+  // 而且那条文案在桌面端是准确的。
+  const [graceElapsed, setGraceElapsed] = useState(false)
+  const WEB_GRACE_MS = 300
+
+  useEffect(() => {
+    // 桌面端 / 已经过了宽限期 / 已经失败（要立刻显示错误）→ 不需要再等
+    if (isTauri || graceElapsed || failed) return
+    const t = setTimeout(() => setGraceElapsed(true), WEB_GRACE_MS)
+    return () => clearTimeout(t)
+  }, [isTauri, graceElapsed, failed])
+
+  // Web 端在宽限期内不显示；桌面端与失败态立即显示
+  const shouldShowLoading = isTauri || graceElapsed
+
+  const isOpen = (open && shouldShowLoading) || failed
 
   const handleRestart = async () => {
     setRestarting(true)

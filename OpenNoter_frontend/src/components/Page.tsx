@@ -223,15 +223,22 @@ export function ListDetail({ list, children }: { list: ReactNode; children: Reac
   )
 }
 
-/** 容器内的说明文字：Detail 字号、neutral-subdued */
-export const helperText = style({
+// 下面两个样式**只在本文件内使用**，因此不 export。
+//
+// 之前它们是 `export const`，触发 `eslint` 的
+// `react-refresh/only-export-components`：组件文件额外导出常量会让
+// Fast Refresh 退化成整页刷新（改一行代码整个应用状态丢失）。
+//
+// 全仓 grep 确认没有外部调用点 ⇒ 去掉 `export` 既消除了警告，
+// 也不影响任何调用方。若将来要在别处复用，正确做法是抽到
+// `lib/styles.ts` 之类的纯样式文件，而不是加回组件文件。
+
+/** 容器内的说明文字：Detail 字号、neutral-subdued（仅本文件内使用） */
+const helperText = style({
   font: 'detail',
   color: 'neutral-subdued',
   margin: 0,
 })
-
-/** 表单宽度上限，避免长表单在大屏上拉得过宽 */
-export const formWidth = style({ maxWidth: 720 })
 
 const emptyState = style({
   display: 'flex',

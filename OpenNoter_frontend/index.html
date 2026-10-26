@@ -10,8 +10,322 @@
     <meta name="color-scheme" content="light" />
     <meta name="theme-color" content="#f8f8f8" />
     <title>OpenNoter - 强大的AI视频笔记神器</title>
+
+    <!--
+      ════════════════════════════════════════════════════════════════
+      启动骨架屏（内联，必须放在 index.html）
+      ════════════════════════════════════════════════════════════════
+
+      ## 为什么内联在这里而不是做成 React 组件
+
+      这段 HTML/CSS 在**任何 JS 下载、解析、执行之前**就已经渲染了。
+      React 的加载态要等 bundle 下载完、React 挂载后才可能出现在屏幕上。
+
+      Web 部署实测 bundle 约 1.3MB（gzip 400KB），首次访问/强制刷新时
+      下载+解析要几百毫秒。这段时间用户看到的就是纯白屏 —— 最影响观感。
+      把它内联在这里，从「刷新」到「看到品牌」几乎无延迟。
+
+      ## 与 React 加载态的分工
+
+        index.html 骨架屏  →  JS 尚未执行期间（本文件）
+        React <Loading />  →  JS 已执行、但后端/鉴权尚未就绪期间
+
+      两者视觉一致，且切换时骨架屏淡出，所以看不出跳变。
+
+      ## 为什么样式内联
+
+      外链 CSS 是阻塞请求。骨架屏的意义就是「不等任何额外请求」，
+      所以样式必须内联（约 3KB，对首屏无负担）。
+
+      ## 控制点
+
+      `main.tsx` 在 React 首次提交后调用 `window.__bootLoaderDone()`，
+      这里加 `.is-done` 触发淡出，200ms 后从 DOM 移除。
+      `src/lib/bootLoader.ts` 提供封装。
+    -->
+    <style>
+      /* ── 颜色变量：与 src/styles/global.css 的主题变量保持同值 ── */
+      :root {
+        --boot-bg: #f8f8f8;
+        --boot-surface: #ffffff;
+        --boot-border: #e1e1e1;
+        --boot-text: #292929;
+        --boot-subdued: #6e6e6e;
+        --boot-accent: #3c77fb;
+        --boot-accent-glow: rgba(60, 119, 251, 0.22);
+        /* 骨架条：比背景深 12 级，肉眼可辨但不抢焦点 */
+        --boot-skeleton: #d8d8d8;
+        --boot-track: #e4e4e4;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --boot-bg: #1a1a1a;
+          --boot-surface: #232323;
+          --boot-border: #3a3a3a;
+          --boot-text: #ededed;
+          --boot-subdued: #9a9a9a;
+          --boot-accent: #6a9bff;
+          --boot-accent-glow: rgba(106, 155, 255, 0.26);
+          --boot-skeleton: #3d3d3d;
+          --boot-track: #2b2b2b;
+        }
+      }
+
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: var(--boot-bg);
+        color: var(--boot-text);
+        font-family: 'Source Han Sans SC', 'Source Han Sans CN', 'Noto Sans CJK SC',
+          system-ui, -apple-system, sans-serif;
+        /* 骨架屏期间禁止滚动：否则会出现「能滚动但没内容」的怪状态 */
+        overflow: hidden;
+      }
+
+      /* ══════════ 骨架屏容器 ══════════ */
+      #boot-loader {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 22px;
+        background: var(--boot-bg);
+        opacity: 1;
+        transition: opacity 200ms ease;
+      }
+
+      /* React 接管后加这个类 → 淡出 → 由 bootLoader.ts 移除节点 */
+      #boot-loader.is-done {
+        opacity: 0;
+        pointer-events: none;
+      }
+
+      /* ══════════ 品牌区 ══════════ */
+      .boot-brand {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+      }
+
+      /* 图标：纯 CSS 画的播放键，避免额外图片请求 */
+      .boot-logo {
+        width: 52px;
+        height: 52px;
+        border-radius: 14px;
+        background: var(--boot-accent);
+        display: grid;
+        place-items: center;
+        box-shadow: 0 6px 22px var(--boot-accent-glow);
+        animation: boot-pulse 2.2s ease-in-out infinite;
+      }
+
+      /* 播放三角（白色） */
+      .boot-logo::after {
+        content: '';
+        width: 0;
+        height: 0;
+        border-style: solid;
+        border-width: 11px 0 11px 18px;
+        border-color: transparent transparent transparent #ffffff;
+        margin-left: 4px;
+      }
+
+      @keyframes boot-pulse {
+        0%,
+        100% {
+          transform: scale(1);
+          box-shadow: 0 6px 22px var(--boot-accent-glow);
+        }
+        50% {
+          transform: scale(1.05);
+          box-shadow: 0 10px 32px var(--boot-accent-glow);
+        }
+      }
+
+      .boot-title {
+        font-size: 21px;
+        font-weight: 600;
+        letter-spacing: 0.2px;
+        margin: 0;
+        line-height: 1.2;
+      }
+
+      .boot-tagline {
+        font-size: 12.5px;
+        color: var(--boot-subdued);
+        margin: 4px 0 0;
+        line-height: 1.2;
+      }
+
+      /* ══════════ 进度条（不确定态） ══════════ */
+      .boot-progress {
+        width: 200px;
+        height: 4px;
+        border-radius: 999px;
+        background: var(--boot-track);
+        overflow: hidden;
+      }
+
+      .boot-progress::before {
+        content: '';
+        display: block;
+        width: 42%;
+        height: 100%;
+        border-radius: 999px;
+        background: var(--boot-accent);
+        /*
+          不确定态进度条：滑块在容器内来回滑动。
+
+          ## 为什么不用 translateX(-110%) → translateX(350%)
+          那种写法会让滑块**大部分时间都在容器外**（350% × 84px = 294px，
+          远超 200px 的容器宽度），视觉上就是"进度条一直是灰的，偶尔闪一下蓝"。
+
+          改用 left% + 相对容器宽度的位移，保证滑块**始终可见**：
+            left: 0   → -42%   （完全移出左侧）
+            left: 100% → 0      （刚好到达右端）
+          再配合父容器的 overflow:hidden，形成流畅的「推进—消失—重来」。
+        */
+        position: relative;
+        animation: boot-slide 1.25s cubic-bezier(0.45, 0, 0.35, 1) infinite;
+      }
+
+      @keyframes boot-slide {
+        0% {
+          left: 0%;
+          transform: translateX(-100%);
+        }
+        100% {
+          left: 100%;
+          transform: translateX(0%);
+        }
+      }
+
+      .boot-hint {
+        font-size: 12px;
+        color: var(--boot-subdued);
+        margin: 0;
+        min-height: 1.2em;
+        text-align: center;
+      }
+
+      /* ══════════ 骨架卡片（预告即将出现的内容布局） ══════════ */
+      .boot-skeleton {
+        width: min(90vw, 940px);
+        display: grid;
+        grid-template-columns: 250px 1fr;
+        gap: 18px;
+        /* 骨架比品牌弱，但要看得见 —— 0.5 时几乎融进背景 */
+        opacity: 0.75;
+      }
+
+      @media (max-width: 760px) {
+        .boot-skeleton {
+          grid-template-columns: 1fr;
+        }
+        .boot-skeleton-side {
+          display: none;
+        }
+      }
+
+      .boot-skeleton-side,
+      .boot-skeleton-main {
+        background: var(--boot-surface);
+        border: 1px solid var(--boot-border);
+        border-radius: 14px;
+        padding: 18px;
+      }
+
+      .boot-bar {
+        height: 10px;
+        border-radius: 999px;
+        background: var(--boot-skeleton);
+        margin-bottom: 12px;
+      }
+
+      .boot-bar:last-child {
+        margin-bottom: 0;
+      }
+
+      /* 宽度递变，模拟真实文本行 */
+      .boot-bar.w-90 { width: 90%; }
+      .boot-bar.w-75 { width: 75%; }
+      .boot-bar.w-60 { width: 60%; }
+      .boot-bar.w-45 { width: 45%; }
+      .boot-bar.tall { height: 15px; }
+
+      /* 呼吸：让骨架"活着"，暗示正在加载而不是卡死 */
+      .boot-skeleton > div > * {
+        animation: boot-breathe 1.9s ease-in-out infinite;
+      }
+
+      @keyframes boot-breathe {
+        0%,
+        100% {
+          opacity: 0.82;
+        }
+        50% {
+          opacity: 1;
+        }
+      }
+
+      /* ══════════ 无障碍：尊重"减少动态效果"偏好 ══════════ */
+      @media (prefers-reduced-motion: reduce) {
+        .boot-logo,
+        .boot-progress::before,
+        .boot-skeleton > div > * {
+          animation: none !important;
+        }
+        .boot-progress::before {
+          width: 100%;
+          opacity: 0.45;
+        }
+        #boot-loader {
+          transition: none;
+        }
+      }
+    </style>
   </head>
   <body>
+    <!--
+      role="status" + aria-live="polite"：读屏软件会播报"正在启动 OpenNoter"，
+      并在移除时播报完成（不需要额外的 aria-busy 管理）。
+    -->
+    <div id="boot-loader" role="status" aria-live="polite" aria-label="正在启动 OpenNoter">
+      <div class="boot-brand">
+        <div class="boot-logo" aria-hidden="true"></div>
+        <div>
+          <h1 class="boot-title">OpenNoter</h1>
+          <p class="boot-tagline">把视频变成结构化笔记</p>
+        </div>
+      </div>
+
+      <div class="boot-progress" aria-hidden="true"></div>
+      <p class="boot-hint" id="boot-hint">正在加载界面…</p>
+
+      <div class="boot-skeleton" aria-hidden="true">
+        <div class="boot-skeleton-side">
+          <div class="boot-bar tall w-75"></div>
+          <div class="boot-bar w-90"></div>
+          <div class="boot-bar w-60"></div>
+          <div class="boot-bar w-75"></div>
+          <div class="boot-bar w-45"></div>
+        </div>
+        <div class="boot-skeleton-main">
+          <div class="boot-bar tall w-45"></div>
+          <div class="boot-bar w-90"></div>
+          <div class="boot-bar w-90"></div>
+          <div class="boot-bar w-75"></div>
+          <div class="boot-bar w-90"></div>
+          <div class="boot-bar w-45"></div>
+        </div>
+      </div>
+    </div>
+
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
