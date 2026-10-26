@@ -138,6 +138,16 @@ async function openSidePanel() {
 }
 
 function selectTask(id: string) {
+  // F29：切换任务前先清掉上一条任务的轮询定时器。
+  //
+  // 不清的话，快速点几个任务会累加多个 setTimeout 链 —— 每个都在轮询自己的
+  // taskId 并写 store，既浪费请求，也让「当前任务」的进度被别的任务回写覆盖。
+  // `Sidepanel.vue` 的 selectTask 早就这么做了，这里对齐。
+  if (pollTimer) {
+    clearTimeout(pollTimer)
+    pollTimer = null
+  }
+
   activeTaskId.value = id
   const t = tasks.value?.find(x => x.taskId === id)
   if (t && t.status !== 'SUCCESS' && t.status !== 'FAILED')

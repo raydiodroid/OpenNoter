@@ -2,6 +2,7 @@ import { onMessage } from 'webext-bridge/background'
 import type { Platform, Settings, TaskRecord } from '~/logic/types'
 import { DEFAULT_SETTINGS, MAX_TASKS, SETTINGS_KEY, TASKS_KEY } from '~/logic/constants'
 import { detectPlatform } from '~/logic/platform'
+import { authHeaders } from '~/logic/api'
 import { fetchBilibiliSubtitle } from '~/logic/bilibili-subtitle'
 import { normalizeVideoTitle } from '~/logic/task-display'
 import { COOKIE_NAME_ALLOWLISTS, readBrowserCookies, SUPPORTED_COOKIE_PLATFORMS } from '~/logic/cookies'
@@ -81,7 +82,10 @@ async function startTask(url: string, title?: string): Promise<{ ok: boolean, ta
   try {
     const res = await fetch(`${backend}/api/generate_note`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      // F3：后台 `fetch` 不在 logic/api.ts 的 `request()` 覆盖范围内，
+      // 必须显式复用同一套认证头。否则默认 AUTH_ENFORCE=true 的后端会稳定 401，
+      // 而弹窗（走 request）却正常 —— 表现为「右键菜单时好时坏」。
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({
         video_url: url,
         platform,

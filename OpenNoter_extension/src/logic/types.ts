@@ -120,6 +120,18 @@ export interface Settings {
    * 而插件此前不带任何凭据 → 整个插件 401 不可用。
    * 这里让用户粘一个自己的 API Key（后端「密钥管理」页可生成），
    * 请求时放 x-api-key 头。
+   *
+   * ⚠️ **存储位置就是 `chrome.storage.local`**（F53，已知且接受）。
+   *
+   * MV3 没有更安全又无需交互的方案：
+   *   - `chrome.storage.session`：service worker 重启即丢，用户每次都要重填；
+   *   - `chrome.storage.sync`：会把 Key **同步到用户的 Google 账号云端**，
+   *     比本地明文存储更糟 —— **不要"顺手"迁移到 sync**；
+   *   - 本地加密：密钥也只能存在同一处，等于同义反复。
+   *
+   * 实际的缓解在服务端：Key 有 `expires_at`、`allowed_ips`、`rate_limit`，
+   * 泄露后可以吊销。真要提升安全性应改「设备绑定 + 短时令牌」，
+   * 那是产品级改动，不是这里能"顺手修"的。
    */
   apiKey: string
   providerId: string
