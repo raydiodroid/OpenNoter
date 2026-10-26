@@ -41,8 +41,10 @@ from app.utils.note_paths import (
     validate_task_id,
 )
 from app.utils.upload_paths import (
+    is_upload_ref,
     max_upload_bytes,
     resolve_under_uploads,
+    safe_upload_rel,
     sanitize_store_name,
     set_upload_owner,
     uploads_dir,
@@ -141,12 +143,41 @@ class CreateNoteRequest(BaseModel):
             data["url"] = normalize_video_url(str(data["url"]))
         return data
 
-    @field_validator("url")
-    def validate_supported_url(cls, v):
-        if not is_supported_video_url(str(v)):
+    @model_validator(mode="after")
+    def validate_source(self):
+        """按来源类型分流校验。
+
+        **为什么不再无条件走视频域名白名单**：上传接口返回的是相对路径
+        ``/uploads/<uuid>.ext``，scheme 为空，会被 ``is_supported_video_url``
+        的第一关（scheme 必须是 http/https）直接判死 —— 这正是"本地上传在
+        ``POST /api/notes`` 上完全不可用"的原因。
+
+        分流规则：
+          - ``platform=local`` 或路径是 ``/uploads/`` 引用 → 走 uploads 沙箱校验；
+          - 其余仍必须通过 ``is_supported_video_url``（含 SSRF 黑名单）。
+
+        注意：**不能**为了修本地文件而让任意非 http(s) 字符串过关 ——
+        ``/etc/passwd``、``not-a-url`` 这类必须在入口就被拒。
+        """
+        raw = str(self.url)
+        is_local = (self.platform == "local") or is_upload_ref(raw)
+
+        if is_local:
+            if not safe_upload_rel(raw):
+                raise NoteError(
+                    code=NoteErrorEnum.PLATFORM_NOT_SUPPORTED.code,
+                    message="本地视频路径非法（必须是 /uploads/ 下的文件）",
+                )
+            # platform 留空时补成 local：路由层的 detect_platform 认不出 /uploads/，
+            # 不补会让 create_note 走到"无法识别视频平台"的 error 分支。
+            if not self.platform:
+                self.platform = "local"
+            return self
+
+        if not is_supported_video_url(raw):
             raise NoteError(code=NoteErrorEnum.PLATFORM_NOT_SUPPORTED.code,
                             message=NoteErrorEnum.PLATFORM_NOT_SUPPORTED.message)
-        return v
+        return self
 
 
 NOTE_OUTPUT_DIR = os.getenv("NOTE_OUTPUT_DIR", "note_results")
@@ -207,17 +238,52 @@ def _persist_prefetched_transcript(task_id: str, video_url: str, quality, transc
     logger.info(f"已写入客户端预取字幕缓存: {target} ({len(cleaned_segments)} 段)")
 
 
+def _log_task_failure(task_id: str):
+    """返回一个 done-callback：线程池任务抛异常时记日志并标 FAILED。
+
+    F26 的配套：改成 submit 之后，异常不再经过 `future.result()` 传播，
+    如果不显式处理，一次崩溃只会留下一条 concurrent.futures 的默认告警
+    （甚至完全没有），而任务状态会永远停在执行中。
+    """
+
+    def _cb(future):
+        exc = future.exception()
+        if exc is None:
+            return
+        logger.error(f"任务执行异常 (task_id={task_id}): {exc}", exc_info=exc)
+        try:
+            # 用 `__new__` 跳过 `__init__`：构造 NoteGenerator 会去初始化转写器
+            # （拉起 torch/whisper，几百毫秒到几秒），而这里只想写一个状态文件。
+            # `_update_status` 只用到模块级 logger 与 DB 同步，不需要实例状态。
+            gen = NoteGenerator.__new__(NoteGenerator)
+            gen._update_status(  # noqa: SLF001 - 内部方法，此处是唯一安全的降级入口
+                task_id, TaskStatus.FAILED,
+                message=f"任务执行异常: {type(exc).__name__}",
+            )
+        except Exception as inner:  # noqa: BLE001 - 兜底失败也只记日志
+            logger.error(f"标记任务失败时又出错 (task_id={task_id}): {inner}")
+
+    return _cb
+
+
 def run_note_task(task_id: str, video_url: str, platform: str, quality: DownloadQuality,
                   link: bool = False, screenshot: bool = False, model_name: str = None, provider_id: str = None,
                   _format: list = None, style: str = None, extras: str = None, video_understanding: bool = False,
-                  video_interval=0, grid_size=[]
+                  video_interval=0, grid_size=[], user_id: int = None
                   ):
 
     if not model_name or not provider_id:
         raise HTTPException(status_code=400, detail="请选择模型和提供者")
 
+    # BYOK：把任务归属用户显式传进来。
+    #
+    # **不能用 contextvar**：真正的执行发生在 task_serial_executor 的
+    # ThreadPoolExecutor 线程里，contextvars 在 submit 下不会传播（已验证）。
+    # 这就是为什么 user_id 必须作为参数一路传下去。
+    generator = NoteGenerator(user_id=user_id)
+
     def _execute_note_task():
-        return NoteGenerator().generate(
+        return generator.generate(
             video_url=video_url,
             platform=platform,
             quality=quality,
@@ -234,20 +300,52 @@ def run_note_task(task_id: str, video_url: str, platform: str, quality: Download
             grid_size=grid_size,
         )
 
-    logger.info(f"任务进入执行队列 (task_id={task_id})")
-    note = task_serial_executor.run(_execute_note_task)
-    logger.info(f"Note generated: {task_id}")
-    if not note or not note.markdown:
-        logger.warning(f"任务 {task_id} 执行失败，跳过保存")
-        return
-    save_note_to_file(task_id, note)
+    def _run_and_finalize():
+        """在**线程池内**完成「生成 → 落盘 → 标成功 → 建索引」全流程。
 
-    # 自动建立向量索引（用于 AI 问答），失败不影响笔记生成
-    try:
-        from app.services.vector_store import VectorStoreManager
-        VectorStoreManager().index_task(task_id)
-    except Exception as e:
-        logger.warning(f"向量索引失败（不影响笔记）: {e}")
+        F26：把收尾也放进池里，而不是让 `run_note_task`（本身已占一个
+        Starlette BackgroundTask 线程）阻塞等结果。见 `submit()` 的注释。
+        """
+        note = generator.generate(
+            video_url=video_url,
+            platform=platform,
+            quality=quality,
+            task_id=task_id,
+            model_name=model_name,
+            provider_id=provider_id,
+            link=link,
+            _format=_format,
+            style=style,
+            extras=extras,
+            screenshot=screenshot,
+            video_understanding=video_understanding,
+            video_interval=video_interval,
+            grid_size=grid_size,
+        )
+        logger.info(f"Note generated: {task_id}")
+        if not note or not note.markdown:
+            logger.warning(f"任务 {task_id} 执行失败，跳过保存")
+            return
+        # 先落盘再标 SUCCESS（顺序不可颠倒，见 save_and_mark_success 的注释）
+        if not generator.save_and_mark_success(task_id, note, save_note_to_file):
+            return
+
+        # 自动建立向量索引（用于 AI 问答），失败不影响笔记生成
+        try:
+            from app.services.vector_store import VectorStoreManager
+            VectorStoreManager().index_task(task_id)
+        except Exception as e:
+            logger.warning(f"向量索引失败（不影响笔记）: {e}")
+
+    logger.info(f"任务进入执行队列 (task_id={task_id})")
+    # F26：只提交、立即返回。不再 `run()`（那会阻塞 background 线程白等）。
+    future = task_serial_executor.submit(_run_and_finalize)
+    # F49：登记 task_id，供运行期 stale-task reaper 判断「它到底还在不在跑」。
+    # 没有这层登记，reaper 只能看状态文件 —— 那会把正在正常执行的长任务误判成僵尸。
+    task_serial_executor.track(task_id, future)
+    # 兜底：池内未捕获异常必须留下日志，否则会静默消失
+    # （BackgroundTask 的异常会进 ASGI 日志，但线程池里的不会）。
+    future.add_done_callback(_log_task_failure(task_id))
 
 
 def _ownerless_accessible(user: Optional[User]) -> bool:
@@ -573,7 +671,23 @@ def _submit_note_task(background_tasks: BackgroundTasks, *, video_url: str, plat
 
     # 模型/供应商当场校验（无副作用）。不在这里校验的话，错的 provider_id
     # 会先返回 200 + task_id，任务在后台才失败。
-    provider_id, model_name = resolve_model_selection(provider_id, model_name)
+    #
+    # user_id 用于识别 BYOK 的 own: 前缀（用户自有模型不走 providers 表）。
+    _sel_user_id = getattr(user, "id", None)
+    try:
+        provider_id, model_name = resolve_model_selection(
+            provider_id, model_name, user_id=_sel_user_id
+        )
+    except Exception as _sel_exc:
+        # BYOK 的两类专用异常要转成给用户看的 4xx，而不是落到兜底 500
+        from app.services.credential_resolver import (
+            CredentialBroken,
+            CredentialRequired,
+        )
+
+        if isinstance(_sel_exc, (CredentialRequired, CredentialBroken)):
+            return R.error(msg=str(_sel_exc), code=400)
+        raise
 
     if task_id:
         # ---------------------------------------------------------------
@@ -631,7 +745,8 @@ def _submit_note_task(background_tasks: BackgroundTasks, *, video_url: str, plat
 
     background_tasks.add_task(run_note_task, task_id, video_url, platform, quality, link,
                               screenshot, model_name, provider_id, fmt, style,
-                              extras, video_understanding, video_interval, grid_size)
+                              extras, video_understanding, video_interval, grid_size,
+                              getattr(user, "id", None))
     return task_id
 
 
@@ -753,6 +868,10 @@ def list_tasks(
             limit=limit,
             offset=offset,
             status=wanted_status,
+            # 显式传目录：`list_tasks_for_user` 需要它判断 has_result，
+            # 不传则回落到 NOTE_OUTPUT_DIR 环境变量（测试里 monkeypatch 的是
+            # 模块属性 `mod.NOTE_OUTPUT_DIR`，不一定同步到 env）。
+            note_dir=NOTE_OUTPUT_DIR,
         )
         # DB 有数据就直接返回；为空则回退到扫文件——
         # 兼容「迁移前就已存在、还没进 DB」的历史任务。
@@ -866,10 +985,31 @@ def get_task_status(task_id: str, user: User | None = Depends(get_optional_user)
         raise HTTPException(status_code=400, detail="非法 task_id")
 
     # 优先读状态文件
+    # 先初始化为 None：状态文件不存在 / 损坏时都走「无状态」分支。
+    # （不在 if 内首次赋值，否则后面的 `if status_content is not None`
+    #  在文件不存在时会 NameError。）
+    status_content = None
     if os.path.exists(status_path):
-        with open(status_path, "r", encoding="utf-8") as f:
-            status_content = json.load(f)
+        # O-2：状态文件可能**损坏**（进程被 kill 在写一半、磁盘满、手工编辑出错）。
+        # 旧实现裸 `json.load` 会抛 JSONDecodeError → 未捕获 → **500**，
+        # 于是这个任务**永久**无法轮询（每次都 500），前端一直转圈。
+        #
+        # 这里的语义选择：把它当成「没有可读的状态」，继续走后面的分支
+        # （有结果文件则按 SUCCESS 返回，否则按 DB 判断），而不是让整个接口炸掉。
+        # 同时记一条 error 日志，因为这是个需要人看一眼的运维信号。
+        try:
+            with open(status_path, "r", encoding="utf-8") as f:
+                status_content = json.load(f)
+            if not isinstance(status_content, dict):
+                raise ValueError(f"状态文件不是对象（{type(status_content).__name__}）")
+        except (ValueError, OSError) as exc:
+            logger.error(
+                "状态文件损坏，按「无状态」降级处理 (task_id=%s, path=%s): %s",
+                task_id, status_path, exc,
+            )
+            status_content = None
 
+    if status_content is not None:
         # 归属校验：与删除/列表用同一套规则（见 _can_access_task）。
         if not _can_access_task_from_payload(status_content, user):
             raise HTTPException(status_code=403, detail="无权访问该任务")
@@ -889,10 +1029,19 @@ def get_task_status(task_id: str, user: User | None = Depends(get_optional_user)
                     "task_id": task_id
                 })
             else:
-                # 理论上不会出现，保险处理
+                # 状态文件说 SUCCESS，但结果文件不存在 —— 这是**数据不一致**，
+                # 不是「还在排队」。旧实现返回 PENDING 会让前端永远 3 秒轮询
+                # 一个再也不会变化的任务（前端认为它还在跑）。
+                #
+                # 正确语义：告诉前端"还在收尾"，让它继续等；同时记一条错误日志
+                # 便于排查为什么 SUCCESS 了却没文件（理论上 save_and_mark_success
+                # 已保证不会发生，这里是兜底）。
+                logger.error(
+                    f"状态文件为 SUCCESS 但结果文件缺失 (task_id={task_id})，返回 SAVING"
+                )
                 return R.success({
-                    "status": TaskStatus.PENDING.value,
-                    "message": "任务完成，但结果文件未找到",
+                    "status": TaskStatus.SAVING.value,
+                    "message": "任务正在收尾，请稍候",
                     "task_id": task_id
                 })
 

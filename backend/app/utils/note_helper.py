@@ -12,6 +12,17 @@ def prepend_source_link(markdown: str | None, source_url: str) -> str | None:
     if not source:
         return markdown
 
+    # O-4：**空内容不能被"补"成非空**。
+    #
+    # 旧行为：`prepend_source_link("")` 返回 `> 来源链接：<url>` —— 一个合法的
+    # 非空 markdown。而 `run_note_task` 用 `if not note.markdown: 视为失败` 判断
+    # 生成是否成功，于是「LLM 返回空串」这种确定失败会被**补成"成功"**，
+    # 用户拿到一篇只有一行来源链接的"笔记"，状态还是 SUCCESS，无法重试。
+    #
+    # 让空进空出：上游的「空 markdown = 失败」判断才能按预期工作。
+    if not markdown.strip():
+        return markdown
+
     header = f"> 来源链接：{source}"
     lines = markdown.splitlines()
     first_non_empty_idx = None

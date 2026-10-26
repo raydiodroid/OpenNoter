@@ -63,6 +63,28 @@ IMAGE_BASE_URL = os.getenv("IMAGE_BASE_URL", "/static/screenshots")
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+
+def _sign_static_url(url: str) -> str:
+    """给 `/static/` 下的 URL 补签名令牌（F9）。
+
+    Tauri / 浏览器扩展里的 ``<img>`` 带不上 Cookie 或 API-Key，只能靠 URL 上的
+    令牌通过 ``/static/`` 的鉴权。签名助手由 security 组提供
+    （``app/utils/static_signing.py`` 的 ``sign_static_url``）。
+
+    该模块由并行施工引入，**可能尚未落地**：导入失败时原样返回，保持改动前的
+    行为；签名本身出错也不能让整段截图被外层 except 吞掉（笔记会丢图）。
+    """
+    try:
+        from app.utils.static_signing import sign_static_url
+    except ImportError:
+        return url
+    try:
+        return sign_static_url(url)
+    except Exception as exc:  # noqa: BLE001 - 签名失败不该影响笔记生成
+        logger.warning(f"静态资源签名失败，退回未签名 URL：{exc}")
+        return url
+
+
 # ------------------ 缓存文件命名（task_id + 链接/质量指纹） ------------------
 
 # 历史 bug：缓存文件只按 task_id 命名。前端「重试」会复用同一个 task_id 提交
@@ -147,7 +169,7 @@ class NoteGenerator:
     以及将任务信息写入状态文件与数据库等功能。
     """
 
-    def __init__(self):
+    def __init__(self, user_id: Optional[int] = None):
         from app.services.transcriber_config_manager import TranscriberConfigManager
         config_manager = TranscriberConfigManager()
         self.model_size: str = config_manager.get_whisper_model_size()
@@ -158,9 +180,13 @@ class NoteGenerator:
         self.video_img_urls=[]
         # 下载相关上限（体积 / 时长 / 重试次数）。每次实例化现读，改 env 后新任务即生效。
         self.limits = get_download_limits()
+        # BYOK：任务归属用户。用于 `_get_gpt` 解析「用谁的凭据」。
+        # None 表示匿名（`AUTH_ENFORCE=0` 的部署），一律走站点凭据。
+        self.user_id: Optional[int] = user_id
         logger.info(
             f"NoteGenerator 初始化完成（体积上限 {self.limits.max_size_mb}MB，"
-            f"时长上限 {self.limits.max_duration_seconds}s，重试 {self.limits.retry_count} 次）"
+            f"时长上限 {self.limits.max_duration_seconds}s，重试 {self.limits.retry_count} 次，"
+            f"user_id={user_id}）"
         )
 
 
@@ -206,6 +232,12 @@ class NoteGenerator:
         """
         if grid_size is None:
             grid_size = []
+
+        # 这两个属性在 `finally` 的清理逻辑里会被读到，先显式初始化：
+        # 万一流程在赋值之前就抛异常，`getattr(self, "video_path", None)`
+        # 虽然能兜住，但显式初始化让「哪些中间产物属于本任务」更清楚。
+        self.video_path = None
+        self._cleanup_done = False
 
         try:
             logger.info(f"开始生成笔记 (task_id={task_id})")
@@ -278,9 +310,10 @@ class NoteGenerator:
             self._update_status(task_id, TaskStatus.SAVING)
             self._save_metadata(video_id=audio_meta.video_id, platform=platform, task_id=task_id)
 
-            # 6. 完成
-            self._update_status(task_id, TaskStatus.SUCCESS)
-            logger.info(f"笔记生成成功 (task_id={task_id})")
+            # 6. 生成完成 —— **此处不标 SUCCESS**。
+            #    结果文件还没落盘（落盘在 routers/note.py 的 run_note_task 里），
+            #    提前标 SUCCESS 会让轮询看到「成功但无结果」，且落盘失败会永久
+            #    卡在这个假成功态。改由 save_and_mark_success() 在落盘后标。
             return NoteResult(markdown=markdown, transcript=transcript, audio_meta=audio_meta)
 
         except Exception as exc:
@@ -289,6 +322,96 @@ class NoteGenerator:
             logger.error(f"生成笔记流程异常 (task_id={task_id})：{exc}", exc_info=True)
             self._handle_exception(task_id, exc)
             return None
+
+        finally:
+            # F13：无论成功/失败/异常，都要清理本任务产生的中间媒体。
+            #
+            # 放在 finally 而不是成功分支，是因为**失败的任务同样会留下大文件**
+            # （下载到一半的视频、转写失败的音频）—— 而失败任务往往比成功的多，
+            # 磁盘正是被它们吃掉的。
+            #
+            # 注意：这里只清中间媒体，不动 note_results/ 的缓存 JSON
+            # （那是「重试时省一次下载/转写」的资产）。
+            try:
+                self._cleanup_task_media(task_id)
+            except Exception as cleanup_exc:  # noqa: BLE001 - 清理失败不影响任务结果
+                logger.warning(f"任务中间文件清理失败 (task_id={task_id}): {cleanup_exc}")
+
+    def _cleanup_task_media(self, task_id: Optional[str]) -> None:
+        """清理本次任务产生的**中间媒体文件**（F13）。
+
+        ## 背景
+
+        四个转写器的 `on_finish(...)` 全被注释掉了，而 `events/handlers.py`
+        里 `cleanup_temp_files` 仍然注册着 —— 也就是「事件从不触发，清理函数
+        从不执行」。于是下载的音视频、Groq 压缩后的临时文件**永久堆在 data 卷**。
+        报告原话：「compose `mem_limit: 4g` 时磁盘满比 CPU 先炸」。
+
+        ## 为什么不用原来的 `cleanup_temp_files`
+
+        它靠 `video_id` 前缀扫目录（`file.startswith(video_id)`），有两个问题：
+
+          1. **并发不安全**：两个任务处理同一个视频时，一个结束就会删掉另一个
+             还在用的文件；
+          2. **会误删用户上传的原件**：`LocalDownloader.download_video()` 返回的
+             是 uploads 目录里的**用户源文件**，它同样以 video_id/文件名开头。
+
+        所以这里改成**按任务登记式**清理：只删本实例确实创建过的路径。
+
+        ## 清理范围
+
+        只删「可以重新生成」的东西：
+          - `self.video_path`：下载/提取出的中间媒体（不是 uploads 里的原件）；
+          - 转写器的临时产物（若转写器登记了）。
+
+        **不删**：`note_results/` 里的缓存 JSON（`audio` / `transcript` /
+        `markdown`）—— 那是**缓存**，重跑任务时能省一次下载与转写，删了反而
+        让「重试」变慢。也不删截图/封面（属于笔记内容）。
+        """
+        if not task_id:
+            return
+
+        candidates: list[Path] = []
+
+        video_path = getattr(self, "video_path", None)
+        if video_path:
+            candidates.append(Path(video_path))
+
+        # 转写器可能登记了自己的临时文件（如 Groq 压缩后的 mp3）
+        transcriber = getattr(self, "transcriber", None)
+        for attr in ("temp_files", "last_temp_files"):
+            extra = getattr(transcriber, attr, None)
+            if extra:
+                try:
+                    candidates.extend(Path(p) for p in extra)
+                except TypeError:
+                    pass
+
+        from app.utils.upload_paths import uploads_root
+
+        try:
+            uploads_dir_resolved = uploads_root().resolve()
+        except Exception:  # noqa: BLE001 - 拿不到 uploads 根就保守跳过检查
+            uploads_dir_resolved = None
+
+        for path in candidates:
+            try:
+                resolved = path.resolve()
+
+                # **安全护栏**：绝不动 uploads 里的用户原件
+                if uploads_dir_resolved is not None:
+                    try:
+                        resolved.relative_to(uploads_dir_resolved)
+                        logger.debug(f"跳过 uploads 内的用户文件（不清理）：{resolved}")
+                        continue
+                    except ValueError:
+                        pass  # 不在 uploads 下 → 可以删
+
+                if resolved.is_file():
+                    resolved.unlink()
+                    logger.info(f"已清理任务中间文件 (task_id={task_id}): {resolved}")
+            except Exception as exc:  # noqa: BLE001 - 清理失败不该影响任务结果
+                logger.warning(f"清理中间文件失败 (task_id={task_id}, {path}): {exc}")
 
     @staticmethod
     def delete_note(video_id: str, platform: str) -> int:
@@ -301,6 +424,32 @@ class NoteGenerator:
         """
         logger.info(f"删除笔记记录 (video_id={video_id}, platform={platform})")
         return delete_task_by_video(video_id, platform)
+
+    def save_and_mark_success(self, task_id: str, note, save_fn) -> bool:
+        """原子地「落盘结果 → 标 SUCCESS」。
+
+        **为什么需要它**：原先 ``generate()`` 在返回前就把状态标成 SUCCESS，
+        而结果文件要等 ``routers.note.run_note_task`` 拿到 NoteResult 后才写。
+        这中间的窗口期内轮询会看到「成功但无结果」；一旦 ``save_fn`` 抛异常，
+        状态会**永久**停在 SUCCESS 而文件不存在，轮询被 ``get_task_status``
+        伪装成 PENDING，笔记永远转圈。
+
+        顺序必须是：**先落盘，再标成功**。落盘失败则标 FAILED（不是 SUCCESS）。
+
+        :param save_fn: 由调用方注入的落盘函数（router 侧提供，保留路径约定）
+        :return: 是否成功
+        """
+        try:
+            save_fn(task_id, note)
+        except Exception as exc:
+            logger.error(f"结果落盘失败，任务标失败 (task_id={task_id})：{exc}", exc_info=True)
+            self._update_status(task_id, TaskStatus.FAILED,
+                                message="笔记结果保存失败")
+            return False
+
+        self._update_status(task_id, TaskStatus.SUCCESS)
+        logger.info(f"笔记生成成功 (task_id={task_id})")
+        return True
 
     # ---------------- 私有方法 ----------------
 
@@ -321,21 +470,57 @@ class NoteGenerator:
     def _get_gpt(self, model_name: Optional[str], provider_id: Optional[str]) -> GPT:
         """
         根据 provider_id 获取对应的 GPT 实例
+
         :param model_name: GPT 模型名称
-        :param provider_id: 供应商 ID
+        :param provider_id: 供应商 ID。BYOK 下形如 ``own:llm``，
+            表示「用当前用户自带的凭据」而不是站点 providers 表里的记录。
         :return: GPT 实例
+
+        ## BYOK 改动
+
+        原来这里直接 ``ProviderService.get_provider_by_id(provider_id)`` 查全局表。
+        现在统一走 ``credential_resolver.resolve()``：它是唯一的「用谁的 key」入口，
+        内部按 shared/optional/required 三种模式决定，并负责用户凭据解密。
+
+        ```own:`` 前缀由 ``model_selection._resolve_own_selection`` 校验过，
+        走到这里时只剩「把能力位透传给 resolver」。
         """
-        provider = ProviderService.get_provider_by_id(provider_id)
-        if not provider:
-            logger.error(f"[get_gpt] 未找到模型供应商: provider_id={provider_id}")
-            raise ProviderError(code=ProviderErrorEnum.NOT_FOUND,message=ProviderErrorEnum.NOT_FOUND.message)
-        logger.info(f"创建 GPT 实例 {provider_id}")
+        from app.services.credential_resolver import resolve as resolve_credential
+
+        capability = "llm"
+        site_provider_id = provider_id
+        if provider_id and provider_id.startswith("own:"):
+            # own:llm / own:default → 能力位交给 resolver 解析
+            capability = provider_id.split(":", 1)[1] or "default"
+            site_provider_id = None
+
+        try:
+            cred = resolve_credential(
+                self.user_id,
+                capability,
+                model_name=model_name,
+                site_provider_id=site_provider_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            # BYOK 的 CredentialRequired / CredentialBroken 带着给用户看的文案，
+            # 原样抛出即可（_friendly_error_message 会透出 detail/message）。
+            logger.error(f"[get_gpt] 凭据解析失败: {exc}")
+            raise ProviderError(
+                code=ProviderErrorEnum.NOT_FOUND,
+                message=str(exc) or ProviderErrorEnum.NOT_FOUND.message,
+            ) from exc
+
+        logger.info(
+            f"创建 GPT 实例（来源={cred.source}, model={cred.model_name}, "
+            f"base_url={cred.base_url}）"
+        )
         config = ModelConfig(
-            api_key=provider["api_key"],
-            base_url=provider["base_url"],
-            model_name=model_name,
-            provider=provider["type"],
-            name=provider["name"],
+            api_key=cred.api_key,
+            base_url=cred.base_url,
+            # BYOK 时模型名以凭据/调用方为准
+            model_name=cred.model_name or model_name,
+            provider=cred.source,
+            name=cred.source,
         )
         return GPTFactory().from_config(config)
 
@@ -426,13 +611,19 @@ class NoteGenerator:
                 task_id=task_id,
                 status=data["status"],
                 message=data.get("message"),
-                failed_at=_parse_iso(data.get("failed_at")),
+                # 必须走 self./类名：`_parse_iso` 是类里的 @staticmethod，
+                # 方法体内的裸名字解析为 **global**，模块级没有这个符号 →
+                # NameError → 被下面的 except 吞成 logger.debug →
+                # update_task_status 一次都没执行过（DB status 恒 NULL）。
+                failed_at=self._parse_iso(data.get("failed_at")),
                 user_id=user_id,
                 platform=platform,
                 video_id=video_id,
             )
         except Exception as exc:  # noqa: BLE001 - 状态落库失败不影响任务
-            logger.debug(f"同步任务状态到 DB 失败 (task_id={task_id})：{exc}")
+            # 用 warning + exc_info：这条路径静默过一次（NameError 被吞），
+            # 再静默就没法在日志里发现"DB 同步整体失效"。
+            logger.warning(f"同步任务状态到 DB 失败 (task_id={task_id})：{exc}", exc_info=True)
 
         try:
             # First create a temporary file
@@ -1181,6 +1372,10 @@ class NoteGenerator:
                 filename = Path(img_path).name
                 # 构建前端可访问 URL，例如 /static/screenshots/<task_id>/xxx.jpg
                 img_url = f"{url_prefix}/{filename}"
+                # F9：`<img>` 带不上 Cookie/API-Key（Tauri / 浏览器扩展），
+                # 所以令牌必须在 URL **写进 markdown 的那一刻**就带上——
+                # 之后整段 markdown 会被持久化，再没有补签的机会。
+                img_url = _sign_static_url(img_url)
                 markdown = markdown.replace(marker, f"![]({img_url})", 1)
             except Exception as exc:
                 logger.error(f"生成截图失败 (timestamp={ts})：{exc}，跳过该截图")

@@ -204,6 +204,10 @@ def test_retryable_error_is_retried_then_succeeds(output_dir, monkeypatch):
     assert len(downloader.download_calls) == 3
     # 指数退避 2**0 = 1s, 2**1 = 2s
     assert gen.sleeps == [1, 2]
+    # F4：generate() 现在最多标到 SAVING，SUCCESS 由 save_and_mark_success 在
+    # 结果落盘之后写（顺序不可颠倒）。
+    assert _read_status(output_dir, "task-1")["status"] == TaskStatus.SAVING.value
+    assert gen.save_and_mark_success("task-1", result, lambda tid, n: None) is True
     assert _read_status(output_dir, "task-1")["status"] == TaskStatus.SUCCESS.value
 
 
@@ -243,8 +247,8 @@ def test_retry_updates_status_message_with_attempt_counter(output_dir, monkeypat
     )
 
     assert any("重试 1/2" in m for m in messages), messages
-    # 状态文件最终被 SUCCESS 覆盖
-    assert _read_status(output_dir, "task-1")["status"] == TaskStatus.SUCCESS.value
+    # F4：generate() 结束在 SAVING；SUCCESS 由落盘后的 save_and_mark_success 写
+    assert _read_status(output_dir, "task-1")["status"] == TaskStatus.SAVING.value
 
 
 def test_retry_exhausted_marks_task_failed(output_dir, monkeypatch):
@@ -428,7 +432,8 @@ def test_task_is_not_marked_failed_while_retrying(output_dir, monkeypatch):
 
     assert result is not None
     assert TaskStatus.FAILED.value not in seen_statuses, seen_statuses
-    assert seen_statuses[-1] == TaskStatus.SUCCESS.value
+    # F4：最后一个由 generate() 写的状态是 SAVING（不是 SUCCESS）
+    assert seen_statuses[-1] == TaskStatus.SAVING.value
 
 
 # ---------------------------------------------------------------------------
