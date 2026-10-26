@@ -111,7 +111,14 @@ export const useCheckBackend = (): BackendCheck => {
 
     // 总超时兜底
     timeoutId = setTimeout(() => {
-      markFailed(`后端 ${TOTAL_TIMEOUT_MS / 1000}s 内未就绪，请检查后端日志或重启`)
+      // 给出**可执行**的指引，而不是「检查后端日志」（用户不知道日志在哪）。
+      // Web 部署看容器日志；桌面端看应用内的启动诊断。
+      markFailed(
+        `后端 ${TOTAL_TIMEOUT_MS / 1000}s 内未就绪。` +
+          (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+            ? '请在「关于」页查看安装诊断，或重启应用。'
+            : '请检查容器状态（docker logs opennoter-backend）或重启服务。'),
+      )
     }, TOTAL_TIMEOUT_MS)
 
     // 桌面端订阅 Tauri 事件（动态 import 避免 web 端打包报错）
