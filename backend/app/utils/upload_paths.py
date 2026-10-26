@@ -53,6 +53,29 @@ def sanitize_store_name(original_filename: str | None) -> str:
     return f"{uuid.uuid4().hex}{ext}"
 
 
+def is_upload_ref(url_or_path: str) -> bool:
+    """是不是一个「上传文件引用」（``/uploads/xxx`` 或 ``uploads/xxx``）。
+
+    仅做前缀判断，不触碰文件系统——供 pydantic 校验器在请求入口使用。
+    真正的路径合法性由 :func:`safe_upload_rel` / :func:`resolve_under_uploads` 保证。
+    """
+    s = str(url_or_path or "").strip()
+    return s.startswith("/uploads/") or s.startswith("uploads/")
+
+
+def safe_upload_rel(url_or_path: str) -> bool:
+    """上传引用是否形态合法（非空相对段、无 ``..`` 穿越、不以 ``/`` 开头）。
+
+    与 :func:`resolve_under_uploads` 的判定保持一致，但**不 resolve**，
+    因此可在 pydantic 校验阶段安全调用（无 I/O、无异常路径依赖）。
+    """
+    s = str(url_or_path or "").strip()
+    if not is_upload_ref(s):
+        return False
+    rel = s.split("uploads/", 1)[-1]
+    return bool(rel) and ".." not in rel and not rel.startswith("/")
+
+
 def resolve_under_uploads(url_or_path: str) -> Path:
     """把 ``/uploads/xxx`` 或本地路径解析成绝对路径，且必须仍在 uploads 根下。
 
@@ -126,19 +149,44 @@ def can_read_upload(file_path: Path, user, *, auth_enforced: bool) -> bool:
     """当前身份能否读取该上传文件。
 
     规则（按宽松度递减）：
-      1. 无归属（历史文件 / 匿名上传）→ 允许（否则老文件全锁死）
-      2. 有归属且匹配 → 允许
-      3. 有归属且当前是管理员 → 允许（排查问题）
-      4. 未强制认证（单人自托管）→ 允许
+      1. 有归属且匹配当前用户 → 允许
+      2. 有归属且当前是管理员 → 允许（排查问题）
+      3. 未强制认证（单人自托管）→ 允许
+      4. 无归属（历史文件 / 匿名上传）→ **仅在强制认证时要求已登录**
       5. 其余 → 拒绝
+
+    ## 第 4 条为什么这样定（F17）
+
+    旧实现是「无归属 → 无条件允许」。在 `AUTH_ENFORCE=1` 的多租户部署下，
+    这等于**任何登录用户只要知道文件名就能读别人的历史上传**。
+
+    文件名是 uuid4 hex（不可枚举），但 UUID 会经日志、代理、分享链接、
+    前端 URL 泄露 —— 它不是可靠的访问控制（这正是本项目引入 sidecar 的原因，
+    见 `set_upload_owner` 上方注释）。
+
+    但也不能直接改成「拒绝」：升级前的历史上传没有侧车，一刀切会让老部署里
+    **所有**既有上传瞬间 404，连文件主人自己都打不开。
+
+    折中：无归属时**要求已登录**（`user is not None`）。
+      - 未开启鉴权的单人部署：仍是放行（`auth_enforced=False` 先命中第 3 条）；
+      - 开启鉴权：匿名拿不到（401 已在路由层拦），登录用户可以读，
+        与改动前相比不再额外放宽，但至少排除了「匿名凭 UUID 直取」。
+
+    要彻底消除历史无主文件的暴露面，应跑一次归属回填（把历史文件按
+    现有 DB 里的 task→user 关系补侧车），而不是在读取侧猜。
     """
     owner = get_upload_owner(file_path)
-    if owner is None:
-        return True
-    if user is not None and getattr(user, "id", None) == owner:
-        return True
-    if user is not None and getattr(user, "is_superuser", False):
-        return True
+
+    if owner is not None:
+        if user is not None and getattr(user, "id", None) == owner:
+            return True
+        if user is not None and getattr(user, "is_superuser", False):
+            return True
+        if not auth_enforced:
+            return True
+        return False
+
+    # 无归属：强制认证时至少要求已登录；未强制认证则放行
     if not auth_enforced:
         return True
-    return False
+    return user is not None

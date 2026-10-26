@@ -76,7 +76,32 @@ class CookieTransferManager:
             )
             return ticket
 
-    def consume(self, ticket: str, origin: str, cookie: str) -> Optional[CookieTransfer]:
+    def consume(
+        self,
+        ticket: str,
+        origin: str,
+        cookie: str,
+        *,
+        expected_user_id: Optional[int] = None,
+    ) -> Optional[CookieTransfer]:
+        """核销一张 ticket。
+
+        五个校验全部通过才返回条目（且无论如何先把它从表里删掉，保证单次使用）：
+          1. ticket 存在；
+          2. 未过期；
+          3. **origin 与签发时一致**（防止别的页面来抢）；
+          4. Cookie 形态合法；
+          5. 若调用方提供了身份，**必须与签发者一致**（F40）。
+
+        关于第 5 条：`issue()` 一直记录了 `user_id`，但 `consume()` 从不比对。
+        ticket 虽然只由管理员签发（90s TTL、单次、绑 origin），可一旦它从
+        前端 JS / 日志 / 浏览器扩展消息里泄漏，**任何拿到 ticket 的人**都能用它
+        把 Cookie 写进系统（写入是全局的，会影响所有用户）。
+
+        所以：**如果 completion 请求带了有效身份，就必须与签发者匹配**；
+        没带身份时保持原行为（该端点设计上就是免登录的，浏览器扩展拿不到
+        Cookie 凭据）。这是"有更强证据就用更强证据"的渐进策略。
+        """
         normalized_origin = normalize_origin(origin)
         if not normalized_origin:
             return None
@@ -87,9 +112,29 @@ class CookieTransferManager:
         now = time.monotonic()
         with self._lock:
             item = self._items.get(ticket)
-            if not item or item.expires_at <= now or item.origin != normalized_origin:
-                self._items.pop(ticket, None) if item and item.expires_at <= now else None
+            if not item:
                 return None
+
+            # 校验顺序很重要：**先校验、通过后才弹出**。
+            #
+            # 曾经把「弹出」放到最前面来保证单次使用，结果是：一次带错误 origin
+            # 的探测（攻击者试一下）就会把 ticket 消耗掉，真正的合法请求随后
+            # 拿到 410 —— 攻击者不需要知道 ticket 内容就能做**拒绝服务**。
+            #
+            # 正确语义：单次使用指「**成功**消费一次后作废」，不是「碰一次就烧掉」。
+            # 失败的分支（过期/来源不符/身份不符）各自处理是否清除。
+            if item.expires_at <= now:
+                self._items.pop(ticket, None)   # 过期条目顺手清理
+                return None
+            if item.origin != normalized_origin:
+                # 来源不符**不**消耗：可能是用户先打开了错的页面（或攻击者探测），
+                # 真正的合法请求仍应能成功。留 TTL 兜底。
+                return None
+            # F40：带了身份就必须是签发者本人
+            if expected_user_id is not None and item.user_id != expected_user_id:
+                return None
+
+            # 全部校验通过 → 成功消费，立即作废（这才是「单次使用」）
             self._items.pop(ticket, None)
             return item
 

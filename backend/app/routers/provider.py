@@ -125,8 +125,14 @@ def list_provider_models(id: str):
 
 
 @router.get("/providers/{id}/remote-models")
-def list_remote_models(id: str):
-    """列出供应商远端提供的模型列表（走该供应商的 /models 接口）。"""
+def list_remote_models(id: str, admin: User = Depends(require_admin)):
+    """列出供应商远端提供的模型列表（走该供应商的 /models 接口）。
+
+    需要管理员：这会用**共享 Provider 的凭据**去请求其 `/models` 接口。
+    普通用户能触发的话，既是「烧别人的 Key」，也是把一个可探测的 outbound
+    请求原语交给非管理员（内置 ollama 的 base_url 是 127.0.0.1，等于回环探测）。
+    与 CRUD / probe_endpoint 的权限保持一致。
+    """
     try:
         models = ModelService.get_all_models_by_id(id)
         return R.success(models, msg="获取远端模型列表成功")
@@ -135,8 +141,13 @@ def list_remote_models(id: str):
 
 
 @router.post("/providers/{id}/test")
-def test_provider(id: str, data: ProviderTestRequest = ProviderTestRequest()):
-    """连通性测试：真实发一次 chat completion。"""
+def test_provider(id: str, data: ProviderTestRequest = ProviderTestRequest(),
+                  admin: User = Depends(require_admin)):
+    """连通性测试：真实发一次 chat completion。
+
+    需要管理员：这条会真的发起一次 completion（消耗 token / 计费额度），
+    并且是「用服务端身份出站」的原语。普通用户能调等于把共享凭据借出去。
+    """
     ModelService().connect_test(id, model=data.model)
     return R.success(msg='连接成功')
 
@@ -171,9 +182,11 @@ def update_provider(data: ProviderUpdateRequest, admin: User = Depends(require_a
 
 
 @router.post('/connect_test', include_in_schema=False)
-def gpt_connect_test(data: TestRequest):
+def gpt_connect_test(data: TestRequest, admin: User = Depends(require_admin)):
     """旧路径，等价于 POST /api/providers/{id}/test。"""
-    return test_provider(data.id, data)
+    # 显式透传 admin：test_provider 的 admin 是必填参数，
+    # 不传会 TypeError；也保证旧别名与正式路径权限一致。
+    return test_provider(data.id, data, admin)
 
 
 class EndpointProbeRequest(BaseModel):
@@ -198,14 +211,15 @@ def probe_endpoint(data: EndpointProbeRequest, admin: User = Depends(require_adm
     import requests
 
     from app.utils.env_compat import getbool
-    from app.utils.url_safety import UnsafeUrlError, assert_safe_url
+    from app.utils.url_safety import UnsafeUrlError, assert_safe_url, safe_get
 
     base = (data.base_url or "").strip().rstrip("/")
     if not base:
         return R.success(data={"ok": False, "latency": 0, "message": "未配置地址"})
 
     url = base + "/models"
-    if not getbool("PROBE_ALLOW_PRIVATE", False):
+    allow_private = getbool("PROBE_ALLOW_PRIVATE", False)
+    if not allow_private:
         try:
             # suffixes=()：不限制域名，只做协议 + 私网/保留地址拦截
             assert_safe_url(url, suffixes=())
@@ -219,7 +233,17 @@ def probe_endpoint(data: EndpointProbeRequest, admin: User = Depends(require_adm
     headers = {"Authorization": f"Bearer {data.api_key}"} if data.api_key else {}
     started = time.time()
     try:
-        resp = requests.get(url, headers=headers, timeout=8)
+        # 必须走 safe_get：`requests.get` 默认跟 302，而 assert_safe_url 只校验
+        # 传入的那一个 URL。否则管理员配置的 base_url 只要 302 到内网/元数据
+        # 端点就能绕过校验（与 image_proxy 的逐跳校验不一致，是同一类洞）。
+        # 显式允许私网（PROBE_ALLOW_PRIVATE=true）时，safe_get 仍会用
+        # assert_safe_url 拦私网 —— 那会把「探内网 Ollama」这个明确用途打死。
+        # 所以那种模式下退回普通请求，但**仍然不自动跟随跳转**：
+        # 单跳直接返回，由调用方按状态码处理，不给「302 到别处」的机会。
+        if allow_private:
+            resp = requests.get(url, headers=headers, timeout=8, allow_redirects=False)
+        else:
+            resp = safe_get(url, suffixes=(), headers=headers, timeout=8)
         latency = int((time.time() - started) * 1000)
         if resp.status_code >= 400:
             return R.success(data={

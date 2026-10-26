@@ -186,13 +186,29 @@ def oidc_callback(code: str = "", state: str = "", db: Session = Depends(get_db)
             user.oidc_sub = sub
             user.oidc_issuer = os.getenv("OIDC_ISSUER", "")
         else:
+            # ------------------------------------------------------------
+            # 首个用户是否自动成为管理员（F39）
+            # ------------------------------------------------------------
+            # 旧行为：「用户表为空 → 第一个 OIDC 登录的人就是超管」。
+            # 这在**公网可达**的部署上是可被抢注的：谁先完成一次 OIDC 登录，
+            # 谁就拿到管理员。竞态窗口 = 从服务上线到真正的管理员首次登录之间。
+            #
+            # 现在改为**默认关闭**，需要显式开启才保留旧行为：
+            #
+            #   OPENNOTER_OIDC_FIRST_USER_ADMIN=true
+            #
+            # 推荐做法（默认路径）：
+            #   1) 首次部署先不开放公网；
+            #   2) 用 `python -m app.cli create-admin` 或直接写 DB 建第一个管理员；
+            #   3) 之后再开放。
             is_first = db.query(User).count() == 0
+            allow_first_admin = getbool("OIDC_FIRST_USER_ADMIN", False)
             user = User(
                 email=email,
                 name=claims.get("name") or claims.get("preferred_username"),
                 oidc_sub=sub,
                 oidc_issuer=os.getenv("OIDC_ISSUER", ""),
-                is_superuser=is_first,  # 首个用户自动成为管理员
+                is_superuser=is_first and allow_first_admin,
                 is_active=True,
             )
             db.add(user)
