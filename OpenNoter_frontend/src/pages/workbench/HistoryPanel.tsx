@@ -19,7 +19,7 @@ import PinyinMatch from 'pinyin-match'
 
 import { TASK_STATUS_LABEL } from '@/constants'
 import { formatDateTime } from '@/lib/format'
-import { imageProxy } from '@/services/note'
+import { resolveCoverUrl } from '@/lib/cover'
 import { useTaskStore } from '@/store/taskStore'
 import {
   ListRow,
@@ -160,7 +160,7 @@ export default function HistoryPanel({ onOpen }: { onOpen: () => void }) {
                 <ListRowButton onClick={() => open(task)}>
                   {task.audioMeta.cover_url ? (
                     <img
-                      src={imageProxy(task.audioMeta.cover_url)}
+                      src={resolveCoverUrl(task.audioMeta.cover_url)}
                       alt=""
                       referrerPolicy="no-referrer"
                       className={thumb}

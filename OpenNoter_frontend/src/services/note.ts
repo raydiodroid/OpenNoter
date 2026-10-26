@@ -1,4 +1,4 @@
-import request, { apiUrl } from '@/lib/api'
+import request from '@/lib/api'
 import type { NoteStatusResponse, TaskFormData } from '@/types'
 
 /**
@@ -50,8 +50,23 @@ export const deleteTask = (taskId: string) =>
 export const uploadFile = (formData: FormData) =>
   request.post<never, { url: string }>('/upload', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
-    timeout: 60000,
+    // F42：上传默认上限 500MB（UPLOAD_MAX_SIZE_MB），旧值 60s 在慢上行下
+    // 必然超时（500MB / 60s 需要 ~8.3MB/s 上行）。改为 10 分钟后，
+    // 与 nginx 的 client_max_body_size（512m）配合；真正的保护是服务端大小限制，
+    // 不是前端超时。
+    timeout: 600000,
   })
 
-/** 笔记图片走后端代理，避免跨域与 Referer 限制 */
-export const imageProxy = (url: string) => apiUrl(`/image_proxy?url=${encodeURIComponent(url)}`)
+// 已删除 `imageProxy`（X1）：
+//
+// 它把任意 URL 拼成 `/api/image_proxy?url=...`。修 X1 之前，`VideoBanner` /
+// `HistoryPanel` 无条件用它处理封面 —— 包括后端自己产的
+// `http://localhost:8483/static/cover/...`。而 image_proxy 走 `assert_safe_url`，
+// 先拦 loopback、再查图片 CDN 白名单（不含 localhost）⇒ **本地视频封面必 400**。
+//
+// 现在封面统一走 `lib/urls.ts` 的 `resolveCoverUrl()`：自有 `/static/` 直连，
+// 只有第三方 CDN（B站/YouTube/抖音/快手，有防盗链才需要代理）才走后端代理。
+// 这个 helper 已无调用点，保留它等于保留「把自有静态资源丢进代理」的反模式入口。
+//
+// 后端 `/api/image_proxy` 接口**仍然保留**（`resolveCoverUrl` 内部仍会用），
+// 只是前端不再有这个直接拼 URL 的导出了。
