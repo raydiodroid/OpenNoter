@@ -15,7 +15,7 @@ import OpenInIcon from '@react-spectrum/s2/icons/OpenIn'
 
 import 'react-medium-image-zoom/dist/styles.css'
 import 'katex/dist/katex.min.css'
-import { API_BASE, apiUrl } from '@/lib/api'
+import { API_BASE, apiUrl, staticUrl } from '@/lib/api'
 import { toast } from '@/lib/toast'
 import { useThemeStore } from '@/store/themeStore'
 
@@ -189,11 +189,24 @@ export default function MarkdownArticle({ content }: { content: string }) {
       },
 
       img({ src, alt, ...props }: any) {
-        // 后端截图是 /static/...（nginx 已直连），其余相对路径走 /api
+        // 后端截图是 `/static/...`，其余相对路径走 `/api`。
+        //
+        // 为什么要 staticUrl 而不是原样用 src：桌面端页面源是 `tauri://localhost`，
+        // `<img src="/static/x.jpg">` 会被解析成 `tauri://localhost/static/x.jpg`
+        // ——frontendDist 里没有这个路径，必然 404。staticUrl 只做「前缀本地化」，
+        // Web 同源部署下 `API_ORIGIN` 为空串，输出与改动前逐字节一致。
+        //
+        // 为什么不能在这里拼任何凭据：`<img>` 是浏览器发起的裸 GET，
+        // Authorization / x-api-key / 跨站 Cookie 一个都带不上。所以 F9 的凭据
+        // 只能由后端写进 URL 的 query（per-task 长期令牌 `?t=<token>`，
+        // 见 backend/app/utils/static_signing.py）。本处**只换前缀、不动 query**：
+        // 用 new URL() 重建 query 会改变参数编码/顺序，可能让令牌失效 → 403。
+        // 另外**不要**改成 TTL 签名：截图 URL 在生成笔记时就被烧进 markdown 并持久化，
+        // 带过期时间的签名会让历史笔记的截图永久破图（见 _verify/FIX-P0-F9-CORRECTION.md）。
         const resolved =
           typeof src === 'string'
             ? src.startsWith('/static/')
-              ? src
+              ? staticUrl(src)
               : src.startsWith('/')
                 ? apiUrl(src)
                 : src

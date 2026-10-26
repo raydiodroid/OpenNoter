@@ -42,9 +42,16 @@ export const askQuestion = async (data: {
   // suppressToast：全局拦截器已经会弹一次后端返回的真实原因（如「模型供应商
   // 鉴权失败」），调用方再弹一句无信息量的「问答请求失败」会把前者盖掉。
   // 与 note.ts 的 generateNote/listTasks/deleteTask 保持同一范式。
-  // timeout 45s：后端 CHAT_TOTAL_TIMEOUT 默认 90s，但单次 create 是 45s；
-  // 前端留一点余量即可，避免后端还在重试时前端先断、用户看不到真实错误。
-  return await request.post('/chat/ask', data, { timeout: 45000, suppressToast: true })
+  // F41：超时链必须严格递增 —— 后端预算 < 前端超时 < nginx 超时。
+  //
+  //   后端 CHAT_TOTAL_TIMEOUT = 90s   （chat_service.py，含工具多轮的总预算）
+  //   前端（这里）            = 120s
+  //   nginx /api/             = 180s  （nginx/default.conf 的 proxy_read_timeout）
+  //
+  // 旧值是 45s，比后端 90s 的预算还短 —— 工具多轮时后端还在正常跑，前端先断了，
+  // 用户看到的是「问答失败」而不是真实结果（乃至后端仍会继续消耗 token）。
+  // 任何一层设得 ≤ 下一层，都会变成「提前断点」。
+  return await request.post('/chat/ask', data, { timeout: 120000, suppressToast: true })
 }
 
 export const getChatStatus = async (taskId: string): Promise<ChatStatusResponse> => {

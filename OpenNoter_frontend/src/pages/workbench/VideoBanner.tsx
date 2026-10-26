@@ -3,7 +3,7 @@ import { style } from '@react-spectrum/s2/style' with { type: 'macro' }
 import OpenInIcon from '@react-spectrum/s2/icons/OpenIn'
 import { NOTE_STYLES, PLATFORM_LABEL } from '@/constants'
 import { formatDateTime } from '@/lib/format'
-import { imageProxy } from '@/services/note'
+import { resolveCoverUrl } from '@/lib/cover'
 import type { AudioMeta } from '@/types'
 
 const banner = style({
@@ -68,7 +68,9 @@ export default function VideoBanner({
 }) {
   if (!audioMeta) return null
 
-  const coverUrl = audioMeta.cover_url ? imageProxy(audioMeta.cover_url) : ''
+  // 后端自产的 /static/ 封面直接取用；只有第三方 CDN 封面才走后端 image_proxy。
+  // 两者不能混：image_proxy 的 assert_safe_url 会拦 loopback，本地视频封面必 400。
+  const coverUrl = audioMeta.cover_url ? resolveCoverUrl(audioMeta.cover_url) : ''
   const uploader = audioMeta.raw_info?.uploader || ''
   const platform = PLATFORM_LABEL[audioMeta.platform] || audioMeta.platform || ''
   const originalUrl = videoUrl || audioMeta.raw_info?.webpage_url || ''

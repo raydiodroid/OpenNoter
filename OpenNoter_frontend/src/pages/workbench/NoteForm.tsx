@@ -178,14 +178,23 @@ export default function NoteForm() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentTask?.id])
 
-  // 模型列表异步到达后：优先按任务里记录的模型名回填，否则选第一个
+  // 模型列表异步到达后：决定默认选中项。
+  //
+  // 优先级：
+  //   1. 任务里记录过的模型（切回历史任务时保持一致）
+  //   2. 用户自己的 BYOK 模型（配置了就是想用，别默认去花站点额度）
+  //   3. 站点模型（原有行为）
+  //
+  // 注意：站点模型列表的后端查询**没有 order_by**（见 db/model_dao.py），
+  // 所以 models[0] 的顺序本身是不确定的——这也是要显式定义优先级的原因。
   useEffect(() => {
     if (models.length === 0) return
     setValues(prev => {
       if (prev.model_id && models.some(model => String(model.id) === prev.model_id)) return prev
       const preferred = currentTask?.formData.model_name
       const match = preferred ? models.find(model => model.model_name === preferred) : undefined
-      return { ...prev, model_id: String((match ?? models[0]).id) }
+      const ownDefault = models.find(model => model.source === 'own')
+      return { ...prev, model_id: String((match ?? ownDefault ?? models[0]).id) }
     })
   }, [models, currentTask?.formData.model_name])
 
@@ -376,7 +385,8 @@ export default function NoteForm() {
                   id={String(model.id)}
                   textValue={model.model_name}
                 >
-                  {model.model_name}
+                  {/* BYOK：必须标出来源，否则用户不知道这次调用花的是谁的钱 */}
+                  {model.source === 'own' ? `${model.model_name}（我的）` : model.model_name}
                 </PickerItem>
               ))}
             </Picker>

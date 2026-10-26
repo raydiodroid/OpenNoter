@@ -4,6 +4,7 @@ import { Button, Text, TextField } from '@react-spectrum/s2'
 import { style } from '@react-spectrum/s2/style' with { type: 'macro' }
 import logo from '@/assets/icon.svg'
 import { useAuthStore } from '@/store/authStore'
+import { oidcLoginUrl } from '@/lib/urls'
 import { Notice } from '@/components/Notice'
 
 const page = style({
@@ -136,7 +137,11 @@ export default function LoginPage() {
             <Button
               variant="secondary"
               onPress={() => {
-                window.location.href = '/api/auth/oidc/login'
+                // 桌面端必须用 sidecar 的绝对地址：Tauri webview 的页面源是
+                // `tauri://localhost`，相对路径 `/api/...` 会被解析成
+                // `tauri://localhost/api/...`（没有这个服务），OIDC 直接白屏。
+                // Web 端保持同源相对路径，让浏览器正常跟随 302 到 IdP。
+                window.location.href = oidcLoginUrl()
               }}
               styles={fullWidth}
             >

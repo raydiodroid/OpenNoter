@@ -89,6 +89,20 @@ interface TaskState {
    * 这里给一个一键重试入口。
    */
   retryTask: (id: string) => Promise<void>
+  /**
+   * 补拉一个「服务端判定成功、但本地没有正文」的任务。
+   *
+   * `syncFromServer` 为远端任务建的是占位条目（`markdown: []`）。若该任务状态已是
+   * SUCCESS，`useTaskPolling` 的 `isRunningStatus` 过滤会把它排除，正文就永远拉不到，
+   * `NotePreview` 只能渲染空白 —— 这是「换浏览器 / 清缓存后，历史笔记点开是白的」的根因。
+   *
+   * 触发条件（三条同时满足，见实现）：本地有该任务、`markdown` 为空、`status === 'SUCCESS'`。
+   * **不依赖 `has_result`**：该字段目前在 `list_tasks_for_user` 的 DB 分支不存在，
+   * 只有文件扫描回退分支才产出（恒为 `undefined` ⇒ 判断恒假）。调用方负责次数上限。
+   *
+   * @returns 是否真的补到了正文
+   */
+  hydrateTask: (id: string) => Promise<boolean>
   setCurrentTask: (id: string | null) => void
   reset: () => void
 }
@@ -126,11 +140,18 @@ export const useTaskStore = create<TaskState>()(
             for (const r of remote) {
               const local = localById.get(r.task_id)
               if (local) {
-                merged.push({ ...local, status: (r.status as TaskStatus) || local.status })
+                merged.push({
+                  ...local,
+                  status: (r.status as TaskStatus) || local.status,
+                  // 同步服务端的 message：失败原因要能跨刷新保留
+                  // （否则用户刷新页面后，失败页只剩一句泛泛提示）。
+                  message: r.message ?? local.message,
+                })
               } else {
                 merged.push({
                   id: r.task_id,
                   status: (r.status as TaskStatus) || 'PENDING',
+                  message: r.message ?? undefined,
                   markdown: [],
                   transcript: emptyTranscript(),
                   audioMeta: emptyAudioMeta(),
@@ -240,6 +261,39 @@ export const useTaskStore = create<TaskState>()(
       },
 
       setCurrentTask: id => set({ currentTaskId: id }),
+
+      hydrateTask: async id => {
+        const task = useTaskStore.getState().tasks.find(t => t.id === id)
+        // 已经有正文的不补（本地缓存的正常路径，零额外请求）；
+        // 状态不是 SUCCESS 的交给常规轮询，不在这里抢。
+        if (!task || task.markdown.length > 0 || task.status !== 'SUCCESS') return false
+
+        // 动态 import 与 retryTask / removeTask 同范式，避免 store ↔ service 循环依赖
+        const { getTaskStatus } = await import('@/services/note')
+        try {
+          const res = await getTaskStatus(id)
+          if (res?.status === 'SUCCESS' && res.result?.markdown) {
+            // 走既有的 markSuccess：它按内容去重（`markdown.some(v => v.content === ...)`），
+            // 重复补拉不会产生重复版本；markdown 结构仍是 MarkdownVersion[]，持久化格式不变。
+            useTaskStore.getState().markSuccess(id, {
+              markdown: res.result.markdown,
+              transcript: res.result.transcript ?? task.transcript,
+              audioMeta: res.result.audio_meta ?? task.audioMeta,
+            })
+            return true
+          }
+          // SUCCESS 但拿不到正文：结果文件确实不存在（F4 的 SUCCESS 早于落盘窗口、
+          // 或已被删除）。退回 SAVING 让轮询再等一轮，而不是永久空白。
+          // 次数上限由调用方（useTaskPolling）控制，这里不做循环。
+          if (res?.status === 'SUCCESS') {
+            useTaskStore.getState().updateTask(id, { status: 'SAVING' as TaskStatus })
+          }
+          return false
+        } catch {
+          // 离线 / 鉴权失败：保持占位条目，下一轮同步再试（调用方有次数上限）
+          return false
+        }
+      },
 
       reset: () => set({ tasks: [], currentTaskId: null }),
     }),

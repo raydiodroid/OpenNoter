@@ -99,6 +99,26 @@ const emptyCard = style({
   textAlign: 'center',
 })
 
+/** 失败原因代码块：等宽、可换行、左对齐（长错误串要能看全） */
+const failureBox = style({
+  width: 'full',
+  maxWidth: 520,
+  paddingX: 16,
+  paddingY: 12,
+  borderRadius: 'default',
+  backgroundColor: 'gray-100',
+  textAlign: 'start',
+})
+
+const failureText = style({
+  font: 'code',
+  color: 'neutral',
+  margin: 0,
+  // 后端错误串可能很长（含 URL / 堆栈摘要），必须允许换行
+  wordBreak: 'break-word',
+  whiteSpace: 'pre-wrap',
+})
+
 const steps = style({
   display: 'flex',
   alignItems: 'center',
@@ -179,6 +199,14 @@ export default function NotePreview({ onRequestMoreSpace }: { onRequestMoreSpace
       }
     }
 
+    // 失败原因：后端在状态文件/DB 里已经有明确的 message（例如
+    // 「B站下载失败: HTTP Error 412: Precondition Failed」），
+    // 直接展示给用户才有用。
+    //
+    // 旧文案是「检查「部署监控」里的后端日志」—— 但监控页**没有日志面板**，
+    // 用户照着找只会更困惑。这类"指向不存在的地方"的提示比没有提示更糟。
+    const failureDetail = (task.message || '').trim()
+
     return (
       <div className={preview}>
         <div className={centered}>
@@ -186,7 +214,23 @@ export default function NotePreview({ onRequestMoreSpace }: { onRequestMoreSpace
             <IllustratedMessage size="L">
               <ErrorIllustration />
               <Heading>笔记生成失败</Heading>
-              <Content>检查「部署监控」里的后端日志，或直接重试一次。</Content>
+              {failureDetail ? (
+                <>
+                  <Content>下面是后端返回的具体原因：</Content>
+                  <div className={failureBox}>
+                    <p className={failureText}>{failureDetail}</p>
+                  </div>
+                  <Content>
+                    常见原因：视频需要登录（在「设置 → 下载器」配置 Cookie）、
+                    链接已失效、或平台临时限流。可以直接重试一次。
+                  </Content>
+                </>
+              ) : (
+                <Content>
+                  后端没有返回具体原因。可以直接重试一次；若持续失败，
+                  请到服务器查看容器日志（docker logs opennoter-backend）。
+                </Content>
+              )}
             </IllustratedMessage>
             <Button variant="accent" onPress={retry} isDisabled={retrying}>
               {retrying ? '提交中…' : '重试'}
@@ -203,6 +247,23 @@ export default function NotePreview({ onRequestMoreSpace }: { onRequestMoreSpace
         <div className={centered}>
           <div className={emptyCard}>
             <GenerateProgress status={task.status} />
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // SUCCESS 但正文还没到：刚从服务端同步过来的占位条目，正文由 useTaskPolling
+  // 的 hydrateTask 补拉（F10）。这里必须显式给「加载中」，而不是渲染一篇空白笔记——
+  // 空白页面会让用户以为笔记内容丢了。
+  if (versions.length === 0) {
+    return (
+      <div className={preview}>
+        <div className={centered}>
+          <div className={emptyCard}>
+            <ProgressCircle aria-label="正在加载笔记正文" isIndeterminate size="L" />
+            <Heading level={2}>正在加载笔记正文…</Heading>
+            <Content>正在从服务端取回这篇笔记的正文，稍等片刻。</Content>
           </div>
         </div>
       </div>
