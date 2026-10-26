@@ -23,9 +23,26 @@ tauri-build = { version = "2", features = [] }
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
-tauri = { version = "2", features = ["devtools"] }
+# 安全加固（F8）：不再无条件启用 `devtools` feature。
+#
+# 改之前这里是 `features = ["devtools"]`，含义是**连 release 包也编入 devtools**，
+# 配合当时 `csp: null`，等于给用户装好的桌面端留了一个开箱即用的调试入口
+# （能读内存里的 JWT、能改运行时状态）。
+#
+# 现在留空：release 不编入。`tauri dev` 走的是 **debug** 构建，而 tauri crate
+# 的 devtools 在 debug 下本来就可开启（见 `WindowConfig.devtools` 的官方说明：
+# "This API works in debug builds, but requires the `devtools` feature flag to
+# enable it in release builds."）—— 所以开发体验不受影响。
+tauri = { version = "2", features = [] }
 tauri-plugin-log = "2"
 tauri-plugin-shell = "2"
+
+[features]
+# 仅用于「临时给 release 包开 devtools 排查问题」：
+#     cargo build --release --features devtools
+# **不要**在分发包里用这个 feature —— 它会把调试入口重新带回 release。
+default = []
+devtools = ["tauri/devtools"]
 
 [package.metadata.tauri.bundle.macOS]
 frameworks = ["bin/OpenNoterBackend/_internal/"]

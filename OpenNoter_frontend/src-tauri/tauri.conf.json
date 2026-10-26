@@ -17,11 +17,15 @@
         "height": 1000,
         "resizable": true,
         "fullscreen": false,
-        "devtools": true
+        "devtools": false
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net https://use.typekit.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data: blob: http://127.0.0.1:8483 http://localhost:8483; font-src 'self' data: https://cdn.jsdelivr.net https://use.typekit.net; connect-src 'self' https://use.typekit.net ipc: http://ipc.localhost http://127.0.0.1:8483 http://localhost:8483 https://cdn.jsdelivr.net; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+      "devCsp": "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: http://localhost:3015 http://127.0.0.1:3015; connect-src 'self' ipc: http://ipc.localhost ws://localhost:3015 ws://127.0.0.1:3015 http://localhost:3015 http://127.0.0.1:3015 http://127.0.0.1:8483 http://localhost:8483 https://cdn.jsdelivr.net; script-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:3015 http://127.0.0.1:3015 https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' http://localhost:3015 http://127.0.0.1:3015 https://cdn.jsdelivr.net; img-src 'self' data: blob: http://localhost:3015 http://127.0.0.1:3015 http://127.0.0.1:8483 http://localhost:8483; font-src 'self' data: http://localhost:3015 http://127.0.0.1:3015 https://cdn.jsdelivr.net; media-src 'self' blob: http://127.0.0.1:8483 http://localhost:8483; object-src 'none'; base-uri 'none'",
+      "dangerousDisableAssetCspModification": [
+        "style-src"
+      ]
     }
   },
   "bundle": {
@@ -29,11 +33,11 @@
       "bin/OpenNoterBackend/OpenNoterBackend"
     ],
     "resources": {
-    "bin/OpenNoterBackend/_internal":"_internal"
+      "bin/OpenNoterBackend/_internal": "_internal"
     },
-    "macOS":{
+    "macOS": {
       "files": {
-               "Frameworks": "bin/OpenNoterBackend/_internal"
+        "Frameworks": "bin/OpenNoterBackend/_internal"
       }
     },
     "active": true,
