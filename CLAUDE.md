@@ -24,9 +24,17 @@ npm ci            # 仓库只跟踪 package-lock.json（没有 pnpm-lock.yaml）
 npm run dev       # Dev server on port 3015, proxies /api to backend
 npm run build     # Production build
 npm run lint      # ESLint
-# 注意：前端目前**没有** test script（无 Vitest）；`lib/urls.ts` 的纯函数是零依赖的，
-# 可直接被将来的测试引入。
+npm test          # Vitest（配置独立于 vite.config，见下方说明）
+npm run test:watch
 ```
+
+**前端测试的注意事项**：`vitest.config.ts` **刻意不复用** `vite.config.ts` ——
+后者挂了 `@react-spectrum/s2` 的 parcel style 宏，在 node 环境加载不了，
+直接 import 会失败。测试跑在 node 环境（不用 jsdom），目前覆盖
+`lib/urls.ts` 的纯函数（23 条）。
+
+这也是 `lib/urls.ts` 为什么从 `lib/api.ts` 里拆出来、且保持零依赖：
+`api.ts` 会拉进 S2 的宏，导致其中的纯函数无法单测。
 
 ### Docker
 ```bash
