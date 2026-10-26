@@ -20,12 +20,90 @@ class ModelItem(BaseModel):
 # ---------- 规范化端点（API 文档里展示的就是这一组） ----------
 
 @router.get("/models")
-def list_models():
-    """列出全部已启用供应商下的模型。"""
+def list_models(user: User | None = Depends(get_optional_user)):
+    """列出可选模型：站点模型 + 当前用户 BYOK 模型。
+
+    BYOK 之后，模型下拉必须能选到「用户自己配的模型」——否则用户填了
+    ``model_name`` 却在前端看不到它（这是设计评审里发现的核心逻辑断点）。
+
+    返回项带 ``source`` 字段：
+      - ``shared``：站点 providers 表里的模型（管理员配置）
+      - ``own``   ：当前用户凭据里的模型（``id`` 形如 ``own:llm``）
+
+    ``provider_id`` 用 ``own:<capability>`` 字符串前缀承载，避免改动现有
+    API 契约（它本来就是 str），也避免给 ``user_credentials`` 造一套 id 空间。
+    """
     try:
-        return R.success(modelService.get_all_models(True), msg="获取模型列表成功")
+        models = modelService.get_all_models(True)
+
+        # 给站点模型打上来源标记。老前端不认识这个字段也不会坏。
+        for item in models:
+            item.setdefault("source", "shared")
+
+        if user is not None:
+            models.extend(_own_models(user))
+
+        return R.success(models, msg="获取模型列表成功")
     except Exception as e:
         return R.error(e)
+
+
+def _own_models(user: User) -> list[dict]:
+    """把当前用户凭据里的模型包装成与站点模型同形的条目。
+
+    只暴露 ``llm`` 能力位——ASR 不走模型下拉。
+    解密失败的凭据**不**出现在列表里（它本来也用不了），
+    但仍会通过 ``/api/me/credentials`` 的 ``broken`` 标记提示用户重填。
+    """
+    from app.services.byok_config import byok_config
+
+    if not byok_config.is_byok_enabled():
+        return []
+
+    from app.db.engine import SessionLocal
+    from app.db.models.user_credentials import CAP_ASR, CAP_DEFAULT, CAP_LLM, UserCredential
+    from app.utils import credential_crypto
+
+    out: list[dict] = []
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(UserCredential)
+            .filter(
+                UserCredential.user_id == user.id,
+                UserCredential.enabled.is_(True),
+                UserCredential.capability.in_((CAP_LLM, CAP_DEFAULT)),
+            )
+            .all()
+        )
+        for row in rows:
+            # 只收能解密的（解不开的留在设置页让用户重填）
+            if not credential_crypto.reveal(
+                row.api_key, user_id=user.id, capability=row.capability
+            ):
+                continue
+            out.append(
+                {
+                    # 用字符串 id 表示来源：own:llm / own:default
+                    "id": f"own:{row.capability}",
+                    "provider_id": f"own:{row.capability}",
+                    "model_name": row.model_name,
+                    "source": "own",
+                    "label": row.label,
+                }
+            )
+    finally:
+        db.close()
+
+    # 同一个模型名只保留一条（default 与 llm 都配了同名模型时）
+    seen: set[str] = set()
+    deduped: list[dict] = []
+    for item in out:
+        if item["model_name"] in seen:
+            continue
+        seen.add(item["model_name"])
+        deduped.append(item)
+    return deduped
 
 
 @router.get("/models/{model_id}")

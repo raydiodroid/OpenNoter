@@ -130,11 +130,23 @@ def ask_question(data: AskRequest, user: User | None = Depends(get_optional_user
             history=history,
             provider_id=data.provider_id,
             model_name=data.model_name,
+            # BYOK：带上请求者身份，用于解析「用谁的凭据」
+            user_id=getattr(user, "id", None),
         )
         return R.success(data=result)
     except ValueError as e:
         # 配置类错误（供应商不存在 / key 未配置）本身就是为了给用户看的
         return R.error(msg=_safe_error_message(e), code=400)
+    except Exception as e:  # noqa: BLE001
+        # BYOK 的两类专用异常带的是给用户看的文案，不该被当成服务端错误吞掉
+        from app.services.credential_resolver import (
+            CredentialBroken,
+            CredentialRequired,
+        )
+
+        if isinstance(e, (CredentialRequired, CredentialBroken)):
+            return R.error(msg=str(e), code=400)
+        raise
     except Exception as e:
         logger.error(f"Chat 问答失败: {e}", exc_info=True)
         return R.error(msg=_safe_error_message(e))

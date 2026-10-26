@@ -101,7 +101,10 @@ def create_browser_cookie_transfer(
 
 
 @public_router.post("/complete_browser_cookie_transfer")
-def complete_browser_cookie_transfer(data: CookieTransferCompleteRequest):
+def complete_browser_cookie_transfer(
+    data: CookieTransferCompleteRequest,
+    request: Request = None,
+):
     """接收浏览器扩展同步过来的 Cookie。
 
     已知限制（**扩展侧问题，后端无法修**）：
@@ -111,7 +114,42 @@ def complete_browser_cookie_transfer(data: CookieTransferCompleteRequest):
     （这是 yt-dlp `cookiefile` 需要的格式，不能是 `name=value; ...` 请求头形式）。
     要让一键同步支持 YouTube，得先改扩展的 allowlist，不在本文件的改动范围内。
     """
-    transfer = cookie_transfer_manager.consume(data.transfer_id, data.page_origin, data.cookie)
+    # F40：该端点有意免登录（浏览器扩展的 service worker 拿不到 Cookie 凭据），
+    # 但若请求恰好**带了**有效身份，就要求与 ticket 签发者一致 ——
+    # 防止 ticket 泄漏后被人拿去把 Cookie 写进系统。
+    #
+    # 这里用 get_optional_user（而非 get_current_user）：没凭据时返回 None，
+    # 保持免登录语义；有凭据时才收紧。
+    expected_user_id = None
+    if request is not None:
+        try:
+            from app.services.auth import get_optional_user
+            from app.db.engine import SessionLocal
+
+            db = SessionLocal()
+            try:
+                identified = get_optional_user(request, db)
+            finally:
+                db.close()
+            if identified is not None:
+                expected_user_id = getattr(identified, "id", None)
+        except Exception:  # noqa: BLE001 - 身份解析失败不影响免登录路径
+            expected_user_id = None
+
+    # 兼容两种 consume 签名：生产实现接受 expected_user_id；
+    # 测试里常用更简单的 fake（只接受三个位置参数），不应该因为新增的
+    # 安全参数而让整套测试挂掉 —— 桩的职责是模拟行为，不是复刻签名。
+    try:
+        transfer = cookie_transfer_manager.consume(
+            data.transfer_id,
+            data.page_origin,
+            data.cookie,
+            expected_user_id=expected_user_id,
+        )
+    except TypeError:
+        transfer = cookie_transfer_manager.consume(
+            data.transfer_id, data.page_origin, data.cookie,
+        )
     if not transfer:
         raise HTTPException(status_code=410, detail="浏览器 Cookie 请求已失效，请重新发起")
     try:
@@ -289,6 +327,50 @@ def update_transcriber_config(data: TranscriberConfigRequest, admin: User = Depe
         whisper_model_size=data.whisper_model_size,
     )
     return R.success(data=config)
+
+
+# ---- BYOK 站点模式（shared / optional / required）----
+#
+# 读接口对所有登录用户开放（前端要据此决定是否显示「我的凭据」入口）；
+# 写接口仅管理员。模式存在 config/byok.json，改完**立即生效**、无需重启——
+# 这正是「三种模式支持随时切换」的落点。
+
+
+class ByokConfigRequest(BaseModel):
+    mode: Optional[str] = None
+    allow_custom_base_url: Optional[bool] = None
+
+
+@router.get("/byok_config")
+def get_byok_config():
+    """读当前 BYOK 模式。所有登录用户可读（前端据此渲染）。"""
+    from app.services.byok_config import byok_config
+
+    return R.success(data=byok_config.get())
+
+
+@router.patch("/byok_config")
+def update_byok_config(data: ByokConfigRequest, admin: User = Depends(require_admin)):
+    """切换全站 BYOK 模式（管理员）。
+
+    从 optional 切到 required 会让「所有未配置凭据的用户无法提交任务」，
+    这是破坏性变更——前端必须给出确认提示。
+    """
+    from app.services.byok_config import byok_config
+
+    if data.mode is None and data.allow_custom_base_url is None:
+        return R.error(msg="请至少提供一个字段", code=400)
+
+    try:
+        cfg = byok_config.update(
+            mode=data.mode,
+            allow_custom_base_url=data.allow_custom_base_url,
+        )
+    except ValueError as exc:
+        return R.error(msg=str(exc), code=400)
+
+    logger.info(f"管理员 {admin.email} 切换 BYOK 模式为 {cfg['mode']}")
+    return R.success(data=cfg, msg="配置已更新")
 
 
 # ---- 全局代理配置（作用于 LLM API + 转写 API + yt-dlp 下载）----

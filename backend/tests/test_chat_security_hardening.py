@@ -227,7 +227,9 @@ def test_submit_rejects_other_users_task_id(env, monkeypatch):
     import app.services.quota as quota_mod
     monkeypatch.setattr(quota_mod, "check_submit_quota", lambda u: None)
     monkeypatch.setattr(quota_mod, "begin_submit", lambda u, fn: fn())
-    monkeypatch.setattr(mod, "resolve_model_selection", lambda p, m: ("prov", "model"))
+    monkeypatch.setattr(
+        mod, "resolve_model_selection", lambda p, m, **kw: ("prov", "model")
+    )
 
     attacker = U(999)
     with pytest.raises(HTTPException) as exc:
@@ -261,7 +263,9 @@ def test_submit_allows_own_retry(env, monkeypatch):
     import app.services.quota as quota_mod
     monkeypatch.setattr(quota_mod, "check_submit_quota", lambda u: None)
     monkeypatch.setattr(quota_mod, "begin_submit", lambda u, fn: fn())
-    monkeypatch.setattr(mod, "resolve_model_selection", lambda p, m: ("prov", "model"))
+    monkeypatch.setattr(
+        mod, "resolve_model_selection", lambda p, m, **kw: ("prov", "model")
+    )
 
     out = mod._submit_note_task(
         BackgroundTasks(),
