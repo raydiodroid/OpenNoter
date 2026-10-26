@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Markmap } from 'markmap-view'
-import { transformer } from '@/lib/markmap.ts'
+import { sanitizeTree, transformer } from '@/lib/markmap.ts'
 import JSZip from 'jszip'
 import { ActionButton, Text, ToggleButton } from '@react-spectrum/s2'
 import { style } from '@react-spectrum/s2/style' with { type: 'macro' }
@@ -158,7 +158,12 @@ function stripMindmapImages(markdown: string) {
 }
 
 function transformMindmap(markdown: string) {
-  return transformer.transform(stripMindmapImages(markdown))
+  const result = transformer.transform(stripMindmapImages(markdown))
+  // 二层防护（X-S1）：`@/lib/markmap.ts` 已关闭 markdown-it 的原始 HTML，
+  // 这里再对插件产出的每段 content 做一次保格式消毒。**所有导出路径
+  // （预览 / HTML / SVG / PNG / XMind）都经过本函数**，改一处即可全覆盖。
+  result.root = sanitizeTree(result.root)
+  return result
 }
 
 function createExportSvg(svgEl: SVGSVGElement) {

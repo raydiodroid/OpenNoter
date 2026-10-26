@@ -66,9 +66,10 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            get_system_env_vars,
-            find_executable_path,
-            run_command_with_env,
+            // 安全加固（F8）：已移除 get_system_env_vars / find_executable_path /
+            // run_command_with_env —— 前端从未调用它们，却提供了「任意进程执行」
+            // 与「导出全部环境变量（含密钥）」两个能力，配合 csp:null 会把 XSS
+            // 直接升级成 RCE。详见上方注释块。
             test_ffmpeg_access,
             get_install_path_diagnostics,
             restart_backend_sidecar
@@ -183,72 +184,60 @@ fn check_ffmpeg_availability() {
     }
 }
 
-// Tauri 命令：获取系统环境变量
-#[tauri::command]
-fn get_system_env_vars() -> HashMap<String, String> {
-    env::vars().collect()
-}
+// ---------------------------------------------------------------------------
+// 已移除的 Tauri 命令（安全加固 · F8）
+// ---------------------------------------------------------------------------
+//
+// 下面三个 `#[tauri::command]` 曾注册进 `invoke_handler`，但**前端从未调用过**
+// （全仓 grep 只有 lib.rs 自身的定义与注册）。它们是纯粹的、无用的攻击面：
+//
+//   - `run_command_with_env(program, args)` — `Command::new(&program)` 无任何
+//     白名单，等于「任意 JS 执行 ⇒ 任意进程执行」，还继承全部环境变量。
+//   - `find_executable_path(executable_name)` — 同样 `Command::new` 任意名字。
+//   - `get_system_env_vars()` — 把**整个进程环境变量**导给前端，含
+//     `OPENNOTER_JWT_SECRET` / 代理口令等任何 env 里的密钥。
+//
+// 桌面端 `tauri.conf.json` 的 `csp` 当时是 `null`，一旦出现 XSS（例如思维导图
+// 路径的 HTML 注入，见 markmap 消毒），这三条会把 XSS 直接升级成 RCE。
+//
+// 现在**直接删除**而不是加白名单：它们没有任何调用方，删掉收益最大、风险为零。
+// `test_ffmpeg_access` 不再调用 `run_command_with_env`，改为自己内联一个
+// 「只允许 ffmpeg」的受限实现（见下方）。
+//
+// 若将来确实需要从 Rust 侧执行命令，请：
+//   1) 在 `tauri.conf.json` 的 shell scope 白名单里声明允许的程序，
+//   2) 或新增一个**只接受固定枚举**（非任意字符串）的 command，
+//   3) 绝不把 `program`/`args` 直接透传给 `Command::new`。
 
-// Tauri 命令：查找可执行文件路径
+// Tauri 命令：测试 ffmpeg 访问（保留 —— 前端设置页需要它做环境自检）
+//
+// 与已删除的 `run_command_with_env` 的关键区别：
+//   * 程序名**硬编码**为 "ffmpeg"，不接受调用方传入；
+//   * 参数也硬编码（`-version`），不接受外部输入；
+//   * 因此不存在「任意命令执行」面。
 #[tauri::command]
-fn find_executable_path(executable_name: String) -> Option<String> {
+async fn test_ffmpeg_access() -> Result<String, String> {
     use std::process::Command;
 
-    // 首先尝试直接执行
-    if Command::new(&executable_name).arg("--version").output().is_ok() {
-        return Some(executable_name);
-    }
+    let mut cmd = Command::new("ffmpeg");
+    cmd.arg("-version");
 
-    // 使用 which/where 命令查找
-    let which_cmd = if cfg!(target_os = "windows") { "where" } else { "which" };
-
-    if let Ok(output) = Command::new(which_cmd).arg(&executable_name).output() {
-        if output.status.success() {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !path.is_empty() {
-                return Some(path);
-            }
-        }
-    }
-
-    // 在常见路径中搜索
-    let common_paths = get_additional_binary_paths();
-    for base_path in common_paths {
-        let executable_path = if cfg!(target_os = "windows") {
-            format!("{}\\{}.exe", base_path, executable_name)
-        } else {
-            format!("{}/{}", base_path, executable_name)
-        };
-
-        if std::path::Path::new(&executable_path).exists() {
-            return Some(executable_path);
-        }
-    }
-
-    None
-}
-
-// Tauri 命令：使用完整环境变量运行命令
-#[tauri::command]
-async fn run_command_with_env(
-    program: String,
-    args: Vec<String>
-) -> Result<String, String> {
-    use std::process::Command;
-
-    let mut cmd = Command::new(&program);
-    cmd.args(&args);
-
-    // 设置所有环境变量
-    for (key, value) in env::vars() {
-        cmd.env(key, value);
-    }
-
-    // 增强 PATH
-    let current_path = env::var("PATH").unwrap_or_default();
-    let additional_paths = get_additional_binary_paths();
-    let enhanced_path = enhance_path_variable(&current_path, &additional_paths);
-    cmd.env("PATH", enhanced_path);
+    // **清空继承的环境变量**，只补回查找可执行文件必需的 PATH。
+    //
+    // 为什么不能省这一步：`Command` 默认**完整继承父进程环境**，也就是把
+    // `OPENNOTER_JWT_SECRET`、代理口令、任何 env 里的密钥都交给子进程。
+    // ffmpeg 本身不读这些变量，多给一份就多一次泄漏面（子进程崩溃转储、
+    // 恶意替换的 ffmpeg 二进制、`/proc/<pid>/environ`）。
+    // 旧实现还额外 `for (key, value) in env::vars()` 全量灌一遍，等于把这个
+    // 面又放大一次。
+    cmd.env_clear();
+    cmd.env(
+        "PATH",
+        enhance_path_variable(
+            &env::var("PATH").unwrap_or_default(),
+            &get_additional_binary_paths(),
+        ),
+    );
 
     match cmd.output() {
         Ok(output) => {
@@ -258,14 +247,8 @@ async fn run_command_with_env(
                 Err(String::from_utf8_lossy(&output.stderr).to_string())
             }
         }
-        Err(e) => Err(format!("Failed to execute {}: {}", program, e))
+        Err(e) => Err(format!("Failed to execute ffmpeg: {}", e)),
     }
-}
-
-// Tauri 命令：测试 ffmpeg 访问
-#[tauri::command]
-async fn test_ffmpeg_access() -> Result<String, String> {
-    run_command_with_env("ffmpeg".to_string(), vec!["-version".to_string()]).await
 }
 
 // 启动后端 Sidecar：负责装环境变量、spawn、挂 stdout/stderr/terminated 监听并 emit 给前端。
@@ -497,18 +480,13 @@ fn get_install_path_diagnostics() -> InstallPathDiagnostics {
     analyze_install_path(&exe_path)
 }
 
-// 可选：添加一个函数来动态更新 sidecar 的环境变量
-#[tauri::command]
-async fn update_sidecar_environment(
-    app_handle: tauri::AppHandle,
-    additional_env_vars: HashMap<String, String>
-) -> Result<(), String> {
-    // 这个函数可以用来在运行时更新环境变量
-    // 注意：这需要重启 sidecar 才能生效
-
-    for (key, value) in additional_env_vars {
-        env::set_var(key, value);
-    }
-
-    Ok(())
-}
+// 已删除 `update_sidecar_environment`（安全加固 · F8）
+//
+// 它虽然**没有注册进 `invoke_handler`**（所以前端当前调不到），但仍是同类攻击面：
+// 一旦有人把它加进注册表，`invoke('update_sidecar_environment', {additionalEnvVars: {...}})`
+// 就能往进程环境里写任意键值（`env::set_var`），进而污染 sidecar 启动时的环境
+// （`spawn_backend_sidecar` 会把整个 `env::vars()` 透传给 sidecar）。
+//
+// 判据与那三个已删命令一致：**前端从未调用、且提供「任意输入 → 敏感操作」的能力**
+// ⇒ 直接删除，不留"以后再接"的钩子。需要动态改 sidecar 环境时，应走显式的、
+// 只接受固定键的 command，而不是 `HashMap<String, String>` 全量透传。
