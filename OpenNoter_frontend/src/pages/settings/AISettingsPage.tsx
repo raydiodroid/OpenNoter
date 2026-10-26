@@ -5,6 +5,7 @@ import { style } from '@react-spectrum/s2/style' with { type: 'macro' }
 import { Page, PageHeader } from '@/components/Page'
 import ModelPage from './ModelPage'
 import TranscriberPage from './TranscriberPage'
+import { ByokModePanel, MyCredentialsPanel } from './ByokSettings'
 
 const panelBody = style({ paddingTop: 16 })
 
@@ -46,6 +47,10 @@ export default function AISettingsPage({
 
         <TabPanel id="model">
           <div className={panelBody}>
+            {/* BYOK：用户自己的凭据（shared 模式下组件内部返回 null） */}
+            <MyCredentialsPanel />
+            {/* BYOK：站点模式切换（仅管理员可见，组件内部判定） */}
+            <ByokModePanel />
             <ModelPage embedded isCreate={isCreate} />
           </div>
         </TabPanel>
