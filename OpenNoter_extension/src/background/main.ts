@@ -181,12 +181,16 @@ browser.runtime.onMessage.addListener(async (message: unknown, sender: WebExtMes
     const senderUrl = sender.url || tab.url
     if (!senderUrl || !tab.url)
       return fail('无法确认当前 OpenNoter 页面')
+    // 读用户配置的后端地址：可信 origin 由它决定，而不是写死某个域名
+    // （写死会让别人的部署用不了，也等于公开自己的部署地址）。
+    const cookieSettings = await readSettings()
     if (!isValidCookieTransferContext({
       senderUrl,
       tabUrl: tab.url,
       requestOrigin: request.pageOrigin,
       platform: request.platform,
       frameId: sender.frameId,
+      configuredBackendUrl: cookieSettings.backendUrl,
     }))
       return fail('Cookie 获取仅允许从 OpenNoter 下载设置页发起')
 
