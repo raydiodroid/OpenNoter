@@ -13,11 +13,23 @@ const VIDEO_HOST_PERMISSIONS = [
   '*://*.kuaishou.com/*',
 ] as const
 
-/** 本机前端（3015）/ 后端（8483）任意端口，以及已部署的 OpenNoter Web。 */
+/**
+ * 本机前端（3015）/ 后端（8483）任意端口。
+ *
+ * ## 为什么不写死某个公网域名
+ *
+ * 早期这里硬编码了一个 `https://opennoter.<某域名>/*`。两个问题：
+ *   - 公开仓库里等于公布部署者自己的域名；
+ *   - 别人部署到自己的域名后，扩展连不上（权限里没有那个域名）。
+ *
+ * 自定义公网部署改走 `optional_host_permissions`：用户在后端地址里填
+ * 自己的域名后，扩展在需要时向浏览器申请一次该域名的权限（见下方
+ * `optional_host_permissions`）。这样源码里不含任何具体部署信息，
+ * 且对任何人的部署都可用。
+ */
 const OPENNOTER_HOST_PERMISSIONS = [
   'http://localhost/*',
   'http://127.0.0.1/*',
-  'https://opennoter.raydiodroid.top/*',
 ] as const
 
 const CONTENT_SCRIPT_MATCHES = [
@@ -69,6 +81,13 @@ export async function getManifest() {
     host_permissions: [
       ...VIDEO_HOST_PERMISSIONS,
       ...OPENNOTER_HOST_PERMISSIONS,
+    ],
+    // 自定义公网部署（如自建在 example.com）由用户在后端地址里填写，
+    // 扩展在保存时用 browser.permissions.request() 申请该 origin。
+    // 不写死具体域名：既避免公开部署者信息，也让任何人的部署都能用。
+    optional_host_permissions: [
+      'https://*/*',
+      'http://*/*',
     ],
     content_scripts: [
       {

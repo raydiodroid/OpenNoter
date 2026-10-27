@@ -82,13 +82,15 @@ _QUICKSTART = {
             "note": "成功时 data.result.markdown 是笔记正文，data.result.transcript 是字幕，data.result.audio_meta 是视频元信息。",
         },
     ],
-    "curl": (
+    # curl 示例里的域名在 build_guide() 里用实际请求的基址填充（见 _render_curl），
+    # 源码里不留任何具体部署地址 —— 否则公开仓库等于公布部署者域名。
+    "curl_template": (
         "# 1. 建任务\n"
-        "curl -X POST https://opennoter.raydiodroid.top/api/notes \\\n"
+        "curl -X POST {base}/api/notes \\\n"
         "  -H 'x-api-key: sk-bili-...' -H 'Content-Type: application/json' \\\n"
         "  -d '{\"url\":\"https://www.bilibili.com/video/BV1LLnj6fE1z\"}'\n\n"
         "# 2. 轮询（每 5~10 秒一次，直到 status 变成 SUCCESS / FAILED）\n"
-        "curl -H 'x-api-key: sk-bili-...' https://opennoter.raydiodroid.top/api/tasks/<task_id>"
+        "curl -H 'x-api-key: sk-bili-...' {base}/api/tasks/<task_id>"
     ),
 }
 
@@ -173,6 +175,13 @@ def build_guide(app: FastAPI, request: Optional[Request] = None) -> dict:
     for step in quickstart["steps"]:
         # 给出完整 URL：调用方直接用，不用自己拼（拼容易把 /api 拼两遍）
         step["url"] = f"{base}{step['path']}" if base else step["path"]
+
+    # curl 示例：用**实际请求的基址**填充。
+    # 拿不到基址时（老测试直接调 build_guide()）退回占位符，
+    # 绝不能退回某个写死的真实域名 —— 那正是我们要消除的信息泄漏。
+    curl_base = base or "<你的部署地址>"
+    quickstart["curl"] = quickstart.pop("curl_template", "").replace("{base}", curl_base)
+
     return {
         "service": "OpenNoter",
         "version": API_VERSION,

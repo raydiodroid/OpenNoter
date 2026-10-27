@@ -3,6 +3,7 @@ import { onMounted, ref } from 'vue'
 import { getProviders, ping } from '~/logic/api'
 import { settings, settingsReady } from '~/logic/storage'
 import { getModelsByProvider } from '~/logic/api'
+import { ensureHostPermission } from '~/logic/host-permission'
 import { NOTE_FORMATS, NOTE_STYLES, type Model, type NoteFormat, type Provider } from '~/logic/types'
 import { watch } from 'vue'
 
@@ -52,6 +53,16 @@ async function refreshModels(providerId: string) {
 
 async function testConnection() {
   status.value = { kind: 'idle', text: '正在测试…' }
+  // 自定义公网域名需要现场申请权限（必须在用户手势里）。
+  // 本机地址会直接返回 'not-needed'，不影响开发流程。
+  const perm = await ensureHostPermission(settings.value.backendUrl || '')
+  if (perm === 'denied') {
+    status.value = {
+      kind: 'err',
+      text: '已拒绝授予该域名的访问权限；跨域请求可能被浏览器拦截。可重新点击「测试连通」再次授权。',
+    }
+    return
+  }
   const ok = await ping()
   status.value = ok
     ? { kind: 'ok', text: '后端连通 ✓' }
