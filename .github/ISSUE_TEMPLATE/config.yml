@@ -1,8 +1,18 @@
 blank_issues_enabled: false
 contact_links:
+  # 文档入口指向仓库 README（那里是唯一且始终最新的官方文档）。
+  #
+  # 原来这里写的是 https://docs.opennoter.app/ —— 该域名是 NXDOMAIN（根本
+  # 不存在），用户点进去只会看到打不开的页面。README 里已有完整的
+  # 「首次部署会遇到的三件事」「快速开始」「依赖」「排障」等章节，是更好的入口。
   - name: 📖 文档与常见问题
-    url: https://docs.opennoter.app/
-    about: 安装与配置遇到问题，先看一下文档
+    url: https://github.com/raydiodroid/OpenNoter#readme
+    about: 安装与配置遇到问题，先看 README 的「首次部署会遇到的三件事」与「快速开始」
+  # 提问入口指向本仓库 Issues：
+  #   - 原来指向上游 JefferyHcool/BiliNote 的 Discussions，用户在那里提问
+  #     不会有人跟进（上游与本站不是同一个项目）；
+  #   - 本仓库目前**未启用** Discussions（直接访问返回 404），
+  #     所以指向 Issues 才是可用的。若将来启用 Discussions，再改这里。
   - name: 💬 提问 / 讨论
-    url: https://github.com/JefferyHcool/BiliNote/discussions
-    about: 用法咨询、想法征集请发到 Discussions（不是 bug 才用 Issues）
+    url: https://github.com/raydiodroid/OpenNoter/issues
+    about: 用法咨询、想法征集也欢迎发 Issue；提交 bug 请用上面的模板
