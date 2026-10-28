@@ -52,8 +52,8 @@ CHUNK_SIZE = 1024 * 1024
 
 
 class KuaiShouDownloader(Downloader, ABC):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, user_id: Optional[int] = None):
+        super().__init__(user_id=user_id)
 
     # ------------------------------------------------------------------
     # 内部工具
@@ -73,15 +73,17 @@ class KuaiShouDownloader(Downloader, ABC):
         """把 caption 整成可读标题。caption 可能是 None（历史代码会 AttributeError）。"""
         return (caption or "").replace("\n", "").strip()
 
-    @staticmethod
-    def _fetch_raw_info(video_url: str) -> dict:
+    def _fetch_raw_info(self, video_url: str) -> dict:
         """取作品详情（GraphQL 的 data 段）。
 
         `KuaishouError` 是「解析/风控失败」这类不可重试错误，转成
         `RetryableDownloadError` 会触发任务级重试三次白跑，所以这里原样上抛，
         由 note.py 的 `is_retryable()` 判成不可重试（DownloadError 基类）。
+
+        非 staticmethod：BYOK 需要 ``self.user_id`` 才能选对 Cookie。
+        调用点本来就是 ``self._fetch_raw_info(...)``，签名变化对调用方透明。
         """
-        return KuaiShou().run(video_url)
+        return KuaiShou(user_id=self.user_id).run(video_url)
 
     def _limits_now(self):
         return getattr(self, "limits", None)

@@ -2,7 +2,7 @@
 import { onMounted, ref } from 'vue'
 import { getProviders, ping } from '~/logic/api'
 import { settings, settingsReady } from '~/logic/storage'
-import { getModelsByProvider } from '~/logic/api'
+import { getModelsByProvider, listAvailableModels } from '~/logic/api'
 import { ensureHostPermission } from '~/logic/host-permission'
 import { NOTE_FORMATS, NOTE_STYLES, type Model, type NoteFormat, type Provider } from '~/logic/types'
 import { watch } from 'vue'
@@ -24,6 +24,27 @@ async function refresh() {
   status.value = { kind: 'idle', text: '' }
   try {
     providers.value = (await getProviders()).filter(p => p.enabled === 1)
+
+    // BYOK：把「用户自己凭据里的模型」也并进供应商下拉。
+    //
+    // 后端 /api/models 会返回 source='own' 的条目，provider_id 形如 own:llm。
+    // 这类条目在站点供应商列表里不存在，不并进来用户就选不到自己的模型。
+    const ownModels = (await listAvailableModels().catch(() => []))
+      .filter(m => m.source === 'own')
+    if (ownModels.length > 0) {
+      // 构造一个「伪供应商」承载用户自己的模型。
+      // 字段补齐到 Provider 接口要求，避免用 as 断言绕过类型检查。
+      if (!providers.value.some(p => p.id === 'own:llm')) {
+        providers.value = [...providers.value, {
+          id: 'own:llm',
+          name: '我的凭据',
+          logo: 'custom',
+          type: 'custom',
+          enabled: 1,
+        }]
+      }
+    }
+
     if (settings.value.providerId)
       await refreshModels(settings.value.providerId)
     status.value = { kind: 'ok', text: `已加载 ${providers.value.length} 个供应商` }
@@ -44,6 +65,15 @@ async function refreshModels(providerId: string) {
     return
   }
   try {
+    // BYOK 的 own: 前缀不是真实供应商，查 /api/model_enable 会 404；
+    // 改从 /api/models 过滤出该来源的条目。
+    if (providerId.startsWith('own:')) {
+      const all = await listAvailableModels()
+      models.value = all
+        .filter(m => m.provider_id === providerId)
+        .map(m => ({ id: m.id, model_name: m.model_name } as Model))
+      return
+    }
     models.value = await getModelsByProvider(providerId)
   }
   catch {

@@ -1,18 +1,13 @@
-import { useCallback, useEffect, useState } from 'react'
+
+import { useEffect, useState } from 'react'
 import {
-  ActionButton,
   Button,
-  Content,
-  Dialog,
-  DialogTrigger,
   Divider,
-  Heading,
   Picker,
   PickerItem,
   Radio,
   RadioGroup,
   Text,
-  TextField,
 } from '@react-spectrum/s2'
 import { style } from '@react-spectrum/s2/style' with { type: 'macro' }
 
@@ -20,18 +15,12 @@ import { Panel, Section } from '@/components/Page'
 import { toast } from '@/lib/toast'
 import { useAuthStore } from '@/store/authStore'
 import { useCredentialStore } from '@/store/credentialStore'
-import {
-  discoverModels,
-  testMyCredential,
-  updateByokConfig,
-  type ByokMode,
-} from '@/services/credential'
+import { updateByokConfig, type ByokMode } from '@/services/credential'
+
 
 const row = style({ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 })
 const hint = style({ fontSize: 'body-xs', color: 'neutral-subdued', marginTop: 4 })
-const formGrid = style({ display: 'grid', gridTemplateColumns: '1fr', gap: 12 })
 const actions = style({ display: 'flex', gap: 8, marginTop: 8 })
-const badge = style({ fontSize: 'body-xs', fontWeight: 'bold' })
 
 const MODE_OPTIONS: { id: ByokMode; label: string; desc: string }[] = [
   {
@@ -148,222 +137,5 @@ export function ByokModePanel() {
         </div>
       </Panel>
     </Section>
-  )
-}
-
-const CAP_LABEL: Record<'llm' | 'asr', string> = {
-  llm: '笔记生成与 AI 问答',
-  asr: '音频转写',
-}
-
-/**
- * 用户自己的凭据管理。
- *
- * 每个能力位一行，显示「当前：我的 / 站点共享」——这是 BYOK 的核心价值感知：
- * 用户必须随时知道这次调用花的是谁的钱。
- */
-export function MyCredentialsPanel() {
-  const { byokEnabled, status, allowCustomBaseUrl, load } = useCredentialStore()
-  const [editing, setEditing] = useState<'llm' | 'asr' | null>(null)
-
-  useEffect(() => {
-    if (!status) void load()
-  }, [status, load])
-
-  if (!byokEnabled) return null
-
-  return (
-    <Section title="我的凭据">
-      <Panel>
-        <p className={hint}>
-          配置你自己的模型接口与 API Key。未配置时使用站点共享配置；
-          配置后该能力位优先使用你自己的。
-        </p>
-        <Divider size="S" />
-        {(status?.capabilities ?? []).map(cap => {
-          const own = cap.source === 'own'
-          return (
-            <div key={cap.capability} className={row}>
-              <div>
-                <Text>{CAP_LABEL[cap.capability]}</Text>
-                <div className={hint}>
-                  {own ? (
-                    <>
-                      当前：<span className={badge}>{cap.masked_key}</span>
-                      {cap.model_name ? ` · ${cap.model_name}` : ''}
-                    </>
-                  ) : (
-                    '当前：站点共享配置'
-                  )}
-                  {cap.broken ? '（凭据无法解密，请重新填写）' : ''}
-                </div>
-              </div>
-              <DialogTrigger>
-                <ActionButton onPress={() => setEditing(cap.capability)}>
-                  {own ? '修改' : '配置'}
-                </ActionButton>
-                <CredentialDialog
-                  capability={cap.capability}
-                  allowCustomBaseUrl={allowCustomBaseUrl}
-                  onDone={() => {
-                    setEditing(null)
-                    void load()
-                  }}
-                />
-              </DialogTrigger>
-            </div>
-          )
-        })}
-        {editing === null && null}
-      </Panel>
-    </Section>
-  )
-}
-
-/** 单个能力位的凭据编辑对话框。 */
-function CredentialDialog({
-  capability,
-  allowCustomBaseUrl,
-  onDone,
-}: {
-  capability: 'llm' | 'asr'
-  allowCustomBaseUrl: boolean
-  onDone: () => void
-}) {
-  const { status, save, remove } = useCredentialStore()
-  const current = status?.credentials?.find(c => c.capability === capability)
-
-  const [baseUrl, setBaseUrl] = useState(current?.base_url ?? '')
-  const [apiKey, setApiKey] = useState('')
-  const [modelName, setModelName] = useState(current?.model_name ?? '')
-  const [models, setModels] = useState<string[]>([])
-  const [busy, setBusy] = useState(false)
-
-  const discover = useCallback(async () => {
-    if (!baseUrl.trim() || !apiKey.trim()) {
-      toast.error('请先填写接口地址和 API Key')
-      return
-    }
-    setBusy(true)
-    try {
-      const res = await discoverModels({ base_url: baseUrl.trim(), api_key: apiKey.trim() })
-      setModels(res.models)
-      if (res.models.length === 1) setModelName(res.models[0])
-      toast.success(
-        res.models.length
-          ? `获取到 ${res.models.length} 个模型`
-          : '该端点未返回模型，请手动填写'
-      )
-    } catch (error) {
-      // 不少自建网关不实现 /v1/models，保留手动填写的路径
-      const detail = (error as { msg?: string })?.msg
-      toast.error(detail ? `拉取失败：${detail}` : '拉取失败，请手动填写模型名称')
-    } finally {
-      setBusy(false)
-    }
-  }, [baseUrl, apiKey])
-
-  const submit = async () => {
-    if (!baseUrl.trim() || !modelName.trim()) {
-      toast.error('请填写接口地址与模型名称')
-      return
-    }
-    // 已有凭据时允许留空 api_key（表示不修改），否则必填
-    if (!apiKey.trim() && !current?.configured) {
-      toast.error('请填写 API Key')
-      return
-    }
-    setBusy(true)
-    try {
-      await save(capability, {
-        base_url: baseUrl.trim(),
-        // 留空时传掩码占位，让后端的「掩码不覆盖」逻辑生效
-        api_key: apiKey.trim() || current?.masked_key || '',
-        model_name: modelName.trim(),
-      })
-      toast.success('凭据已保存')
-      onDone()
-    } catch (error) {
-      const detail = (error as { msg?: string })?.msg
-      toast.error(detail ? `保存失败：${detail}` : '保存失败，请稍后重试')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const test = async () => {
-    setBusy(true)
-    try {
-      const res = await testMyCredential(capability)
-      toast.success(`连接成功（${res.latency_ms}ms，模型 ${res.model}）`)
-    } catch (error) {
-      const detail = (error as { msg?: string })?.msg
-      toast.error(detail ? `测试失败：${detail}` : '测试失败，请检查配置')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <Dialog>
-      <Heading>{CAP_LABEL[capability]}</Heading>
-      <Divider />
-      <Content>
-        <div className={formGrid}>
-          <TextField
-            label="接口地址"
-            value={baseUrl}
-            onChange={setBaseUrl}
-            isDisabled={!allowCustomBaseUrl}
-            placeholder="https://api.deepseek.com/v1"
-            description="OpenAI 兼容端点，通常以 /v1 结尾"
-          />
-          <TextField
-            label="API Key"
-            type="password"
-            value={apiKey}
-            onChange={setApiKey}
-            placeholder={current?.configured ? `${current.masked_key}（留空则不修改）` : 'sk-...'}
-          />
-          <div className={row}>
-            <TextField label="模型名称" value={modelName} onChange={setModelName} />
-            <ActionButton onPress={discover} isDisabled={busy}>
-              拉取列表
-            </ActionButton>
-          </div>
-          {models.length > 0 && (
-            <Picker
-              aria-label="可选模型"
-              selectedKey={modelName || null}
-              onSelectionChange={k => setModelName(String(k))}
-            >
-              {models.map(m => (
-                <PickerItem key={m} id={m}>
-                  {m}
-                </PickerItem>
-              ))}
-            </Picker>
-          )}
-        </div>
-      </Content>
-      <Button variant="accent" onPress={submit} isDisabled={busy}>
-        保存
-      </Button>
-      <Button variant="secondary" onPress={test} isDisabled={busy || !current?.configured}>
-        测试连接
-      </Button>
-      {current?.configured && (
-        <Button
-          variant="negative"
-          onPress={async () => {
-            await remove(capability)
-            onDone()
-          }}
-          isDisabled={busy}
-        >
-          删除（回到站点默认）
-        </Button>
-      )}
-    </Dialog>
   )
 }

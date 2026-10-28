@@ -116,9 +116,12 @@ def extract_photo_id(url: str):
 
 
 class KuaiShou:
-    def __init__(self):
+    def __init__(self, user_id=None):
         self.header = headers.copy()
         self.cookie = None
+        # BYOK：任务归属用户，用于解析「用户自己的快手 Cookie」。
+        # None = 匿名/站点模式，行为与改造前一致。
+        self.user_id = user_id
 
     @staticmethod
     def _extract_kuaishou_link(text):
@@ -148,7 +151,9 @@ class KuaiShou:
         """
         stored = None
         try:
-            stored = CookieConfigManager().get("kuaishou")
+            from app.services.credential_resolver import resolve_cookie
+
+            stored = resolve_cookie(self.user_id, "kuaishou")
         except Exception as exc:  # 配置文件损坏也不该让下载直接崩
             logger.warning(f"读取快手 Cookie 配置失败，将使用匿名 Cookie：{exc}")
 

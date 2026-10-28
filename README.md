@@ -408,8 +408,44 @@ docker compose up -d --force-recreate
 | `UPLOAD_MAX_SIZE_MB` | `500` | 本地上传文件上限（需同步调 nginx） |
 | `OPENNOTER_USER_DAILY_TASK_LIMIT` | `50` | 每用户 24h 任务数上限 |
 | `FFMPEG_BIN_PATH` | 无 | 指定 FFmpeg 路径，不走系统 PATH |
+| `OPENNOTER_BYOK_MODE` | `shared` | BYOK 初始模式（`shared`/`optional`/`required`）。仅在没有 `config/byok.json` 时生效 |
+| `OPENNOTER_CREDENTIAL_SECRET` | 无 | BYOK 凭据加密密钥。不设则从 JWT_SECRET 派生；**建议单独设**，否则换 JWT 会连带失效 |
 
 `.env.example` 里有逐项注释，完整清单看那里。
+
+### 用户自带凭据（BYOK）
+
+默认 `shared`：所有用户共用你在「设置 → 模型配置」里填的模型 Key 与平台 Cookie，
+与不启用 BYOK 时**完全一致**。适合个人自托管。
+
+需要让用户用自己账号/额度时，在管理界面切换模式，或写 `backend/config/byok.json`：
+
+```json
+{ "mode": "optional" }
+```
+
+| 模式 | 行为 | 适用 |
+|---|---|---|
+| `shared` | 只用站点配置 | 个人自托管（默认） |
+| `optional` | 站点是默认档位；用户配了自己的就用自己的 | 公司/社区内部 |
+| `required` | 必须配自己的模型凭据，否则拒绝提交任务 | 对外服务，平台不承担 API 成本 |
+
+两种粒度，用户可以分别配置：
+
+- **模型凭据**（按能力位）：笔记分析 / 音频转写。端点 + API Key + 模型名。
+- **平台 Cookie**（按平台）：B 站 / 抖音 / 快手 / YouTube。用于画质与字幕增强。
+
+> Cookie 值得单独说：B 站 `SESSDATA` 是**登录身份**而不是额度。多用户共用一份
+> Cookie，站点侧看到的是「同一个人异地看各种视频」——既混观看历史，也可能触发风控。
+> 所以开了 BYOK 之后，用户配自己的 Cookie 比配自己的 API Key 更有意义。
+>
+> 注意 `required` **只约束模型凭据，不约束 Cookie**：Cookie 不花钱，强制会与它的
+> 可选定位矛盾。
+
+安全设计：凭据与 Cookie 都用 AES-GCM 加密落库，且密文**绑定到
+`(用户, 能力位/平台)`**——把一行密文复制给另一个用户解不开。
+
+用户入口：「设置 → 我的凭据」。模式切换入口（管理员）：「设置 → 模型配置」。
 
 ## HTTP API
 

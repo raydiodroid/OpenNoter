@@ -31,6 +31,7 @@ const KeysPage = lazy(() => import('@/pages/settings/KeysPage'))
 const UsersPage = lazy(() => import('@/pages/settings/UsersPage'))
 const MonitorPage = lazy(() => import('@/pages/settings/MonitorPage'))
 const AboutPage = lazy(() => import('@/pages/settings/AboutPage'))
+const MyProfilePage = lazy(() => import('@/pages/settings/MyProfilePage'))
 const NotFoundPage = lazy(() => import('@/pages/NotFoundPage'))
 
 // `Loading` 统一用 `LoadingScreen`：视觉与 index.html 内联的启动骨架一致，
@@ -207,6 +208,8 @@ function AppRoutes() {
                         <Route path="/settings/download" element={<DownloaderPage />} />
                         <Route path="/settings/download/:id" element={<DownloaderPage />} />
                         <Route path="/settings/keys" element={<KeysPage />} />
+                        {/* BYOK：个人凭据（模型 + 平台 Cookie） */}
+                        <Route path="/settings/profile" element={<MyProfilePage />} />
                         <Route
                           path="/settings/users"
                           element={

@@ -1,4 +1,5 @@
 import re
+from typing import Optional
 from typing import Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
@@ -52,8 +53,19 @@ class AskRequest(BaseModel):
     task_id: str
     question: str
     history: list[ChatMessage] = []
-    provider_id: str
-    model_name: str
+
+    # provider_id / model_name 改为可选：
+    #
+    # 历史原因，前端把「这个任务当时用的模型」存在 localStorage 的 formData 里。
+    # 换设备 / 清缓存后从服务端同步回来的占位任务没有这两个字段，于是聊天会
+    # 直接拒绝发送（"这条笔记缺少模型信息"）。而 BYOK 之后，很多任务本来
+    # 就该由「当前用户自己的凭据」来回答，不需要任务里再记一份。
+    #
+    # 缺省时由 credential_resolver 解析：
+    #   - BYOK 用户 → 用他自己的默认凭据
+    #   - 站点模式  → 用站点默认供应商/模型
+    provider_id: Optional[str] = None
+    model_name: Optional[str] = None
 
 
 def _do_index(task_id: str):

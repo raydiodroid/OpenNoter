@@ -1,13 +1,18 @@
 import { create } from 'zustand'
 
 import {
+  deleteMyCookie as apiDeleteCookie,
   deleteMyCredential as apiDelete,
   getByokConfig,
+  listMyCookies,
   listMyCredentials,
+  saveMyCookie as apiSaveCookie,
   saveMyCredential as apiSave,
   type ByokMode,
   type ByokStatus,
   type Capability,
+  type CookiePlatform,
+  type CookieStatus,
   type CredentialPayload,
 } from '@/services/credential'
 
@@ -26,10 +31,19 @@ interface CredentialState {
   allowCustomBaseUrl: boolean
   byokEnabled: boolean
   status: ByokStatus | null
+  /** 各平台 Cookie 的状态（与凭据独立，粒度是平台不是能力位） */
+  cookieStatus: CookieStatus | null
   loading: boolean
+  loadingCookies: boolean
 
   /** 拉取站点模式 + 我的凭据 */
   load: () => Promise<void>
+  /** 拉取各平台 Cookie 状态 */
+  loadCookies: () => Promise<void>
+  /** 保存某平台 Cookie */
+  saveCookie: (platform: CookiePlatform, cookie: string) => Promise<void>
+  /** 删除某平台 Cookie（回到站点/无 Cookie） */
+  removeCookie: (platform: CookiePlatform) => Promise<void>
   /** 保存某个能力位的凭据 */
   save: (capability: Capability, payload: CredentialPayload) => Promise<void>
   /** 删除某个能力位的凭据（回到站点默认） */
@@ -43,7 +57,9 @@ export const useCredentialStore = create<CredentialState>((set, get) => ({
   allowCustomBaseUrl: true,
   byokEnabled: false,
   status: null,
+  cookieStatus: null,
   loading: false,
+  loadingCookies: false,
 
   load: async () => {
     set({ loading: true })
@@ -77,5 +93,26 @@ export const useCredentialStore = create<CredentialState>((set, get) => ({
   remove: async capability => {
     await apiDelete(capability)
     await get().load()
+  },
+
+  loadCookies: async () => {
+    set({ loadingCookies: true })
+    try {
+      set({ cookieStatus: await listMyCookies({ silent: true }) })
+    } catch {
+      set({ cookieStatus: null })
+    } finally {
+      set({ loadingCookies: false })
+    }
+  },
+
+  saveCookie: async (platform, cookie) => {
+    await apiSaveCookie(platform, cookie)
+    await get().loadCookies()
+  },
+
+  removeCookie: async platform => {
+    await apiDeleteCookie(platform)
+    await get().loadCookies()
   },
 }))

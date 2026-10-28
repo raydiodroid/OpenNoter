@@ -536,7 +536,8 @@ class NoteGenerator:
         """
         logger.debug(f"实例化下载器 - {platform}")
         try:
-            downloader = get_downloader(platform)
+            # BYOK：把归属用户传下去，下载器据此解析「用户自己的平台 Cookie」
+            downloader = get_downloader(platform, self.user_id)
         except ValueError:
             logger.error(f"不支持的平台：{platform}")
             raise NoteError(code=NoteErrorEnum.PLATFORM_NOT_SUPPORTED.code,

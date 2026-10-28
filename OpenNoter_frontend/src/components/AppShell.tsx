@@ -26,6 +26,7 @@ import HomeIcon from '@react-spectrum/s2/icons/Home'
 import InfoCircleIcon from '@react-spectrum/s2/icons/InfoCircle'
 import Leave from '@react-spectrum/s2/icons/Leave'
 import LockIcon from '@react-spectrum/s2/icons/Lock'
+import UserIcon from '@react-spectrum/s2/icons/User'
 import UserGroupIcon from '@react-spectrum/s2/icons/UserGroup'
 
 import logo from '@/assets/icon.svg'
@@ -45,6 +46,7 @@ interface NavItem {
 
 const SETTINGS_NAV: NavItem[] = [
   { key: '/settings/ai', label: '模型配置', Icon: DataSettingsIcon },
+  { key: '/settings/profile', label: '我的凭据', Icon: UserIcon },
   { key: '/settings/download', label: '下载配置', Icon: DownloadIcon },
   { key: '/settings/keys', label: '密钥管理', Icon: LockIcon },
   { key: '/settings/users', label: '用户管理', Icon: UserGroupIcon, adminOnly: true },

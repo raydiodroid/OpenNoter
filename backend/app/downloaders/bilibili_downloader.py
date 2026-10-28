@@ -169,8 +169,8 @@ class _YtDlpLogger:
 
 
 class BilibiliDownloader(Downloader, ABC):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, user_id: Optional[int] = None):
+        super().__init__(user_id=user_id)
         # 只持有管理器，不在 __init__ 里读 Cookie、更不落临时文件——
         # 下载器实例本身是按任务新建的（app.services.constant.get_downloader），
         # 但「构造即写盘」仍然是错误的（import 期/测试期都会留下垃圾文件）。
@@ -182,12 +182,12 @@ class BilibiliDownloader(Downloader, ABC):
     # Cookie（用到才读、写成临时 Netscape 文件、用完必删）
     # ------------------------------------------------------------------
     def _read_cookie(self) -> Optional[str]:
-        """每次现读 Cookie（后台改配置后下一个任务即生效）。"""
-        try:
-            return self._cookie_mgr.get("bilibili")
-        except Exception as exc:  # 配置文件损坏不该阻断下载
-            logger.warning("读取 B站 Cookie 失败，将按无 Cookie 处理: %s", exc)
-            return None
+        """每次现读 Cookie（后台改配置后下一个任务即生效）。
+
+        BYOK：走基类的 ``resolve_platform_cookie``，它会先看当前用户自己的
+        Cookie、再回退站点 Cookie。无可用 Cookie 时返回 None（降级到普通画质）。
+        """
+        return self.resolve_platform_cookie("bilibili")
 
     @contextlib.contextmanager
     def _temporary_cookiefile(self):

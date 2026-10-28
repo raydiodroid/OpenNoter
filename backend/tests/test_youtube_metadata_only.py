@@ -65,8 +65,15 @@ class _Downloader:
     否则被测代码走的是 stub 才有的降级分支，测不到生产行为。
     """
 
-    def __init__(self):
+    def __init__(self, user_id=None):
         self.cache_data = "/tmp"
+        # BYOK：真实基类加了 user_id；替身必须跟上，否则被测模块的
+        # ``super().__init__(user_id=...)`` 会 TypeError。
+        self.user_id = user_id
+
+    def resolve_platform_cookie(self, platform):
+        """替身：测试里不碰真实 Cookie 配置，一律返回 None（等价于未配置）。"""
+        return None
 
     def _resolve_output_dir(self, output_dir):
         return output_dir or self.cache_data

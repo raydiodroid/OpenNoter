@@ -23,6 +23,12 @@
 切到 ``required``。为此重启容器是不可接受的，所以走 JSON 文件，与
 ``config/transcriber.json`` 同级、同模式。
 
+## 与其他配置的关系
+
+文件不存在时，``mode`` 的初始值可以由环境变量 ``OPENNOTER_BYOK_MODE`` 指定——
+Docker 部署时改 ``.env`` 比往容器里塞一个 JSON 文件方便。文件一旦存在，
+**文件优先**（避免「界面改完被 env 覆盖」这种困惑）。
+
 ## 读取缓存
 
 ``get()`` 在每次凭据解析时都会被调用（每个任务的每次 LLM 调用），不能每次都打
@@ -96,6 +102,18 @@ class ByokConfigManager:
         比「悄悄降级到默认」糟糕得多。
         """
         mode = str(raw.get("mode") or "").strip().lower()
+
+        # 文件里没写 mode 时，允许用环境变量给初始值（Docker 部署更方便）。
+        # 文件一旦写了就以文件为准——否则「界面切换」会被 env 悄悄覆盖。
+        if not mode:
+            from app.utils.env_compat import getenv
+
+            env_mode = (getenv("BYOK_MODE", "") or "").strip().lower()
+            if env_mode in ALL_MODES:
+                mode = env_mode
+            elif env_mode:
+                logger.warning(f"环境变量 BYOK_MODE={env_mode!r} 非法，忽略")
+
         if mode not in ALL_MODES:
             if mode:
                 logger.warning(f"非法的 byok mode={mode!r}，回退 {DEFAULT_MODE}")

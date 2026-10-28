@@ -124,3 +124,87 @@ export const testMyCredential = (capability: Capability, opts?: CallOpts) =>
     {},
     cfg(opts)
   )
+
+// ---------------------------------------------------------------------------
+// 平台 Cookie（BYOK 的 Cookie 部分）
+// ---------------------------------------------------------------------------
+//
+// 与凭据（user_credentials）维度不同：凭据按「能力位」（llm/asr），
+// Cookie 按「平台」（bilibili/douyin/kuaishou/youtube）。所以是独立的
+// 端点与类型，不并进上面的结构。
+
+/** 支持配置 Cookie 的平台。与后端 `cookie_policy.COOKIE_PLATFORMS` 一致。 */
+export type CookiePlatform = 'bilibili' | 'douyin' | 'kuaishou' | 'youtube'
+
+export interface CookiePlatformStatus {
+  platform: CookiePlatform
+  /** own = 用户自己的；shared = 站点配置；none = 都没有（降级为无 Cookie） */
+  source: 'own' | 'shared' | 'none'
+  configured: boolean
+  /** 配了但解不开（站点换过加密密钥）→ 提示重填 */
+  broken: boolean
+  /** 这份 Cookie 大致包含多少条（不含任何值） */
+  entry_count: number
+  /** 站点是否提供了该平台 Cookie（用户据此判断「不配也能用」） */
+  site_available: boolean
+
+  // ---- 过期信息 ----
+  /**
+   * 已知的真实过期时间（ISO）。只有 netscape 格式（YouTube）可能有值；
+   * B站/抖音/快手 用的是请求头 Cookie，本身不含过期时间。
+   */
+  expires_at?: string | null
+  /** 是否**已确认**过期。仅在 expires_at 存在时才可能为 true */
+  expired?: boolean
+  /** 保存至今的天数（header 格式的主要参考） */
+  age_days?: number | null
+  /**
+   * header 格式保存过久时的「可能失效」提示。
+   * 注意：这不是「已过期」——Cookie 也可能因改密码/风控提前失效。
+   */
+  stale?: boolean
+  /** known = 有真实过期时间；unknown = 只能用保存天数参考 */
+  expiry_kind?: 'known' | 'unknown'
+}
+
+export interface CookieStatus {
+  mode: ByokMode
+  byok_enabled: boolean
+  platforms: CookiePlatformStatus[]
+}
+
+export const listMyCookies = (opts?: CallOpts) =>
+  request.get<never, CookieStatus>('/me/cookies', cfg(opts))
+
+export const saveMyCookie = (platform: CookiePlatform, cookie: string, opts?: CallOpts) =>
+  request.put<never, unknown>(`/me/cookies/${platform}`, { cookie }, cfg(opts))
+
+export const deleteMyCookie = (platform: CookiePlatform, opts?: CallOpts) =>
+  request.delete<never, unknown>(`/me/cookies/${platform}`, cfg(opts))
+
+/** Cookie 平台的展示信息（前端 UI 用）。格式与后端一致：header / netscape。 */
+export const COOKIE_PLATFORM_META: Record<
+  CookiePlatform,
+  { label: string; format: 'header' | 'netscape'; hint: string }
+> = {
+  bilibili: {
+    label: 'B 站',
+    format: 'header',
+    hint: '需要登录态才能拿 1080P+ 与 AI 字幕。格式：SESSDATA=xxx; bili_jct=xxx',
+  },
+  douyin: {
+    label: '抖音',
+    format: 'header',
+    hint: '抖音免登录可用；配 Cookie 可减少风控拦截。格式：sessionid=xxx; ttwid=xxx',
+  },
+  kuaishou: {
+    label: '快手',
+    format: 'header',
+    hint: '不配时自动访问首页拿匿名 Cookie；配了更稳定。',
+  },
+  youtube: {
+    label: 'YouTube',
+    format: 'netscape',
+    hint: '需要 cookies.txt 格式（7 个 tab 分隔字段），用于年龄限制/会员内容。',
+  },
+}

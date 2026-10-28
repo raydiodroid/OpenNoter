@@ -297,3 +297,240 @@ __all__ = [
     "mask_secret",
     "ALL_CAPABILITIES",
 ]
+
+
+# ============================================================================
+# 平台 Cookie 解析（BYOK 的 Cookie 部分）
+# ============================================================================
+#
+# Cookie 与 API Key 的解析共享同一套模式（用户 → 站点），但有三处关键差异：
+#
+#   1. **粒度是平台**而不是能力位：bilibili / douyin / kuaishou / youtube；
+#   2. **缺失时降级而不是报错**：无 Cookie 也能下 360P–1080P 普通画质，
+#      强制报错会让「没配 Cookie」变成阻断性问题；
+#   3. **required 模式下不强制**：Cookie 是画质/字幕增强，不是必需凭据。
+
+
+def resolve_cookie(user_id: Optional[int], platform: str) -> Optional[str]:
+    """解析某平台该用哪份 Cookie。
+
+    返回 ``None`` 表示没有可用 Cookie——调用方应当**继续执行**
+    （降级到无 Cookie 下载），而不是报错。
+
+    ## 优先级
+
+    1. 用户自己的 Cookie（``user_cookies``）
+    2. 站点共享 Cookie（``config/downloader.json``）
+    3. ``None``
+
+    ## 为什么不回退到站点 Cookie（当用户配了但解不开时）
+
+    用户配了自己的 Cookie，说明他不想用站点身份。此时若因解密失败而静默
+    回退到站点 Cookie，**等于用管理员的账号去下载用户要的视频**——这正是
+    我们要消除的问题。所以「配了但坏了」→ 返回 None（降级到无 Cookie），
+    并在日志里记明，绝不冒用站点身份。
+
+    ## shared 模式
+
+    ``BYOK_MODE=shared`` 时直接读站点 Cookie，与改造前逐行等价。
+    """
+    from app.services.byok_config import MODE_SHARED, byok_config
+
+    mode = byok_config.get_mode()
+
+    if mode == MODE_SHARED or user_id is None:
+        return _site_cookie(platform)
+
+    own = _load_user_cookie(int(user_id), platform)
+    if own is None:
+        return _site_cookie(platform)
+
+    plain = credential_crypto.reveal(
+        own, user_id=int(user_id), capability=_cookie_capability(platform)
+    )
+    if not plain:
+        # 配了但解不开：降级到「无 Cookie」，绝不冒用站点身份
+        logger.error(
+            f"用户 {user_id} 的 {platform} Cookie 无法解密，"
+            "本次任务按无 Cookie 处理（不使用站点 Cookie，避免串号）"
+        )
+        return None
+
+    return plain
+
+
+def _cookie_capability(platform: str) -> str:
+    from app.db.models.user_cookies import cookie_capability
+
+    return cookie_capability(platform)
+
+
+def _load_user_cookie(user_id: int, platform: str) -> Optional[str]:
+    """取用户某平台的 Cookie 密文（不解密）。"""
+    from app.db.engine import SessionLocal
+    from app.db.models.user_cookies import UserCookie
+
+    db = SessionLocal()
+    try:
+        row = (
+            db.query(UserCookie)
+            .filter(
+                UserCookie.user_id == user_id,
+                UserCookie.platform == platform,
+                UserCookie.enabled.is_(True),
+            )
+            .first()
+        )
+        # 只返回标量，避免 session 关闭后读 ORM 属性
+        return row.cookie if row is not None else None
+    finally:
+        db.close()
+
+
+def _site_cookie(platform: str) -> Optional[str]:
+    """站点共享 Cookie（config/downloader.json）。"""
+    from app.services.cookie_manager import CookieConfigManager
+
+    try:
+        entry = CookieConfigManager().get(platform)
+    except Exception as exc:  # noqa: BLE001 - 站点 Cookie 读失败不该阻断任务
+        logger.warning(f"读取站点 {platform} Cookie 失败: {exc}")
+        return None
+    return entry or None
+
+
+def list_user_cookies(user_id: int) -> list[dict]:
+    """列出用户各平台 Cookie 的配置状态（永不返回 Cookie 明文）。"""
+    from app.db.engine import SessionLocal
+    from app.db.models.user_cookies import SUPPORTED_COOKIE_PLATFORMS, UserCookie
+    from app.services.cookie_policy import cookie_entry_count, cookie_format
+
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(UserCookie)
+            .filter(UserCookie.user_id == user_id)
+            .order_by(UserCookie.platform)
+            .all()
+        )
+        by_platform = {r.platform: r for r in rows}
+    finally:
+        db.close()
+
+    from app.services.cookie_expiry import describe_expiry
+
+    out: list[dict] = []
+    for platform in SUPPORTED_COOKIE_PLATFORMS:
+        row = by_platform.get(platform)
+        if row is None:
+            out.append(
+                {
+                    "platform": platform,
+                    "format": cookie_format(platform),
+                    "configured": False,
+                    "broken": False,
+                    "entry_count": 0,
+                    "expires_at": None,
+                    "expired": False,
+                    "age_days": None,
+                    "stale": False,
+                    "expiry_kind": "unknown",
+                }
+            )
+            continue
+
+        plain = credential_crypto.reveal(
+            row.cookie, user_id=user_id, capability=_cookie_capability(platform)
+        )
+        # 过期信息：netscape 能算真实时间，header 只能给「保存了多少天」
+        expiry = describe_expiry(
+            platform=platform,
+            cookie_text=plain or "",
+            saved_at=row.updated_at or row.created_at,
+        )
+        out.append(
+            {
+                "platform": platform,
+                "format": cookie_format(platform),
+                "configured": bool(plain),
+                "broken": not plain,
+                # 条目数用于给用户「这份 Cookie 大概包含几条」的体感，
+                # 不泄露任何值
+                "entry_count": cookie_entry_count(platform, plain) if plain else 0,
+                **expiry,
+            }
+        )
+    return out
+
+
+def build_cookie_status(user_id: Optional[int]) -> dict:
+    """给前端初始化用：站点模式 + 各平台 Cookie 的归属状态。"""
+    from app.services.byok_config import MODE_SHARED, byok_config
+
+    cfg = byok_config.get()
+    mode = cfg["mode"]
+
+    site = _site_cookie_platforms()
+    items: list[dict] = []
+
+    own_by_platform: dict[str, dict] = {}
+    if user_id is not None:
+        for item in list_user_cookies(int(user_id)):
+            own_by_platform[item["platform"]] = item
+
+    from app.db.models.user_cookies import SUPPORTED_COOKIE_PLATFORMS
+
+    for platform in SUPPORTED_COOKIE_PLATFORMS:
+        own = own_by_platform.get(platform) or {}
+        has_own = bool(own.get("configured"))
+        items.append(
+            {
+                "platform": platform,
+                "source": "own" if has_own else ("shared" if site.get(platform) else "none"),
+                "configured": has_own,
+                "broken": bool(own.get("broken")),
+                "entry_count": own.get("entry_count", 0),
+                # 站点是否提供该平台 Cookie（用户据此判断「不配也能用」）
+                "site_available": bool(site.get(platform)),
+                # ---- 过期信息：直接透传 list_user_cookies 算好的结果 ----
+                # 站点 Cookie（source=shared）没有用户侧的保存时间，这几项保持
+                # 默认值——我们不假装知道站点 Cookie 何时过期。
+                "expires_at": own.get("expires_at"),
+                "expired": bool(own.get("expired", False)),
+                "age_days": own.get("age_days"),
+                "stale": bool(own.get("stale", False)),
+                "expiry_kind": own.get("expiry_kind", "unknown"),
+            }
+        )
+
+    return {
+        "mode": mode,
+        "byok_enabled": mode != MODE_SHARED,
+        "platforms": items,
+    }
+
+
+def _site_cookie_platforms() -> dict[str, bool]:
+    """站点配了哪些平台的 Cookie（只返回布尔，不返回内容）。
+
+    CookieConfigManager 只有 ``get(platform)``，没有批量 API；这里按平台
+    逐个问，避免因为「新增一个批量方法」而在服务层动既有代码。
+    """
+    from app.db.models.user_cookies import SUPPORTED_COOKIE_PLATFORMS
+    from app.services.cookie_manager import CookieConfigManager
+
+    mgr = CookieConfigManager()
+    out: dict[str, bool] = {}
+    for platform in SUPPORTED_COOKIE_PLATFORMS:
+        try:
+            out[platform] = bool(mgr.get(platform))
+        except Exception:  # noqa: BLE001 - 单个平台读失败不影响其它
+            out[platform] = False
+    return out
+
+
+__all__ += [
+    "resolve_cookie",
+    "list_user_cookies",
+    "build_cookie_status",
+]

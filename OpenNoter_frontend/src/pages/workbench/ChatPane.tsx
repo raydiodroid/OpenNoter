@@ -295,12 +295,12 @@ export default function ChatPane({
   const send = useCallback(async () => {
     const question = input.trim()
     if (!question || loading) return
-    if (!modelConfig.providerId || !modelConfig.modelName) {
-      // 模型配置缺失几乎总是「这条笔记是从服务端同步来的占位任务」——
-      // 给它一句能行动的话，而不是让用户对着「请确认任务已完成」发呆。
-      toast.error('这条笔记缺少模型信息（多为换设备/清缓存后从历史恢复），请先重新生成一次笔记')
-      return
-    }
+    // 不再因为「任务没记模型」而阻断发送。
+    //
+    // 历史实现会直接拒绝，理由是「这条笔记缺少模型信息」。但那只是
+    // localStorage 里 formData 丢了（换设备/清缓存/从服务端同步回来的占位任务），
+    // 后端完全有能力兜底：BYOK 用户用自己的凭据，站点模式用站点默认配置。
+    // 让用户对着一条能看的笔记却问不了问题，是没有必要的限制。
 
     addMessage(taskId, { role: 'user', content: question })
     setInput('')
@@ -311,8 +311,9 @@ export default function ChatPane({
         task_id: taskId,
         question,
         history,
-        provider_id: modelConfig.providerId,
-        model_name: modelConfig.modelName,
+        // 可能为空：交给后端按站点默认 / 用户 BYOK 凭据解析
+        provider_id: modelConfig.providerId || undefined,
+        model_name: modelConfig.modelName || undefined,
       })
       addMessage(taskId, { role: 'assistant', content: res.answer, sources: res.sources })
     } catch (error) {

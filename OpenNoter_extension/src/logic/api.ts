@@ -78,6 +78,28 @@ export async function getModelsByProvider(providerId: string): Promise<Model[]> 
   return request<Model[]>(`/api/model_enable/${providerId}`)
 }
 
+/**
+ * 全站可用模型（含当前用户 BYOK 凭据里的模型）。
+ *
+ * 与 ``getModelsByProvider`` 的区别：
+ *   - 那个按「站点供应商」查，返回 ``{id, model_name}``；
+ *   - 这个走 ``GET /api/models``，响应项带 ``source``（shared/own），
+ *     BYOK 用户配的模型 ``provider_id`` 形如 ``own:llm``。
+ *
+ * 扩展端用它做「模型的唯一真相来源」，避免普通用户在 BYOK 模式下
+ * 看不到自己的模型。
+ */
+export interface AvailableModel {
+  id: string | number
+  provider_id: string
+  model_name: string
+  source?: 'shared' | 'own'
+}
+
+export async function listAvailableModels(): Promise<AvailableModel[]> {
+  return request<AvailableModel[]>('/api/models')
+}
+
 export async function setDownloaderCookie(platform: string, cookie: string): Promise<void> {
   await request('/api/update_downloader_cookie', {
     method: 'POST',

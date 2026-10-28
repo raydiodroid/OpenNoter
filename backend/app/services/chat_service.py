@@ -112,6 +112,22 @@ def _sanitize_history(history: list[dict]) -> list[dict]:
     return trimmed
 
 
+def _default_site_selection() -> tuple[Optional[str], Optional[str]]:
+    """站点默认的 (provider_id, model_name)。
+
+    复用 ``model_selection.resolve_model_selection`` 的既有口径：挑第一个
+    「已启用且有模型」的供应商及其第一个模型。这样聊天与生成笔记的默认值
+    保持一致，不会出现「笔记用 A 模型、聊天用 B 模型」的割裂。
+    """
+    try:
+        from app.services.model_selection import resolve_model_selection
+
+        return resolve_model_selection(None, None)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"无法确定站点默认模型，聊天将失败: {exc}")
+        return None, None
+
+
 def chat(
     task_id: str,
     question: str,
@@ -153,6 +169,13 @@ def chat(
     if provider_id and provider_id.startswith("own:"):
         capability = provider_id.split(":", 1)[1] or "default"
         site_provider_id = None
+
+    # provider_id 可能为空（换设备后从服务端同步回来的任务没有 formData）。
+    # 此时按站点默认供应商/模型补齐，而不是直接失败——用户点开一条历史笔记
+    # 问问题，不应该因为「这条记录没保存模型名」就用不了。
+    if not site_provider_id:
+        site_provider_id, resolved_model = _default_site_selection()
+        model_name = model_name or resolved_model
 
     cred = resolve_credential(
         user_id,

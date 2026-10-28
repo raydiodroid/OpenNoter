@@ -95,8 +95,9 @@ class DouyinDownloader(Downloader):
         *,
         api: Optional[DouyinAPI] = None,
         http: Any = None,
+        user_id: Optional[int] = None,
     ):
-        super().__init__()
+        super().__init__(user_id=user_id)
         self._http = http if http is not None else requests
         self._cookie = cookie if cookie is not None else self._load_cookie()
         self._api = api if api is not None else DouyinAPI(cookie=self._cookie, http=self._http)
@@ -420,14 +421,14 @@ class DouyinDownloader(Downloader):
             raise DownloadError(f"无法从链接中解析抖音作品 ID：{video_url}")
         return aweme_id
 
-    @staticmethod
-    def _load_cookie() -> Optional[str]:
-        """现读 Cookie；读不到不报错（抖音免登录可用）。"""
-        try:
-            return CookieConfigManager().get("douyin")
-        except Exception as exc:  # noqa: BLE001 - Cookie 读失败不该让下载失败
-            logger.warning("读取抖音 Cookie 失败，将使用匿名身份：%s", exc.__class__.__name__)
-            return None
+    def _load_cookie(self) -> Optional[str]:
+        """现读 Cookie；读不到不报错（抖音免登录可用）。
+
+        BYOK：从 staticmethod 改成实例方法，才能拿到 ``self.user_id``
+        去解析「用户自己的 Cookie」。所有调用点都是 ``self._load_cookie()``，
+        调用方无需改动。
+        """
+        return self.resolve_platform_cookie("douyin")
 
     # 说明：这里没有单独的代理解析逻辑。requests 默认 trust_env=True，会读
     # HTTP_PROXY / HTTPS_PROXY / ALL_PROXY；UI 里配置的代理由 config 路由在保存时

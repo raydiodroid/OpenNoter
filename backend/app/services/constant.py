@@ -61,15 +61,22 @@ def is_supported_platform(platform: Optional[str]) -> bool:
     return bool(normalized and normalized in SUPPORT_PLATFORM_MAP)
 
 
-def get_downloader(platform: str) -> Downloader:
+def get_downloader(platform: str, user_id: Optional[int] = None) -> Downloader:
     """为一次任务创建一个新的下载器实例。
 
     每次调用都重新读 Cookie，所以后台改配置后**下一个任务**立即生效。
 
+    :param user_id: BYOK —— 任务归属用户。下载器用它解析「用户自己的平台
+        Cookie」；None 表示匿名，一律用站点 Cookie。
     :raises ValueError: 平台不受支持
     """
     normalized = normalize_platform(platform)
     downloader_cls = SUPPORT_PLATFORM_MAP.get(normalized or '')
     if downloader_cls is None:
         raise ValueError(f"不支持的平台：{platform}")
-    return downloader_cls()
+
+    # 本地文件下载器不接受 user_id（没有 Cookie 概念），按需回退
+    try:
+        return downloader_cls(user_id=user_id)
+    except TypeError:
+        return downloader_cls()

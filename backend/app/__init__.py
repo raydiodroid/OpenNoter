@@ -10,6 +10,7 @@ from .routers import (
     monitor,
     api_keys,
     me_credentials,
+    me_cookies,
 )
 from .openapi import register_api_docs
 from .api_guide import register_guide
@@ -36,6 +37,8 @@ def create_app(lifespan) -> FastAPI:
     app.include_router(api_keys.router, prefix="/api")
     # BYOK：用户管理自己的上游凭据（/api/me/credentials）
     app.include_router(me_credentials.router, prefix="/api")
+    # BYOK：用户管理自己的平台 Cookie（/api/me/cookies）
+    app.include_router(me_cookies.router, prefix="/api")
     app.include_router(auth.router, prefix="/api/auth")
     app.include_router(monitor.router, prefix="/api/monitor")
 

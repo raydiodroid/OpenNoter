@@ -152,15 +152,22 @@ def fake_requests(monkeypatch):
 
 @pytest.fixture
 def stored_cookie(monkeypatch):
-    """顶掉 CookieConfigManager：默认返回一段 header Cookie。"""
+    """顶掉 Cookie 解析入口：默认返回一段 header Cookie。
+
+    BYOK 之后生产代码不再直接调 ``CookieConfigManager().get()``，而是走
+    ``credential_resolver.resolve_cookie(user_id, platform)``（它内部先看
+    用户自己的 Cookie、再回退站点）。所以这里 mock 的层级也随之更新——
+    断言仍然检查「传给解析层的平台名是否正确」。
+    """
     state = {"value": "did=web_abc; kpf=PC_WEB; clientid=3"}
 
-    class _Manager:
-        def get(self, platform):
-            assert platform == "kuaishou"
-            return state["value"]
+    def _fake_resolve_cookie(user_id, platform):
+        assert platform == "kuaishou"
+        return state["value"]
 
-    monkeypatch.setattr(kuaishou_helper.kuaishou, "CookieConfigManager", _Manager)
+    import app.services.credential_resolver as _cr
+
+    monkeypatch.setattr(_cr, "resolve_cookie", _fake_resolve_cookie, raising=False)
     return state
 
 

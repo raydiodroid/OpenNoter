@@ -110,8 +110,28 @@ class Downloader(ABC):
       `DurationLimitExceeded`，不要静默截断。
     """
 
-    def __init__(self):
+    def __init__(self, user_id: Optional[int] = None):
         self.cache_data = getenv('DATA_DIR')
+        # BYOK：任务归属用户。下载器在读平台 Cookie 时用它决定「用谁的登录态」。
+        # None = 匿名（AUTH_ENFORCE=0 的部署），一律用站点 Cookie。
+        self.user_id: Optional[int] = user_id
+
+    def resolve_platform_cookie(self, platform: str) -> Optional[str]:
+        """读某平台该用的 Cookie（BYOK 三层解析）。
+
+        子类应当在自己的 ``_read_cookie`` / ``_load_cookie`` 里调这个方法替代
+        直接读 ``CookieConfigManager``，这样才能拿到「用户自己的 Cookie」。
+
+        返回 None 表示没有可用 Cookie —— **调用方必须继续执行**（降级到
+        无 Cookie 的普通画质），不要当成错误。
+        """
+        from app.services.credential_resolver import resolve_cookie
+
+        try:
+            return resolve_cookie(self.user_id, platform)
+        except Exception as exc:  # noqa: BLE001 - Cookie 读失败不该阻断下载
+            logger.warning("解析 %s Cookie 失败，按无 Cookie 处理: %s", platform, exc)
+            return None
 
     @property
     def limits(self):

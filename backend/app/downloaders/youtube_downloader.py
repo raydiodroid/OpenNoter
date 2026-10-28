@@ -207,31 +207,30 @@ class _YtDlpLogger:
 
 
 class YoutubeDownloader(Downloader, ABC):
-    def __init__(self, cookies: Optional[str] = None):
+    def __init__(self, cookies: Optional[str] = None, user_id: Optional[int] = None):
         """
-        :param cookies: Netscape cookies.txt 文本。留空时从 CookieConfigManager 现读
+        :param cookies: Netscape cookies.txt 文本。留空时现读（见 `_read_stored_cookies`）
             （`services/constant.py` 的工厂每次任务新建实例，所以读一次就是最新的）。
             显式传入主要给测试和调用方复用，生产走现读路径。
+        :param user_id: BYOK —— 任务归属用户，用于解析「用户自己的 Cookie」。
         """
-        super().__init__()
+        super().__init__(user_id=user_id)
         self._cookies = cookies if cookies is not None else self._read_stored_cookies()
 
     # ------------------------------------------------------------------
     # Cookie
     # ------------------------------------------------------------------
-    @staticmethod
-    def _read_stored_cookies() -> Optional[str]:
+    def _read_stored_cookies(self) -> Optional[str]:
         """读取 YouTube 的 Netscape Cookie 文本。
 
         策略层（`app/services/cookie_policy.py`）已经做了格式校验与规范化：
         `COOKIE_FORMATS["youtube"] == "netscape"`，非 cookies.txt 格式会在保存时
         就被拒绝。这里只负责取用，不再二次解析。
+
+        BYOK：从 staticmethod 改成实例方法，才能拿到 ``self.user_id``。
+        无可用 Cookie 时返回 None，调用方按「不用 cookiefile」继续。
         """
-        try:
-            cookie_text = CookieConfigManager().get("youtube")
-        except Exception as exc:
-            logger.warning(f"读取 YouTube Cookie 失败，按未配置处理：{exc}")
-            return None
+        cookie_text = self.resolve_platform_cookie("youtube")
 
         if not cookie_text:
             logger.debug("YouTube Cookie 未配置：本次不使用 cookiefile")

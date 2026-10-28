@@ -36,8 +36,12 @@ export const askQuestion = async (data: {
   task_id: string
   question: string
   history: ChatMessage[]
-  provider_id: string
-  model_name: string
+  /**
+   * 可为空：换设备后从服务端同步回来的任务没有这两项，
+   * 由后端按「BYOK 用户凭据 / 站点默认配置」解析。
+   */
+  provider_id?: string
+  model_name?: string
 }): Promise<AskResponse> => {
   // suppressToast：全局拦截器已经会弹一次后端返回的真实原因（如「模型供应商
   // 鉴权失败」），调用方再弹一句无信息量的「问答请求失败」会把前者盖掉。
