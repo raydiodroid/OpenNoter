@@ -99,7 +99,26 @@ const emptyCard = style({
   textAlign: 'center',
 })
 
-/** 失败原因代码块：等宽、可换行、左对齐（长错误串要能看全） */
+/**
+ * 失败详情区的纵向堆叠容器。
+ *
+ * 用 flex column + gap 而不是 margin，是因为这段内容在 `IllustratedMessage`
+ * 的 `<Content>`（grid 单元格）内部，靠 margin 控制间距容易和
+ * `alignSelf: start` 打架；flex 容器的 gap 不依赖外边距折叠。
+ */
+const failureStack = style({
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 12,
+  alignItems: 'center',
+})
+
+/**
+ * 失败原因代码块：等宽、可换行、左对齐（长错误串要能看全）。
+ *
+ * 注意它现在位于 `<Content>` 内部（见 FAILED 分支的注释），不再需要
+ * 自己占 `gridColumn` —— 网格位由外层 Content 统一提供。
+ */
 const failureBox = style({
   width: 'full',
   maxWidth: 520,
@@ -214,23 +233,42 @@ export default function NotePreview({ onRequestMoreSpace }: { onRequestMoreSpace
             <IllustratedMessage size="L">
               <ErrorIllustration />
               <Heading>笔记生成失败</Heading>
-              {failureDetail ? (
-                <>
-                  <Content>下面是后端返回的具体原因：</Content>
-                  <div className={failureBox}>
-                    <p className={failureText}>{failureDetail}</p>
+              {/*
+                ⚠️ 这里**只能有一个 <Content>**。
+
+                IllustratedMessage 给每个 <Content> 分配的都是同一个具名网格区
+                （grid-area: content），放两个会叠在同一格里、文字互相压住；
+                而它只给 Heading/Content/illustration/buttonGroup 分配网格位，
+                用户塞进去的其它 <div> 会被自动放置，把整体撑歪（实测：错误块
+                被塞到右侧空白列、和插图并排）。
+
+                所以：一个 Content 承载全部文字，内部用块级元素自行分行。
+              */}
+              <Content>
+                {failureDetail ? (
+                  <div className={failureStack}>
+                    <div>后端返回的具体原因：</div>
+                    <div className={failureBox}>
+                      <p className={failureText}>{failureDetail}</p>
+                    </div>
+                    {/*
+                      这里**不再重复「配置 Cookie / 代理」**。
+                      后端对网络类失败已经会在 message 末尾追加针对性的
+                      「去设置里配代理/Cookie」建议（见 note.py 的
+                      _append_network_hint），再念一遍就是同一句话出现两次。
+                      只保留后端不会说、但用户此刻需要知道的「下一步动作」。
+                    */}
+                    <div>处理好上面的问题后，可以直接点下方「重试」。</div>
                   </div>
-                  <Content>
-                    常见原因：视频需要登录（在「设置 → 下载器」配置 Cookie）、
-                    链接已失效、或平台临时限流。可以直接重试一次。
-                  </Content>
-                </>
-              ) : (
-                <Content>
-                  后端没有返回具体原因。可以直接重试一次；若持续失败，
-                  请到服务器查看容器日志（docker logs opennoter-backend）。
-                </Content>
-              )}
+                ) : (
+                  <>
+                    后端没有返回具体原因。常见原因是视频需要登录（在「设置 →
+                    下载器」配置 Cookie）、链接已失效、或平台临时限流。
+                    可以直接重试一次；若持续失败，请到服务器查看容器日志
+                    （docker logs opennoter-backend）。
+                  </>
+                )}
+              </Content>
             </IllustratedMessage>
             <Button variant="accent" onPress={retry} isDisabled={retrying}>
               {retrying ? '提交中…' : '重试'}

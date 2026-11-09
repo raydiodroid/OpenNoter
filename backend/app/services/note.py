@@ -877,6 +877,11 @@ class NoteGenerator:
 
         `SizeLimitExceeded` / `DurationLimitExceeded` 是配置层面的拒绝，
         直接把异常的英文串丢给用户毫无帮助，这里补上当前上限与调整方式。
+
+        网络类失败（yt-dlp 连接不上 YouTube 等）同样如此：原文是
+        `[Errno 101] Network is unreachable` 加一长串 urllib3 对象地址，
+        用户既看不懂也做不了。这里保留原文（排查时有用）并**追加**可操作建议，
+        与 `routers/config.py::_friendly_download_error` 的风格保持一致。
         """
         limits = self._get_limits()
         if isinstance(exc, SizeLimitExceeded):
@@ -896,7 +901,58 @@ class NoteGenerator:
                 error_message = json.dumps(error_message, ensure_ascii=False)
             except:
                 error_message = str(error_message)
-        return error_message
+        return self._append_network_hint(str(error_message))
+
+    # yt-dlp / requests 在「根本连不上」时的特征串。
+    #
+    # 之所以按特征串匹配而不是捕获具体异常类型：失败发生在 yt-dlp 内部，
+    # 抛上来的是它自己包装过的 DownloadError，原始 OSError/TransportError
+    # 已变成字符串，类型信息丢失。
+    _NETWORK_FAILURE_MARKERS = (
+        "network is unreachable",
+        "failed to establish a new connection",
+        "temporary failure in name resolution",
+        "name or service not known",
+        "nodename nor servname provided",
+        "connection refused",
+        "connection reset",
+        "read timed out",
+        "timed out",
+        "max retries exceeded",
+        "unable to download api page",
+        "getaddrinfo failed",
+    )
+
+    def _append_network_hint(self, raw: str) -> str:
+        """给「连不上网络」类失败追加一句可操作建议。
+
+        背景：生产上 YouTube 需要走代理（服务器在境内，直连不可达）。用户
+        看到 `Network is unreachable` 时最需要知道的是「去配置代理/Cookie」，
+        而不是再去重试一次。
+        """
+        lowered = raw.lower()
+        if not any(marker in lowered for marker in self._NETWORK_FAILURE_MARKERS):
+            return raw
+        try:
+            from app.services.proxy_config_manager import ProxyConfigManager
+
+            proxy = ProxyConfigManager().get_proxy_url()
+        except Exception:  # noqa: BLE001 - 读配置失败不该掩盖原始错误
+            proxy = None
+
+        if proxy:
+            hint = (
+                "\n\n——连不上该网站。当前已配置代理，请确认代理可用；"
+                "若该平台要求登录（如 YouTube 的风控），还需在"
+                "「设置 → 下载器」里配置对应平台的 Cookie。"
+            )
+        else:
+            hint = (
+                "\n\n——连不上该网站（当前未配置代理）。若服务器在国内，"
+                "访问 YouTube 等站点需要在「设置 → 代理」里配置可用代理；"
+                "该平台要求登录时还需在「设置 → 下载器」里配置 Cookie。"
+            )
+        return raw + hint
 
     def _download_media(
         self,
