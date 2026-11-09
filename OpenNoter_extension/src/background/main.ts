@@ -150,40 +150,6 @@ onMessage<{ url: string, title?: string }, 'opennoter-start'>('opennoter-start',
   return result
 })
 
-/**
- * 读取当前视频站 Cookie 并返回纯文本（**不发往后端**）。
- *
- * ## 为什么单独一条消息
- *
- * 上面那条 `opennoter-cookie-transfer` 是「网页发起 → 后端落库」的闭环，
- * 它要求 content script 注入到 OpenNoter 自己的页面里（`OPENNOTER_HOST_PERMISSIONS`
- * 只含 localhost）。**自建部署的域名不在白名单里，那条链在非 localhost 上根本
- * 不会启动** —— 用户点了网页上的「从当前浏览器获取」只会超时。
- *
- * 这条消息解决另一件事：用户**直接站在视频站点页面上**（YouTube/B站/抖音/快手），
- * 点悬浮按钮，扩展把 Cookie 取出来放进剪贴板，用户自己粘到设置页。
- * 完全不依赖后端、不依赖 OpenNoter 页面注入，也不需要额外域名权限
- * （视频站本来就在 `host_permissions` 里）。
- */
-browser.runtime.onMessage.addListener(async (message: unknown) => {
-  if (!message || typeof message !== 'object' || (message as { type?: string }).type !== 'opennoter-read-cookie')
-    return undefined
-
-  const platform = (message as { platform?: unknown }).platform
-  if (typeof platform !== 'string' || !(SUPPORTED_COOKIE_PLATFORMS as string[]).includes(platform))
-    return { ok: false, error: '不支持的平台' }
-
-  try {
-    const cookie = await readBrowserCookies(platform as Exclude<Platform, 'local'>)
-    if (!cookie)
-      return { ok: false, error: '当前浏览器没有该平台的 Cookie，请先登录目标站点' }
-    return { ok: true, cookie, platform, count: countCookieEntries(platform, cookie) }
-  }
-  catch (e) {
-    return { ok: false, error: (e as Error).message || '读取 Cookie 失败' }
-  }
-})
-
 // 这里必须显式标注参数类型：polyfill 的 OnMessageListener 是个联合类型，
 // 省略注解在 strict 模式下会被推成 any 并报 TS7006（`tsc --noEmit` 会挂）。
 browser.runtime.onMessage.addListener(async (message: unknown, sender: WebExtMessageSender) => {
@@ -309,6 +275,47 @@ browser.contextMenus?.onClicked.addListener(async (info, tab) => {
     await openSidePanelInTab(tab?.id)
   else
     console.warn('右键启动失败：', result.error)
+})
+
+/**
+ * 读取当前视频站 Cookie 并返回纯文本（**不发往后端**）。
+ *
+ * ## 为什么单独一条消息
+ *
+ * `opennoter-cookie-transfer` 是「网页发起 → 后端落库」的闭环，要求 content
+ * script 注入到 **OpenNoter 自己的页面**。而 `OPENNOTER_HOST_PERMISSIONS`
+ * 只含 localhost / 127.0.0.1，自建域名上那条链根本不会启动。
+ *
+ * 这条消息解决另一件事：用户**直接站在视频站点页面上**（YouTube/B站/抖音/快手），
+ * 点悬浮按钮，扩展把 Cookie 取出来交给页面放进剪贴板。不依赖后端、
+ * 不依赖 OpenNoter 页面注入，也不需要额外域名权限（视频站本来就有权限）。
+ *
+ * ## 必须用 webext-bridge 的 onMessage，不能用 browser.runtime.onMessage
+ *
+ * content script 侧走的是 `sendMessage(...) from 'webext-bridge/content-script'`，
+ * 它带自己的信封格式（`id` / `data` / `sender.contextId`）。原生
+ * `browser.runtime.onMessage` 收到的是**另一套结构**，既不会匹配消息名，
+ * webext-bridge 也不会认为「有 handler 处理了这个 id」——实测报错：
+ *
+ *     [webext-bridge] No handler registered in 'background' to accept
+ *     messages with id 'opennoter-read-cookie'
+ *
+ * 所以注册方式必须与发送方式配对。
+ */
+onMessage('opennoter-read-cookie', async ({ data }) => {
+  const platform = (data as { platform?: unknown })?.platform
+  if (typeof platform !== 'string' || !(SUPPORTED_COOKIE_PLATFORMS as string[]).includes(platform))
+    return { ok: false, error: '不支持的平台' }
+
+  try {
+    const cookie = await readBrowserCookies(platform as Exclude<Platform, 'local'>)
+    if (!cookie)
+      return { ok: false, error: '当前浏览器没有该平台的 Cookie，请先登录目标站点' }
+    return { ok: true, cookie, platform, count: countCookieEntries(platform, cookie) }
+  }
+  catch (e) {
+    return { ok: false, error: (e as Error).message || '读取 Cookie 失败' }
+  }
 })
 
 // content script 占位握手 —— 未来可扩展为查询当前任务等
