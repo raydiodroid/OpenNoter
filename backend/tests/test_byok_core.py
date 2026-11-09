@@ -142,6 +142,77 @@ class TestByokConfig:
         with pytest.raises(ValueError):
             mgr.update(mode="bogus")
 
+    def test_two_switches_are_independent(self, byok_env):
+        """模型与 Cookie 是两个独立开关——这是拆分它们的目的。
+
+        拆分前它们共用一个 mode，导致「关掉模型 BYOK」会连用户 Cookie 一起
+        失效，管理员无论选哪个都有半边是错的。
+        """
+        from app.services.byok_config import ByokConfigManager
+
+        mgr = ByokConfigManager(str(byok_env / "config" / "byok.json"))
+
+        # 只动模型开关
+        mgr.update(model_mode="required")
+        assert mgr.get_mode() == "required"
+        assert mgr.get_cookie_mode() == "shared"
+
+        # 只动 Cookie 开关
+        mgr.update(cookie_mode="optional")
+        assert mgr.get_mode() == "required", "改 Cookie 不应影响模型模式"
+        assert mgr.get_cookie_mode() == "optional"
+
+    def test_cookie_mode_has_no_required(self, byok_env):
+        """Cookie 不消耗站点额度，强制用户登自己的账号在语义上不成立。"""
+        from app.services.byok_config import ByokConfigManager
+
+        mgr = ByokConfigManager(str(byok_env / "config" / "byok.json"))
+        with pytest.raises(ValueError):
+            mgr.update(cookie_mode="required")
+
+    def test_legacy_single_mode_migrates_to_both(self, byok_env):
+        """升级零破坏：老文件只有单个 mode，升级后行为必须与升级前一致。"""
+        from app.services.byok_config import ByokConfigManager
+
+        path = byok_env / "config" / "byok.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('{"mode": "optional"}', encoding="utf-8")
+
+        mgr = ByokConfigManager(str(path))
+        assert mgr.get_mode() == "optional"
+        assert mgr.get_cookie_mode() == "optional"
+
+    def test_legacy_required_maps_cookie_to_optional(self, byok_env):
+        """旧 mode=required 在 Cookie 侧没有对应值。
+
+        升级前 required 下用户 Cookie 是**可用**的，所以不能回退 shared
+        （那等于升级悄悄关掉了本来能用的功能），收敛到 optional。
+        """
+        from app.services.byok_config import ByokConfigManager
+
+        path = byok_env / "config" / "byok.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('{"mode": "required"}', encoding="utf-8")
+
+        mgr = ByokConfigManager(str(path))
+        assert mgr.get_mode() == "required"
+        assert mgr.get_cookie_mode() == "optional"
+
+    def test_new_fields_win_over_legacy(self, byok_env):
+        """新字段一旦写了，就以新字段为准（老字段只做迁移期读回退）。"""
+        from app.services.byok_config import ByokConfigManager
+
+        path = byok_env / "config" / "byok.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            '{"mode": "shared", "model_mode": "required", "cookie_mode": "optional"}',
+            encoding="utf-8",
+        )
+
+        mgr = ByokConfigManager(str(path))
+        assert mgr.get_mode() == "required"
+        assert mgr.get_cookie_mode() == "optional"
+
     def test_corrupt_file_falls_back_to_default(self, byok_env):
         """配置文件损坏不该让服务起不来，也不该切到危险模式。"""
         from app.services.byok_config import MODE_SHARED, ByokConfigManager

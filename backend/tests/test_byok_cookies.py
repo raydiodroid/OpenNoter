@@ -62,7 +62,7 @@ def env(tmp_path, monkeypatch):
 
     from app.services.byok_config import byok_config
 
-    byok_config.update(mode="optional")
+    byok_config.update(cookie_mode="optional")
     yield tmp_path
 
 
@@ -129,7 +129,7 @@ class TestCookieResolve:
 
         _save_user_cookie(1, "bilibili", "SESSDATA=USER")
         CookieConfigManager().set("bilibili", "SESSDATA=SITE")
-        byok_config.update(mode="shared")
+        byok_config.update(cookie_mode="shared")
 
         got = resolve_cookie(1, "bilibili")
         assert got and "SITE" in got
@@ -141,7 +141,7 @@ class TestCookieResolve:
 
         _save_user_cookie(1, "bilibili", "SESSDATA=USER")
         CookieConfigManager().set("bilibili", "SESSDATA=SITE")
-        byok_config.update(mode="optional")
+        byok_config.update(cookie_mode="optional")
 
         got = resolve_cookie(1, "bilibili")
         assert got and "USER" in got, f"应优先用用户 Cookie，实际: {got}"
@@ -152,7 +152,7 @@ class TestCookieResolve:
         from app.services.cookie_manager import CookieConfigManager
 
         CookieConfigManager().set("bilibili", "SESSDATA=SITE")
-        byok_config.update(mode="optional")
+        byok_config.update(cookie_mode="optional")
 
         got = resolve_cookie(2, "bilibili")
         assert got and "SITE" in got
@@ -175,7 +175,7 @@ class TestCookieResolve:
 
         _save_user_cookie(1, "bilibili", "SESSDATA=USER")
         CookieConfigManager().set("bilibili", "SESSDATA=SITE")
-        byok_config.update(mode="optional")
+        byok_config.update(cookie_mode="optional")
 
         # 换掉加密密钥 → 既有密文解不开
         monkeypatch.setenv("OPENNOTER_CREDENTIAL_SECRET", "totally-new-secret-zzzzz")
@@ -192,13 +192,42 @@ class TestCookieResolve:
         assert got and "SITE" in got
 
     def test_required_mode_does_not_force_cookie(self, env):
-        """required 模式不该因为「没配 Cookie」而报错——Cookie 是可选增强。"""
+        """模型 required 时，Cookie 不应被强制——它是可选增强，没配就返回 None。"""
         from app.services.byok_config import byok_config
         from app.services.credential_resolver import resolve_cookie
 
-        byok_config.update(mode="required")
+        byok_config.update(model_mode="required", cookie_mode="optional")
         # 不抛异常，返回 None
         assert resolve_cookie(1, "bilibili") is None
+
+    def test_model_required_does_not_disable_user_cookie(self, env):
+        """核心回归：拆分前两者共用一个开关，模型设 required 会改变 Cookie 行为。
+
+        现在模型 required + Cookie optional 时，用户自己的 Cookie 必须仍然优先。
+        """
+        from app.services.byok_config import byok_config
+        from app.services.credential_resolver import resolve_cookie
+        from app.services.cookie_manager import CookieConfigManager
+
+        _save_user_cookie(1, "bilibili", "SESSDATA=USER")
+        CookieConfigManager().set("bilibili", "SESSDATA=SITE")
+        byok_config.update(model_mode="required", cookie_mode="optional")
+
+        got = resolve_cookie(1, "bilibili")
+        assert got and "USER" in got, f"模型 required 不应影响 Cookie 优先级，实际: {got}"
+
+    def test_cookie_shared_ignores_user_cookie_even_when_model_byok_on(self, env):
+        """反向：Cookie 设 shared 时，即便模型是 optional，也只用站点 Cookie。"""
+        from app.services.byok_config import byok_config
+        from app.services.credential_resolver import resolve_cookie
+        from app.services.cookie_manager import CookieConfigManager
+
+        _save_user_cookie(1, "bilibili", "SESSDATA=USER")
+        CookieConfigManager().set("bilibili", "SESSDATA=SITE")
+        byok_config.update(model_mode="optional", cookie_mode="shared")
+
+        got = resolve_cookie(1, "bilibili")
+        assert got and "SITE" in got, f"Cookie shared 应只用站点 Cookie，实际: {got}"
 
 
 class TestCookieStatusApi:

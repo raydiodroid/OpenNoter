@@ -1,12 +1,40 @@
-"""BYOK 站点级配置：三种部署模式，支持运行时切换。
+"""BYOK 站点级配置：模型凭据与平台 Cookie **两个独立开关**，支持运行时切换。
 
-## 三种模式
+## 为什么拆成两个
+
+历史上这里只有**一个** ``mode``，同时管死模型凭据和个人 Cookie。但这两件事
+的性质完全不同：
+
+| | 模型凭据 | 平台 Cookie |
+|---|---|---|
+| 本质 | 花钱的**额度** | 登录的**身份** |
+| 共用后果 | 花站点的钱 | **用管理员的账号**下载，观看历史混在一起 |
+| 缺失影响 | 任务直接失败 | 静默降级（无 Cookie 也能下普通画质） |
+
+所以「要不要让用户自带」这个决定天然是分开的：一个站点可能完全不想承担
+API 成本（模型 ``required``），但乐于分享自己的 Cookie（Cookie ``shared``）；
+反过来也成立。用一个开关绑死两者，管理员无论选哪个都会有半边是错的。
+
+## 两个开关各自的模式
+
+``model_mode`` —— 模型凭据（LLM / 转写）
 
 | 模式 | 行为 | 典型部署者 |
 |---|---|---|
 | ``shared``   | 只用站点 key；用户 BYOK 入口完全隐藏 | 个人自托管（默认）|
 | ``optional`` | 站点 key 是默认档位；用户可配自己的，配了就用 | 公司/社区内部 |
 | ``required`` | 必须配自己的；未配置时提交直接拒绝 | 对外提供服务 |
+
+``cookie_mode`` —— 平台 Cookie
+
+| 模式 | 行为 |
+|---|---|
+| ``shared``   | 只用站点 Cookie；用户的 Cookie 入口隐藏 |
+| ``optional`` | 站点 Cookie 是默认；用户可配自己的，配了就用 |
+
+**Cookie 没有 ``required``**：它不花站点的钱，强制要求用户登自己的账号在语义上
+不成立（没配 Cookie 也能正常下载，只是画质低些）。这个不对称是刻意的，见
+``COOKIE_MODES``。
 
 **默认 ``shared``** 是刻意的：开源项目 clone 下来直接跑，不该因为升级就被要求
 配置任何东西。这也是「零破坏承诺」的落点——``mode == "shared"`` 时，凭据解析
@@ -51,7 +79,14 @@ logger = get_logger(__name__)
 MODE_SHARED = "shared"
 MODE_OPTIONAL = "optional"
 MODE_REQUIRED = "required"
+
+#: 模型凭据支持的三种模式
 ALL_MODES = (MODE_SHARED, MODE_OPTIONAL, MODE_REQUIRED)
+
+#: 平台 Cookie 只支持两种——**没有 required**。
+#: 原因：Cookie 不消耗站点额度，没配也能正常下载（只是画质低），
+#: 强制用户登自己的账号在语义上不成立。
+COOKIE_MODES = (MODE_SHARED, MODE_OPTIONAL)
 
 # 默认值。文件不存在 / 读失败 / 值非法时一律回退到这里，
 # 保证任何异常都不会把部署切到一个「用户配不了 key 又用不了站点 key」的死状态。
@@ -98,33 +133,60 @@ class ByokConfigManager:
     def _normalize(raw: Dict[str, Any]) -> Dict[str, Any]:
         """把任意输入收敛成合法配置。
 
-        非法 mode 回退 shared 而不是抛错：配置错导致全站不可用，
+        非法值回退默认而不是抛错：配置错导致全站不可用，
         比「悄悄降级到默认」糟糕得多。
-        """
-        mode = str(raw.get("mode") or "").strip().lower()
 
-        # 文件里没写 mode 时，允许用环境变量给初始值（Docker 部署更方便）。
+        ## 旧配置的迁移
+
+        拆分前只有单个 ``mode``，同时管模型和 Cookie。老文件里通常还留着那个
+        字段。迁移规则：**``mode`` 同时作为两者的初值**，然后由各自的新字段覆盖。
+
+        这样升级后行为与升级前**完全一致**（管理员不用重配），而管理员一旦在
+        新界面上分别设置过，就以 ``model_mode`` / ``cookie_mode`` 为准。
+        """
+        legacy = str(raw.get("mode") or "").strip().lower()
+
+        # 文件里没写新字段时，允许用环境变量给初始值（Docker 部署更方便）。
         # 文件一旦写了就以文件为准——否则「界面切换」会被 env 悄悄覆盖。
-        if not mode:
+        if not legacy:
             from app.utils.env_compat import getenv
 
             env_mode = (getenv("BYOK_MODE", "") or "").strip().lower()
             if env_mode in ALL_MODES:
-                mode = env_mode
+                legacy = env_mode
             elif env_mode:
                 logger.warning(f"环境变量 BYOK_MODE={env_mode!r} 非法，忽略")
 
-        if mode not in ALL_MODES:
-            if mode:
-                logger.warning(f"非法的 byok mode={mode!r}，回退 {DEFAULT_MODE}")
-            mode = DEFAULT_MODE
+        def pick(field: str, allowed: tuple[str, ...], default: str) -> str:
+            value = str(raw.get(field) or "").strip().lower()
+            if not value:
+                value = legacy  # 回落到旧字段
+            if value not in allowed:
+                if value:
+                    # 旧 mode=required 落到这里：Cookie 没有 required，
+                    # 但升级前 required 下用户 Cookie 是**可用**的。若回退到
+                    # shared，升级会悄悄关掉本来能用的功能，所以收敛到 optional
+                    # （语义上最接近：仍然允许用户自带，只是不强制）。
+                    if value == MODE_REQUIRED and MODE_OPTIONAL in allowed:
+                        logger.info(
+                            f"{field}: 旧配置 required 无对应值，收敛为 optional"
+                            "（升级前用户 Cookie 可用，不能因拆分而关掉）"
+                        )
+                        return MODE_OPTIONAL
+                    logger.warning(f"非法的 {field}={value!r}，回退 {default}")
+                value = default
+            return value
+
+        model_mode = pick("model_mode", ALL_MODES, DEFAULT_MODE)
+        cookie_mode = pick("cookie_mode", COOKIE_MODES, DEFAULT_MODE)
 
         allow_custom = raw.get("allow_custom_base_url", DEFAULT_ALLOW_CUSTOM_BASE_URL)
         if not isinstance(allow_custom, bool):
             allow_custom = DEFAULT_ALLOW_CUSTOM_BASE_URL
 
         return {
-            "mode": mode,
+            "model_mode": model_mode,
+            "cookie_mode": cookie_mode,
             "allow_custom_base_url": allow_custom,
             "updated_at": raw.get("updated_at"),
         }
@@ -142,33 +204,87 @@ class ByokConfigManager:
             self._cached_at = now
             return dict(normalized)
 
+    # ---- 模型凭据（LLM / 转写）----
+
     def get_mode(self) -> str:
-        return self.get()["mode"]
+        """模型凭据模式。保留这个名字是因为它在解析链里被大量引用。"""
+        return self.get()["model_mode"]
+
+    get_model_mode = get_mode
 
     def is_byok_enabled(self) -> bool:
-        """用户级 BYOK 是否可用（optional 或 required）。"""
+        """**模型**凭据的用户级 BYOK 是否可用（optional 或 required）。"""
         return self.get_mode() != MODE_SHARED
 
     def requires_byok(self) -> bool:
         return self.get_mode() == MODE_REQUIRED
 
+    # ---- 平台 Cookie ----
+
+    def get_cookie_mode(self) -> str:
+        """平台 Cookie 模式（只会是 shared / optional）。"""
+        return self.get()["cookie_mode"]
+
+    def is_cookie_byok_enabled(self) -> bool:
+        """**Cookie** 的用户级 BYOK 是否可用。
+
+        与模型分开判断：管理员可能让用户自带模型凭据，但仍统一用站点 Cookie。
+        历史上这两个共用 ``mode``，导致「关掉模型 BYOK」会连 Cookie 一起失效。
+        """
+        return self.get_cookie_mode() != MODE_SHARED
+
     def update(
         self,
         *,
-        mode: str | None = None,
+        model_mode: str | None = None,
+        cookie_mode: str | None = None,
         allow_custom_base_url: bool | None = None,
+        mode: str | None = None,
     ) -> Dict[str, Any]:
-        """更新配置并立即失效缓存（管理员切换后下一次解析就生效）。"""
+        """更新配置并立即失效缓存（管理员切换后下一次解析就生效）。
+
+        :param model_mode: 模型凭据模式
+        :param cookie_mode: 平台 Cookie 模式（仅 shared / optional）
+        :param allow_custom_base_url: 是否允许用户自定义模型接口地址
+        :param mode: **已废弃**，仅为兼容旧调用方；等价于同时设置两者
+            （Cookie 会被收敛到 shared/optional）
+        """
         raw = self._read_raw()
+
+        # 兼容旧参数：同时写两个新字段
         if mode is not None:
-            normalized_mode = str(mode).strip().lower()
-            if normalized_mode not in ALL_MODES:
+            normalized = str(mode).strip().lower()
+            if normalized not in ALL_MODES:
                 raise ValueError(
                     f"非法的模式: {mode!r}，可选值: {', '.join(ALL_MODES)}"
                 )
-            raw["mode"] = normalized_mode
+            model_mode = model_mode if model_mode is not None else normalized
+            cookie_mode = cookie_mode if cookie_mode is not None else normalized
+
+        if model_mode is not None:
+            normalized = str(model_mode).strip().lower()
+            if normalized not in ALL_MODES:
+                raise ValueError(
+                    f"非法的模型凭据模式: {model_mode!r}，"
+                    f"可选值: {', '.join(ALL_MODES)}"
+                )
+            raw["model_mode"] = normalized
+
+        if cookie_mode is not None:
+            normalized = str(cookie_mode).strip().lower()
+            if normalized not in COOKIE_MODES:
+                raise ValueError(
+                    f"非法的 Cookie 模式: {cookie_mode!r}，"
+                    f"可选值: {', '.join(COOKIE_MODES)}"
+                    "（Cookie 不消耗站点额度，没有 required）"
+                )
+            raw["cookie_mode"] = normalized
+
         if allow_custom_base_url is not None:
             raw["allow_custom_base_url"] = bool(allow_custom_base_url)
+
+        # 老字段不再写：它只作为迁移期的读回退，留着会让「哪个是真的」难判断。
+        raw.pop("mode", None)
 
         raw["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
 
@@ -177,11 +293,13 @@ class ByokConfigManager:
             self._cached = None  # 失效缓存，保证「立即生效」
             self._cached_at = 0.0
 
+        cfg = self._normalize(raw)
         logger.info(
-            f"BYOK 配置已更新: mode={raw.get('mode')}, "
-            f"allow_custom_base_url={raw.get('allow_custom_base_url')}"
+            f"BYOK 配置已更新: model_mode={cfg['model_mode']}, "
+            f"cookie_mode={cfg['cookie_mode']}, "
+            f"allow_custom_base_url={cfg['allow_custom_base_url']}"
         )
-        return self._normalize(raw)
+        return cfg
 
     def invalidate_cache(self) -> None:
         """测试用：强制下次 get() 重新读盘。"""

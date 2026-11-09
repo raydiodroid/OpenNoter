@@ -256,11 +256,13 @@ def list_user_credentials(user_id: int) -> list[dict]:
 
 def build_capability_status(user_id: Optional[int]) -> dict:
     """给前端初始化用：每个能力位当前用的是「我的」还是「站点」。"""
-    mode = byok_config.get()
+    cfg = byok_config.get()
+    model_mode = cfg["model_mode"]
+    # 对外的 `mode` 字段保持旧名（前端与 API 契约不用改），语义是「模型凭据模式」
     status: dict = {
-        "mode": mode["mode"],
-        "allow_custom_base_url": mode["allow_custom_base_url"],
-        "byok_enabled": mode["mode"] != MODE_SHARED,
+        "mode": model_mode,
+        "allow_custom_base_url": cfg["allow_custom_base_url"],
+        "byok_enabled": model_mode != MODE_SHARED,
         "capabilities": [],
     }
 
@@ -332,13 +334,16 @@ def resolve_cookie(user_id: Optional[int], platform: str) -> Optional[str]:
 
     ## shared 模式
 
-    ``BYOK_MODE=shared`` 时直接读站点 Cookie，与改造前逐行等价。
+    ``cookie_mode=shared`` 时直接读站点 Cookie，与改造前逐行等价。
+
+    **注意用 ``get_cookie_mode()`` 而不是 ``get_mode()``**：Cookie 与模型是
+    两个独立开关，混用会让「关掉模型 BYOK」意外关掉用户 Cookie。
     """
     from app.services.byok_config import MODE_SHARED, byok_config
 
-    mode = byok_config.get_mode()
+    cookie_mode = byok_config.get_cookie_mode()
 
-    if mode == MODE_SHARED or user_id is None:
+    if cookie_mode == MODE_SHARED or user_id is None:
         return _site_cookie(platform)
 
     own = _load_user_cookie(int(user_id), platform)
@@ -468,7 +473,8 @@ def build_cookie_status(user_id: Optional[int]) -> dict:
     from app.services.byok_config import MODE_SHARED, byok_config
 
     cfg = byok_config.get()
-    mode = cfg["mode"]
+    # Cookie 走自己的开关；不要用 cfg["mode"]（那个字段已拆成两个）
+    mode = cfg["cookie_mode"]
 
     site = _site_cookie_platforms()
     items: list[dict] = []

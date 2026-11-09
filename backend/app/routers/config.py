@@ -329,15 +329,18 @@ def update_transcriber_config(data: TranscriberConfigRequest, admin: User = Depe
     return R.success(data=config)
 
 
-# ---- BYOK 站点模式（shared / optional / required）----
+# ---- BYOK 站点策略（模型凭据 + 平台 Cookie 两个独立开关）----
 #
 # 读接口对所有登录用户开放（前端要据此决定是否显示「我的凭据」入口）；
-# 写接口仅管理员。模式存在 config/byok.json，改完**立即生效**、无需重启——
-# 这正是「三种模式支持随时切换」的落点。
+# 写接口仅管理员。配置存在 config/byok.json，改完**立即生效**、无需重启。
+#
+# 两个开关分开的原因见 services/byok_config.py 的模块 docstring：
+# 模型凭据是「花谁的钱」，平台 Cookie 是「用谁的身份」，运营决策天然独立。
 
 
 class ByokConfigRequest(BaseModel):
-    mode: Optional[str] = None
+    model_mode: Optional[str] = None
+    cookie_mode: Optional[str] = None
     allow_custom_base_url: Optional[bool] = None
 
 
@@ -351,25 +354,33 @@ def get_byok_config():
 
 @router.patch("/byok_config")
 def update_byok_config(data: ByokConfigRequest, admin: User = Depends(require_admin)):
-    """切换全站 BYOK 模式（管理员）。
+    """更新全站 BYOK 策略（管理员）。
 
-    从 optional 切到 required 会让「所有未配置凭据的用户无法提交任务」，
-    这是破坏性变更——前端必须给出确认提示。
+    ``model_mode`` 从 optional 切到 required 会让「所有未配置凭据的用户无法
+    提交任务」，这是破坏性变更——前端必须给出确认提示。
     """
     from app.services.byok_config import byok_config
 
-    if data.mode is None and data.allow_custom_base_url is None:
+    if (
+        data.model_mode is None
+        and data.cookie_mode is None
+        and data.allow_custom_base_url is None
+    ):
         return R.error(msg="请至少提供一个字段", code=400)
 
     try:
         cfg = byok_config.update(
-            mode=data.mode,
+            model_mode=data.model_mode,
+            cookie_mode=data.cookie_mode,
             allow_custom_base_url=data.allow_custom_base_url,
         )
     except ValueError as exc:
         return R.error(msg=str(exc), code=400)
 
-    logger.info(f"管理员 {admin.email} 切换 BYOK 模式为 {cfg['mode']}")
+    logger.info(
+        f"管理员 {admin.email} 更新 BYOK 策略: "
+        f"model_mode={cfg['model_mode']}, cookie_mode={cfg['cookie_mode']}"
+    )
     return R.success(data=cfg, msg="配置已更新")
 
 

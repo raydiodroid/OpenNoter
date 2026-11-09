@@ -100,7 +100,7 @@ def api(tmp_path, monkeypatch):
 def _set_mode(mode: str):
     from app.services.byok_config import byok_config
 
-    byok_config.update(mode=mode)
+    byok_config.update(model_mode=mode, cookie_mode="shared")
 
 
 def _payload(**over):
@@ -117,24 +117,44 @@ def _payload(**over):
 
 
 class TestByokModeApi:
-    def test_get_returns_current_mode(self, api):
+    """BYOK 站点策略：模型凭据与平台 Cookie 是**两个独立开关**。"""
+
+    def test_get_returns_both_modes(self, api):
         client, _ = api
         resp = client.get("/api/byok_config")
         assert resp.status_code == 200
-        assert resp.json()["data"]["mode"] == "shared"  # 默认
+        data = resp.json()["data"]
+        assert data["model_mode"] == "shared"  # 默认
+        assert data["cookie_mode"] == "shared"  # 默认
 
-    def test_admin_can_switch_mode(self, api):
+    def test_admin_can_switch_model_mode(self, api):
         client, _ = api
         for mode in ("optional", "required", "shared"):
-            resp = client.patch("/api/byok_config", json={"mode": mode})
+            resp = client.patch("/api/byok_config", json={"model_mode": mode})
             assert resp.status_code == 200, resp.text
-            assert resp.json()["data"]["mode"] == mode
+            assert resp.json()["data"]["model_mode"] == mode
             # 切换立即生效（再读一次）
-            assert client.get("/api/byok_config").json()["data"]["mode"] == mode
+            assert client.get("/api/byok_config").json()["data"]["model_mode"] == mode
+
+    def test_cookie_mode_rejects_required(self, api):
+        """Cookie 不消耗站点额度，没有 required——传了必须被拒。"""
+        client, _ = api
+        resp = client.patch("/api/byok_config", json={"cookie_mode": "required"})
+        assert resp.status_code == 400
+
+    def test_two_switches_are_independent(self, api):
+        """改模型模式不能顺手改掉 Cookie 模式（拆分前的 bug 就是这样）。"""
+        client, _ = api
+        client.patch("/api/byok_config", json={"model_mode": "required", "cookie_mode": "shared"})
+        client.patch("/api/byok_config", json={"model_mode": "optional"})
+
+        data = client.get("/api/byok_config").json()["data"]
+        assert data["model_mode"] == "optional"
+        assert data["cookie_mode"] == "shared", "改模型模式不应影响 Cookie 模式"
 
     def test_invalid_mode_rejected(self, api):
         client, _ = api
-        resp = client.patch("/api/byok_config", json={"mode": "bogus"})
+        resp = client.patch("/api/byok_config", json={"model_mode": "bogus"})
         assert resp.status_code == 400
 
     def test_empty_body_rejected(self, api):

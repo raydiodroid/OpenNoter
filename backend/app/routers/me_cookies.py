@@ -57,8 +57,13 @@ class CookieUpsertRequest(BaseModel):
 
 
 def _require_byok_enabled() -> None:
-    """``shared`` 模式下该功能不存在 → 404（不是 403，避免暗示功能形状）。"""
-    if not byok_config.is_byok_enabled():
+    """``cookie_mode == shared`` 时该功能不存在 → 404（不是 403，避免暗示功能形状）。
+
+    **用 Cookie 自己的开关，不是模型的**：管理员可能让用户自带模型凭据，
+    但仍统一用站点 Cookie（或反过来）。历史上两者共用 ``mode``，
+    导致「关掉模型 BYOK」会连 Cookie 入口一起消失。
+    """
+    if not byok_config.is_cookie_byok_enabled():
         raise HTTPException(status_code=404, detail="Not Found")
 
 
