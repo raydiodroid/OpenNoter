@@ -1,14 +1,17 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
+  ActionButton,
   Button,
   Content,
   Heading,
   IllustratedMessage,
   ProgressCircle,
+  Text,
 } from '@react-spectrum/s2'
 import { style } from '@react-spectrum/s2/style' with { type: 'macro' }
 import AIGenerate from '@react-spectrum/s2/illustrations/gradient/generic1/AIGenerate'
 import ErrorIllustration from '@react-spectrum/s2/illustrations/linear/Error'
+import CopyIcon from '@react-spectrum/s2/icons/Copy'
 
 import NoteToolbar from '@/pages/workbench/NoteToolbar'
 import MarkdownArticle from '@/pages/workbench/MarkdownArticle'
@@ -100,40 +103,89 @@ const emptyCard = style({
 })
 
 /**
+ * 覆写 IllustratedMessage 的默认宽度。
+ *
+ * 它内部把 `maxWidth` 写死成 380（vertical 布局）——**不是**由父容器决定，
+ * 所以外面套多宽的卡片都没用（实测：外层 800，错误块仍被卡在 380）。
+ * 它暴露了 `styles` 属性用于覆盖，这里把上限放到 800。
+ */
+const wideMessage = style({ maxWidth: 800 })
+
+/**
+ * 失败页专用卡片：比 emptyCard 宽。
+ *
+ * 错误串里有大量 URL 和对象表示，560px 会把它们折成十几行、整块又高又难读。
+ * 其它空态（未开始 / 生成中）没有这个需求，所以**不改 emptyCard**，单独宽。
+ */
+const failureCard = style({
+  width: 'full',
+  maxWidth: 800,
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  gap: 24,
+  textAlign: 'center',
+})
+
+/**
  * 失败原因代码块：等宽、可换行、左对齐（长错误串要能看全）。
  *
  * 注意它现在位于 `<Content>` 内部（见 FAILED 分支的注释），不再需要
  * 自己占 `gridColumn` —— 网格位由外层 Content 统一提供。
  */
+/**
+ * 失败详情块：**按代码块的形态呈现**。
+ *
+ * 与 `MarkdownArticle` 里的 `CodeBlock` 保持同一套视觉语言（顶部 header +
+ * 正文区 + 右上角复制），用户在任何地方看到「等宽文本块」时的操作习惯一致。
+ *
+ * 比原实现宽得多（maxWidth 520 → 760）：错误串里有大量 URL 和对象表示，
+ * 窄容器会把它们折成很多行，整块变得又高又难读。
+ */
 const failureBox = style({
   width: 'full',
-  maxWidth: 520,
-  paddingX: 16,
-  paddingY: 12,
-  borderRadius: 'default',
-  backgroundColor: 'gray-100',
+  maxWidth: 760,
+  marginY: 0,
+  borderRadius: 'lg',
+  borderWidth: 1,
+  borderStyle: 'solid',
+  borderColor: 'gray-200',
+  backgroundColor: 'layer-2',
+  overflow: 'hidden',
   textAlign: 'start',
 })
 
+/** header：左侧「错误详情」标签，右侧图标复制按钮——与 CodeBlock 的 header 同构 */
+const failureHeader = style({
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  paddingX: 12,
+  paddingY: 4,
+  backgroundColor: 'gray-100',
+  borderStyle: 'solid',
+  borderColor: 'gray-200',
+  borderTopWidth: 0,
+  borderBottomWidth: 1,
+  borderStartWidth: 0,
+  borderEndWidth: 0,
+})
+
+const failureLabel = style({
+  font: 'code-sm',
+  color: 'neutral-subdued',
+})
+
+/** body：等宽、可换行、左对齐（长错误串要能看全） */
 const failureText = style({
   font: 'code',
   color: 'neutral',
   margin: 0,
+  paddingX: 16,
+  paddingY: 12,
   // 后端错误串可能很长（含 URL / 堆栈摘要），必须允许换行
   wordBreak: 'break-word',
   whiteSpace: 'pre-wrap',
-})
-
-/**
- * 复制按钮的位置：贴错误框右下角。
- *
- * 不占额外一行——错误串本身通常已经很长，再加一行按钮会让这块更高；
- * 而「复制」是次要操作，不该和「重试」抢主要位置。
- */
-const failureActions = style({
-  display: 'flex',
-  justifyContent: 'end',
-  marginTop: 8,
 })
 
 const steps = style({
@@ -245,8 +297,8 @@ export default function NotePreview({ onRequestMoreSpace }: { onRequestMoreSpace
     return (
       <div className={preview}>
         <div className={centered}>
-          <div className={emptyCard}>
-            <IllustratedMessage size="L">
+          <div className={failureCard}>
+            <IllustratedMessage size="L" styles={wideMessage}>
               <ErrorIllustration />
               <Heading>笔记生成失败</Heading>
               {/*
@@ -274,16 +326,19 @@ export default function NotePreview({ onRequestMoreSpace }: { onRequestMoreSpace
                     它的用途是「把这段贴给管理员/搜索」，属于次要操作。
                   */
                   <div className={failureBox}>
-                    <p className={failureText}>{failureDetail}</p>
-                    <div className={failureActions}>
-                      <Button
-                        variant="secondary"
-                        size="S"
+                    <div className={failureHeader}>
+                      <span className={failureLabel}>错误详情</span>
+                      <ActionButton
+                        isQuiet
+                        size="XS"
+                        aria-label={copied ? '已复制' : '复制错误详情'}
                         onPress={copyFailureDetail}
                       >
-                        {copied ? '已复制' : '复制'}
-                      </Button>
+                        <CopyIcon />
+                        <Text>{copied ? '已复制' : '复制'}</Text>
+                      </ActionButton>
                     </div>
+                    <p className={failureText}>{failureDetail}</p>
                   </div>
                 ) : (
                   <>
