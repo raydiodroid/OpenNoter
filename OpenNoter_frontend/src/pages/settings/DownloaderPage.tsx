@@ -49,14 +49,17 @@ import { toast } from '@/lib/toast'
 
 type DownloaderTab = 'cookie' | 'network'
 
-/** 这些平台的下载器不读 Cookie（与后端 cookie_policy 的平台能力一致） */
-const COOKIE_FREE_PLATFORMS = ['youtube']
-
 const COOKIE_HINT =
   '未登录只能拿到低清晰度。优先从当前浏览器获取已登录 Cookie，也可以手动粘贴；保存时只保留下载器需要的登录项。'
 
 const PLATFORM_HINTS: Record<string, string> = {
   bilibili: '未登录只能拿到低清晰度。B 站还支持扫码登录；保存时只保留下载器需要的登录项。',
+  // YouTube 的 Cookie 不是"画质增强"而是"能不能用"：机房出口 IP 下，
+  // 部分视频会被风控拦下（`Sign in to confirm you're not a bot`），
+  // 只有带上登录态才过得去。
+  youtube:
+    '未登录时部分视频会被 YouTube 风控拦下（提示「Sign in to confirm you not a bot」），' +
+    '带上登录 Cookie 可以跳过。必须是浏览器导出的 Netscape 格式（cookies.txt）整份粘贴。',
 }
 
 const list = style({ display: 'flex', flexDirection: 'column', gap: 2, padding: 8 })
@@ -163,9 +166,8 @@ function CookieEditor({
   onCookieChange: (platformId: string, hasCookie: boolean) => void
 }) {
   const platform = DOWNLOAD_PLATFORMS.find(item => item.value === platformId)
-  const usesCookie = !COOKIE_FREE_PLATFORMS.includes(platformId)
   const [cookie, setCookie] = useState('')
-  const [loading, setLoading] = useState(usesCookie)
+  const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [acquiring, setAcquiring] = useState(false)
   const [dirty, setDirty] = useState(false)
@@ -178,10 +180,6 @@ function CookieEditor({
   const qrGeneration = useRef(0)
 
   useEffect(() => {
-    if (!usesCookie) {
-      setLoading(false)
-      return
-    }
     let cancelled = false
     setLoading(true)
     getDownloaderCookie(platformId)
@@ -199,7 +197,7 @@ function CookieEditor({
     return () => {
       cancelled = true
     }
-  }, [onCookieChange, platformId, usesCookie])
+  }, [onCookieChange, platformId])
 
   useEffect(() => {
     if (!qrOpen || !qrSessionId) return
@@ -320,15 +318,7 @@ function CookieEditor({
             <h2 className={detailTitle}>{platform?.label || platformId} 下载器</h2>
           </div>
 
-          {!usesCookie ? (
-            <div className={formStack}>
-              <Notice variant="neutral">
-                <Text>YouTube 下载器当前不使用 Cookie，无需配置。</Text>
-              </Notice>
-            </div>
-          ) : (
-            <>
-              {loading ? (
+          {(loading ? (
                 <Text styles={muted}>加载 Cookie…</Text>
               ) : (
                 <div className={formStack}>
@@ -369,9 +359,7 @@ function CookieEditor({
                     </Button>
                   </div>
                 </div>
-              )}
-            </>
-          )}
+              ))}
         </div>
       </Panel>
 
@@ -427,7 +415,7 @@ export default function DownloaderPage() {
     let cancelled = false
     const load = async () => {
       const entries = await Promise.all(
-        DOWNLOAD_PLATFORMS.filter(item => !COOKIE_FREE_PLATFORMS.includes(item.value)).map(
+        DOWNLOAD_PLATFORMS.map(
           async item => {
             try {
               const res = await getDownloaderCookie(item.value, { suppressToast: true })
@@ -452,12 +440,7 @@ export default function DownloaderPage() {
       <div className={list} role="navigation" aria-label="下载平台">
         {DOWNLOAD_PLATFORMS.map(platform => {
           const active = activeId === platform.value
-          const cookieFree = COOKIE_FREE_PLATFORMS.includes(platform.value)
-          const meta = cookieFree
-            ? '无需 Cookie'
-            : cookieStatus[platform.value]
-              ? '已配置'
-              : '未配置'
+          const meta = cookieStatus[platform.value] ? '已配置' : '未配置'
           return (
             <ListRow key={platform.value} selected={active}>
               <ListRowButton
@@ -481,7 +464,7 @@ export default function DownloaderPage() {
     <Page>
       <PageHeader
         title="下载配置"
-        description="需要登录态的视频（B 站、抖音、快手）填入 Cookie 后才能拿到高清原片。首次使用浏览器获取功能，请先安装扩展。"
+        description="需要登录态的视频（B 站、YouTube、抖音、快手）填入 Cookie 后才能拿到高清原片；YouTube 还需要它来绕过机器流量风控。首次使用浏览器获取功能，请先安装扩展。"
         actions={
           <Button
             variant="secondary"
