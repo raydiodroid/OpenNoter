@@ -229,6 +229,10 @@ def list_user_credentials(user_id: int) -> list[dict]:
         rows = (
             db.query(UserCredential)
             .filter(UserCredential.user_id == user_id)
+            # 与 `_load_credential` 保持同一口径：停用的行不参与解析，
+            # 状态里也不该报「已配置」。两处过滤条件分叉会让界面说「我的」
+            # 而实际用站点配置。
+            .filter(UserCredential.enabled.is_(True))
             .order_by(UserCredential.capability)
             .all()
         )
@@ -267,7 +271,10 @@ def build_capability_status(user_id: Optional[int]) -> dict:
     }
 
     configured = {}
-    if user_id is not None:
+    # `shared` 模式下用户的凭据**不参与解析**（resolve 直接短路段到站点配置）。
+    # 所以状态里也不能把它们算成 own——否则界面显示「我的」，实际用的是站点
+    # 凭据。与 build_cookie_status 里那条守卫是同构的，两处必须一致。
+    if user_id is not None and model_mode != MODE_SHARED:
         for item in list_user_credentials(int(user_id)):
             configured[item["capability"]] = item
 
@@ -415,6 +422,8 @@ def list_user_cookies(user_id: int) -> list[dict]:
         rows = (
             db.query(UserCookie)
             .filter(UserCookie.user_id == user_id)
+            # 同 list_user_credentials：与 `_load_user_cookie` 的口径对齐
+            .filter(UserCookie.enabled.is_(True))
             .order_by(UserCookie.platform)
             .all()
         )

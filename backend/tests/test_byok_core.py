@@ -213,6 +213,55 @@ class TestByokConfig:
         assert mgr.get_mode() == "required"
         assert mgr.get_cookie_mode() == "optional"
 
+    def test_legacy_mode_param_converges_cookie(self, byok_env):
+        """旧参数 `update(mode=...)` 必须可用，且 Cookie 侧要收敛。
+
+        回归：拆分时文档承诺 `mode` 「等价于同时设置两者」，实现却把
+        required 原样塞给 cookie_mode，被 COOKIE_MODES 校验拒绝抛 ValueError。
+        """
+        from app.services.byok_config import ByokConfigManager
+
+        mgr = ByokConfigManager(str(byok_env / "config" / "byok.json"))
+        for mode in ("shared", "optional", "required"):
+            mgr.update(mode=mode)
+            assert mgr.get_mode() == mode
+            expected_cookie = "optional" if mode == "required" else mode
+            assert mgr.get_cookie_mode() == expected_cookie
+
+    def test_partial_update_does_not_drop_other_switch(self, byok_env):
+        """只改一个字段，不能把另一个开关连同旧字段一起丢掉。
+
+        回归：老文件只有 `mode`，update() 直接 pop("mode") 而不先固化迁移结果，
+        下次读变成 shared/shared —— required 保护静默消失。
+        """
+        from app.services.byok_config import ByokConfigManager
+
+        path = byok_env / "config" / "byok.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('{"mode": "required"}', encoding="utf-8")
+
+        mgr = ByokConfigManager(str(path))
+        mgr.update(allow_custom_base_url=True)  # 只动这一个字段
+
+        # 模拟进程重启
+        again = ByokConfigManager(str(path))
+        assert again.get_mode() == "required", "模型模式被部分更新连带清掉了"
+        assert again.get_cookie_mode() == "optional"
+
+    def test_partial_update_only_cookie(self, byok_env):
+        """只改 cookie_mode 不能影响 model_mode。"""
+        from app.services.byok_config import ByokConfigManager
+
+        path = byok_env / "config" / "byok.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('{"mode": "required"}', encoding="utf-8")
+
+        mgr = ByokConfigManager(str(path))
+        mgr.update(cookie_mode="shared")
+
+        assert mgr.get_mode() == "required"
+        assert mgr.get_cookie_mode() == "shared"
+
     def test_corrupt_file_falls_back_to_default(self, byok_env):
         """配置文件损坏不该让服务起不来，也不该切到危险模式。"""
         from app.services.byok_config import MODE_SHARED, ByokConfigManager

@@ -148,3 +148,114 @@ def test_safe_upload_rel_agrees_with_resolve_under_uploads(tmp_path, monkeypatch
     assert safe_upload_rel("/uploads/../x.mp4") is False
     with pytest.raises(ValueError):
         resolve_under_uploads("/uploads/../x.mp4")
+
+
+# ===========================================================================
+# 审计补充（2026-11-09）：VideoRequest 不再放行非 http(s)
+# ===========================================================================
+
+
+class TestVideoRequestRejectsNonHttp:
+    """`VideoRequest`（`/api/generate_note`）必须拒绝非 http(s) 输入。
+
+    ## 背景（审计 P0）
+
+    旧实现是：
+
+        if parsed.scheme in ("http", "https"):
+            if not is_supported_video_url(url): raise ...
+
+    也就是说**只校验「看起来像链接」的输入**，其余原样 `return v`。于是：
+
+        "x http://169.254.169.254/"   → scheme 空 → 放行
+        "file:///etc/passwd"          → scheme=file → 放行
+
+    这些值会流到下载器。快手那条链尤其危险：`_URL_RE` 会把
+    `"x http://169.254.169.254/"` 里的 URL 抠出来还原成
+    `http://169.254.169.254/`，再 `requests.get(allow_redirects=True)`
+    零校验发出去 —— 盲 SSRF / 内网端口探测。
+
+    「不是 http(s)」不是「不用校验」，而是**本身就不合法**。
+    """
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            "x http://169.254.169.254/",
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "ftp://example.com/a.mp4",
+            "not-a-url",
+            "/uploads/../../etc/passwd",
+        ],
+    )
+    def test_non_http_scheme_rejected(self, bad):
+        from app.routers.note import VideoRequest
+
+        with pytest.raises(NoteError):
+            VideoRequest(video_url=bad, platform="kuaishou")
+
+    def test_valid_platform_url_still_accepted(self):
+        """收紧不能把正常链接搞坏。"""
+        from app.routers.note import VideoRequest
+
+        req = VideoRequest(
+            video_url="https://www.bilibili.com/video/BV1GJ411x7h7",
+            platform="bilibili",
+        )
+        assert req.video_url.startswith("https://www.bilibili.com/")
+
+
+class TestUploadOwnershipOnConsume:
+    """上传文件的**消费路径**也必须校验归属。
+
+    ## 背景（审计 P1）
+
+    `main.py:363` 的静态读取路径用 `can_read_upload` 校验了归属，但
+    「把这个文件拿去转写」这条消费路径没校验 —— 知道他人 upload 文件名
+    就能让服务端处理别人的视频。
+
+    上传文件名是 uuid4 hex（不可枚举），但 UUID 会经日志、代理、分享链接
+    泄露；仓库自己在 `upload_paths.py:105-110` 论证过「UUID 不是访问控制」。
+    """
+
+    def test_helper_exists_and_uses_can_read_upload(self):
+        import inspect
+
+        from app.routers import note as note_module
+
+        assert hasattr(note_module, "_assert_upload_owned")
+        src = inspect.getsource(note_module._assert_upload_owned)
+        assert "can_read_upload" in src
+
+    def test_both_create_routes_call_the_helper(self):
+        import inspect
+
+        from app.routers import note as note_module
+
+        for fn_name in ("generate_note", "create_note"):
+            src = inspect.getsource(getattr(note_module, fn_name))
+            assert "_assert_upload_owned(" in src, f"{fn_name} 未校验上传归属"
+
+    def test_foreign_upload_rejected(self, tmp_path, monkeypatch):
+        """他人名下的上传必须被拒。"""
+        from app.utils import upload_paths
+
+        target = tmp_path / "abc.mp4"
+        target.write_bytes(b"x")
+        upload_paths.set_upload_owner(target, 1)
+
+        assert upload_paths.can_read_upload(
+            target, _User(2), auth_enforced=True
+        ) is False
+        assert upload_paths.can_read_upload(
+            target, _User(1), auth_enforced=True
+        ) is True
+
+
+class _User:
+    """最小 User 替身：只需要 id / is_superuser。"""
+
+    def __init__(self, uid, superuser=False):
+        self.id = uid
+        self.is_superuser = superuser

@@ -133,10 +133,55 @@ class KuaiShou:
         return found[0] if found else None
 
     def get_photo_id(self, url):
-        """跟随短链跳转，从落地页 URL 里解析 photo id。"""
-        response = requests.get(
-            url, allow_redirects=True, headers=self.header, timeout=REQUEST_TIMEOUT
-        )
+        """跟随短链跳转，从落地页 URL 里解析 photo id。
+
+        ## 为什么用 safe_get 而不是 requests.get(allow_redirects=True)
+
+        快手短链的跳转目标**由服务端决定**，`extract_photo_id` 只看落地页 URL
+        有没有 photo id，不校验域名。用 `allow_redirects=True` 意味着：
+
+          - 首跳没有任何 IP 层校验；
+          - 后续每一跳都不校验（requests 自动跟）。
+
+        于是「用户可控 URL → 服务端发请求」这条路上，快手是唯一没有闸门的
+        平台（B 站短链早已用 `safe_get` 逐跳校验，见 `utils/bilibili_ids.py`）。
+
+        换成 `safe_get` 后：每跳重新 `assert_safe_url(suffixes=())`（只做 IP 层
+        拦截，不加域名白名单——快手落地页域名不在图片 CDN 名单里），
+        并且不自动跟随，我们自己逐跳推进。
+        """
+        from app.utils.url_safety import TooManyRedirects, UnsafeUrlError, safe_get
+
+        try:
+            response = safe_get(
+                url,
+                suffixes=(),
+                method="HEAD",
+                timeout=REQUEST_TIMEOUT,
+                headers=self.header,
+            )
+            # HEAD 被拒（405/412）时改用 GET —— 有些短链服务不支持 HEAD
+            if response.status_code >= 400:
+                response = safe_get(
+                    url,
+                    suffixes=(),
+                    method="GET",
+                    timeout=REQUEST_TIMEOUT,
+                    headers=self.header,
+                    stream=True,
+                )
+                response.close()
+        except UnsafeUrlError as exc:
+            # 跳到内网/元数据端点属于明确攻击信号，不能当普通网络错误兜底
+            logger.warning("快手短链跳转到不安全地址，已拒绝: %s (%s)", url[:120], exc)
+            return None
+        except TooManyRedirects as exc:
+            logger.warning("快手短链跳转次数过多，已拒绝: %s (%s)", url[:120], exc)
+            return None
+        except requests.RequestException as exc:
+            logger.warning("快手短链解析请求失败: %s (%s)", url[:120], exc)
+            return None
+
         photo_id = extract_photo_id(response.url)
         if photo_id is None:
             # 落地页 URL 里没有 ID 时，再从 URL 本身找一次（可能是标准链接）
@@ -160,12 +205,20 @@ class KuaiShou:
         if stored:
             return stored
 
-        response = requests.get(
-            url=KUAISHOU_URL,
-            headers=self.header,
-            allow_redirects=True,
-            timeout=REQUEST_TIMEOUT,
-        )
+        # KUAISHOU_URL 是模块常量（不可控），但这里统一走 safe_get 更稳：
+        # 万一日后有人把它改成配置项，逐跳校验已经就位，不会留下没闸门的口子。
+        from app.utils.url_safety import safe_get
+
+        try:
+            response = safe_get(
+                KUAISHOU_URL,
+                suffixes=(),
+                timeout=REQUEST_TIMEOUT,
+                headers=self.header,
+            )
+        except Exception as exc:  # noqa: BLE001 - 拿不到匿名 Cookie 不该阻断下载
+            logger.warning("快手首页 Cookie 获取失败: %s", exc)
+            return ""
         cookie_string = "; ".join(
             f"{key}={value}" for key, value in response.cookies.get_dict().items()
         )

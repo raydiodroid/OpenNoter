@@ -1,4 +1,7 @@
+import os
 import re
+import time
+import threading
 from typing import Optional
 from typing import Literal
 
@@ -18,6 +21,58 @@ router = APIRouter(dependencies=[Depends(get_optional_user)])
 
 # 索引状态追踪: task_id -> "indexing" | "indexed" | "failed"
 _index_status: dict[str, str] = {}
+
+# ---------------------------------------------------------------------------
+# /chat/ask 的请求级限流
+# ---------------------------------------------------------------------------
+#
+# 为什么需要：一次 ask 最多会触发 **4 次 LLM completion**（plan → 工具选择 →
+# 可选二次工具 → 最终回答，见 chat_service.py），实测单请求可达 90 秒。
+# `/api/generate_note` 有 check_submit_quota（并发 2 / 每日 50 / 存储 2GB），
+# 但那是「按任务提交」设计的，套不到问答上——问答不产生任务、不落笔记目录。
+#
+# 所以这里单独加一个轻量计数：按「用户」或「匿名来源」计窗口内的请求数。
+# 复用 api_key_runtime 里那个 FixedWindowRateLimiter（同样是进程内固定窗口，
+# 多 worker 部署下每个 worker 各算一份——对「防脚本失控」够用，不是精确计费）。
+_ASK_RPM_DEFAULT = 20
+_ask_limiter = None
+_ask_limiter_lock = threading.Lock()
+
+
+def _ask_rpm() -> int:
+    try:
+        return max(1, int(os.getenv("CHAT_ASK_RPM", str(_ASK_RPM_DEFAULT))))
+    except ValueError:
+        return _ASK_RPM_DEFAULT
+
+
+def _get_ask_limiter():
+    """惰性构造，避免 import 期就读 env。"""
+    global _ask_limiter
+    if _ask_limiter is None:
+        with _ask_limiter_lock:
+            if _ask_limiter is None:
+                from app.services.api_key_runtime import FixedWindowRateLimiter
+
+                _ask_limiter = FixedWindowRateLimiter(window=60)
+    return _ask_limiter
+
+
+def _check_ask_rate(user: Optional[User], task_id: str) -> None:
+    """限流。超限抛 429。
+
+    管理员不限制（与 check_submit_quota 的口径一致——管理员要能压测/排障）。
+    key 用 user_id；匿名时退化到 task_id（同一任务被匿名刷也算得出来）。
+    """
+    if user is not None and getattr(user, "is_superuser", False):
+        return
+    key = int(user.id) if user is not None else hash(f"anon:{task_id}") & 0x7FFFFFFF
+    allowed, remaining = _get_ask_limiter().check(key, _ask_rpm())
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail=f"提问过于频繁（上限 {_ask_rpm()} 次/分钟），请稍后再试",
+        )
 
 def _require_task_access(task_id: str, user: User | None) -> None:
     """Chat/Index 与笔记接口共用任务 ACL，防止凭 task_id 对他人笔记做 RAG。"""
@@ -134,6 +189,8 @@ def chat_status(task_id: str, user: User | None = Depends(get_optional_user)):
 def ask_question(data: AskRequest, user: User | None = Depends(get_optional_user)):
     """基于笔记内容的 RAG 问答。"""
     _require_task_access(data.task_id, user)
+    # UI 上就是「追问」，用户会连点；这里挡住脚本级的滥用
+    _check_ask_rate(user, data.task_id)
     try:
         history = [{"role": m.role, "content": m.content} for m in data.history]
         result = chat_service(

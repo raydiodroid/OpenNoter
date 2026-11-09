@@ -96,14 +96,42 @@ class VideoRequest(BaseModel):
 
     @field_validator("video_url")
     def validate_supported_url(cls, v):
+        """视频链接必须是受支持平台的 http(s) 链接。
+
+        ## 为什么不能「scheme 不是 http(s) 就跳过校验」
+
+        旧实现是：
+
+            if parsed.scheme in ("http", "https"):
+                if not is_supported_video_url(url): raise ...
+
+        也就是说**只校验「看起来像链接」的输入**。于是：
+
+            "x http://169.254.169.254/"   → scheme 为空 → 原样放行
+            "file:///etc/passwd"          → scheme=file → 原样放行
+
+        这些值随后流到下载器。快手那条链尤其危险：`_URL_RE` 会把
+        `"x http://169.254.169.254/"` 里的 URL 抠出来还原成
+        `http://169.254.169.254/`，再 `requests.get(allow_redirects=True)`
+        零校验地发出去 —— 构成盲 SSRF / 内网端口探测。
+
+        ## 正确语义
+
+        「不是 http(s)」不是「不用校验」，而是**本身就不合法**。所以直接拒绝，
+        不用再走白名单。这与 `CreateNoteRequest`（`/api/notes`）的口径一致。
+        """
         url = str(v)
         parsed = urlparse(url)
-        if parsed.scheme in ("http", "https"):
-            # 是网络链接，继续用原有平台校验
-            if not is_supported_video_url(url):
-                raise NoteError(code=NoteErrorEnum.PLATFORM_NOT_SUPPORTED.code,
-                                message=NoteErrorEnum.PLATFORM_NOT_SUPPORTED.message)
-
+        if parsed.scheme not in ("http", "https"):
+            raise NoteError(
+                code=NoteErrorEnum.PLATFORM_NOT_SUPPORTED.code,
+                message=NoteErrorEnum.PLATFORM_NOT_SUPPORTED.message,
+            )
+        if not is_supported_video_url(url):
+            raise NoteError(
+                code=NoteErrorEnum.PLATFORM_NOT_SUPPORTED.code,
+                message=NoteErrorEnum.PLATFORM_NOT_SUPPORTED.message,
+            )
         return v
 
 
@@ -182,6 +210,49 @@ class CreateNoteRequest(BaseModel):
 
 NOTE_OUTPUT_DIR = os.getenv("NOTE_OUTPUT_DIR", "note_results")
 UPLOAD_DIR = str(uploads_dir())
+
+
+def _assert_upload_owned(url: str, user: Optional[User]) -> None:
+    """消费本地上传前校验归属。
+
+    ## 为什么模型校验器里做不了
+
+    `CreateNoteRequest` / `VideoRequest` 的校验器只有字符串，没有请求身份。
+    `safe_upload_rel()` 只保证「路径形如 /uploads/<name>」——它挡的是路径穿越，
+    不是「这份文件是不是你的」。
+
+    ## 缺了会怎样
+
+    上传文件名是 `uuid4().hex`，不可枚举，所以看起来安全。但 UUID 会通过
+    日志、反向代理、分享链接、前端 URL 泄露。`main.py:363` 的静态读取路径
+    早就用 `can_read_upload` 校验了归属，**唯独"把这个文件拿去转写"这条
+    消费路径没校验** —— 知道文件名就能让服务端处理别人的视频。
+
+    仓库自己在 `upload_paths.py:105-110` 写过「UUID 不是访问控制」，这里是
+    那条论证漏掉的调用点。
+
+    ## 无归属的历史文件
+
+    沿用 `can_read_upload` 的同一套语义（见其 docstring 第 4 条），不另立规则，
+    避免两处口径分叉。
+    """
+    from app.utils.upload_paths import can_read_upload, resolve_under_uploads
+    from app.services.auth import auth_enforced
+
+    try:
+        target = resolve_under_uploads(str(url))
+    except ValueError as exc:
+        raise NoteError(
+            code=NoteErrorEnum.PLATFORM_NOT_SUPPORTED.code,
+            message=f"本地视频路径非法：{exc}",
+        ) from exc
+
+    if not can_read_upload(target, user, auth_enforced=auth_enforced()):
+        # 不区分「不存在」和「无权限」，避免用状态码枚举他人文件
+        raise NoteError(
+            code=NoteErrorEnum.PLATFORM_NOT_SUPPORTED.code,
+            message="无权访问该本地视频",
+        )
 # image_proxy 允许的最大重定向跳数（每跳都会重新做一次 SSRF 校验）
 MAX_IMAGE_REDIRECTS = 3
 
@@ -753,6 +824,11 @@ def _submit_note_task(background_tasks: BackgroundTasks, *, video_url: str, plat
 @router.post("/generate_note", include_in_schema=False)
 def generate_note(data: VideoRequest, background_tasks: BackgroundTasks,
                   user: User | None = Depends(get_optional_user)):
+    # 本地视频：先校验归属，再谈能不能转写（顺序很重要——无权限的文件
+    # 不该因为"转写器没就绪"而泄露它存在）
+    if is_upload_ref(str(data.video_url)) or data.platform == "local":
+        _assert_upload_owned(str(data.video_url), user)
+
     # 就绪门禁（客户端已抓好字幕则不需要转写，跳过检查）
     if not data.prefetched_transcript:
         gate = _transcriber_readiness_gate()
@@ -798,6 +874,10 @@ def create_note(data: CreateNoteRequest, background_tasks: BackgroundTasks,
             msg="无法识别视频平台，请显式指定 platform",
             code=NoteErrorEnum.PLATFORM_NOT_SUPPORTED.code,
         )
+
+    # 本地视频：校验归属（见 _assert_upload_owned 的说明）
+    if platform == "local" or is_upload_ref(str(data.url)):
+        _assert_upload_owned(str(data.url), user)
 
     # 客户端已抓好字幕则不需要转写，跳过就绪门禁
     if not data.prefetched_transcript:
@@ -1115,7 +1195,10 @@ async def image_proxy(request: Request, url: str):
                     location = resp.headers.get("Location")
                     if not location:
                         raise HTTPException(status_code=502, detail="重定向缺少 Location")
-                    current = httpx.URL(current).join(location)
+                    # 必须转回 str：下一轮会把它交给 urlparse()/assert_safe_url()，
+                    # 而 httpx.URL 不是 str 子类，直接传会抛 AttributeError →
+                    # 500，把「跳转到不安全地址被拒」的真实原因掩盖成服务端错误。
+                    current = str(httpx.URL(current).join(location))
                     continue
 
                 if resp.status_code != 200:

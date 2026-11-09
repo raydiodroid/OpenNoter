@@ -179,8 +179,24 @@ class BilibiliSubtitleFetcher:
         except UnsafeUrlError as e:
             logger.warning("字幕地址未通过出站安全校验，跳过: %s (%s)", target, e)
             return None
+        # 用 safe_get 而不是 requests.get：字幕 URL 是**外部返回**的（已签好
+        # auth_key），仍是「服务端按外部给的地址发请求」。requests 默认
+        # allow_redirects=True，只校验首跳等于给 302 → 内网留了口子。
+        # safe_get 逐跳重新 assert_safe_url，且不自动跟随。
+        from app.utils.url_safety import (
+            TooManyRedirects,
+            UnsafeUrlError,
+            safe_get,
+        )
+
         try:
-            resp = requests.get(target, headers=self._headers(), timeout=15)
+            resp = safe_get(target, suffixes=(), timeout=15, headers=self._headers())
+        except UnsafeUrlError as e:
+            logger.warning("字幕地址跳转到不安全位置，已拒绝: %s (%s)", target[:120], e)
+            return None
+        except TooManyRedirects as e:
+            logger.warning("字幕地址跳转次数过多: %s (%s)", target[:120], e)
+            return None
         except Exception as e:
             logger.warning(f"下载字幕 JSON 失败: {e}")
             return None

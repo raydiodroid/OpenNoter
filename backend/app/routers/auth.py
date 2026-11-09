@@ -28,6 +28,7 @@ from app.services.auth import (
     require_admin,
     verify_password,
 )
+from app.utils.env_compat import getbool
 from app.utils.response import ResponseWrapper as R
 
 router = APIRouter()
@@ -38,8 +39,6 @@ _STATE_TTL = 600
 
 
 def _cookie_secure() -> bool:
-    from app.utils.env_compat import getbool
-
     return getbool("COOKIE_SECURE", True)
 
 

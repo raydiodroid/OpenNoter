@@ -440,35 +440,49 @@ export default function MindmapView({
       // 生成唯一ID
       const generateId = () => Math.random().toString(36).substring(2, 15);
 
-      // 解码HTML实体（如 &#x5b9e; -> 实，&#12345; -> 对应字符）
-      const decodeHtmlEntities = (text: string): string => {
-        if (!text) return text;
-
-        // 首先手动处理十六进制数字实体 &#xHHHH;
-        let decoded = text.replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => {
-          return String.fromCodePoint(parseInt(hex, 16));
-        });
-
-        // 处理十进制数字实体 &#DDDD;
-        decoded = decoded.replace(/&#(\d+);/g, (_, dec) => {
-          return String.fromCodePoint(parseInt(dec, 10));
-        });
-
-        // 使用textarea处理命名实体（如 &amp; &lt; &gt; 等）
-        const textarea = document.createElement('textarea');
-        textarea.innerHTML = decoded;
-        return textarea.value;
-      };
-
-      // 清理HTML标签，只保留纯文本
+      /**
+       * HTML → 纯文本（用于导出的 XMind 标题）。
+       *
+       * ## 安全要点：**一次解析，不要「先反转义再当 HTML 塞回去」**
+       *
+       * 旧实现是：
+       *  1. `decodeHtmlEntities()`：手写正则解数字实体 + 用 `<textarea>.innerHTML`
+       *     解命名实体；
+       *  2. 把解出来的字符串赋给 `div.innerHTML`；
+       *  3. 取 `textContent`。
+       *
+       * 问题在顺序：`transformMindmap` 出来的 `node.content` **已经过 DOMPurify**，
+       * 里面形如 `&lt;img src=x onerror=alert(1)&gt;` 的内容是"安全文本"。
+       * 但第 1 步把它反转义成真正的 `<img onerror=...>`，第 2 步再塞进
+       * `innerHTML` —— 此时它已经是**活 DOM**，`onerror` 会执行。
+       * 也就是说 DOMPurify 的成果被这一步自己撤销了。
+       *
+       * 正确做法：**只解析一次**。把原始（可能含标签和实体）的字符串交给
+       * 解析器，让它同时处理「标签」和「实体」，我们只取文本结果。
+       * 解析器创建的元素不会被插入文档，`<img>` 没有 src 也就不会发起请求，
+       * 脚本/事件属性更不会执行（`innerHTML` 本身不执行脚本，事件属性只在
+       * 元素进入文档并触发对应事件时才跑）。
+       *
+       * 为了让"绝不执行"这件事不依赖解析器的细节，额外：
+       *  - 用 `document.implementation.createHTMLDocument()` 创建一个**惰性文档**
+       *    （无浏览上下文、无脚本执行、无资源加载）；
+       *  - 解析前先剥掉 `script/style` 标签内容（它们本来也不该进标题）。
+       */
       const stripHtml = (html: string): string => {
-        if (!html) return html;
-        // 先解码HTML实体
-        const text = decodeHtmlEntities(html);
-        // 移除HTML标签
-        const div = document.createElement('div');
-        div.innerHTML = text;
-        return div.textContent || div.innerText || text;
+        if (!html) return html
+
+        // 惰性文档：没有 browsing context，不执行脚本、不加载资源。
+        const inertDoc = document.implementation.createHTMLDocument('')
+        const holder = inertDoc.createElement('div')
+        holder.innerHTML = html
+
+        // script/style 的内容不是"文本"，删掉（解析器已把它们变成元素，
+        // 其内容不会被 textContent 取到，但显式删除让意图更清楚）。
+        holder.querySelectorAll('script,style').forEach(el => el.remove())
+
+        const text = holder.textContent || ''
+        // 折叠空白：标题里不需要连续空格/换行
+        return text.replace(/\s+/g, ' ').trim()
       };
 
       // 将 markmap 节点转换为 XMind 节点格式

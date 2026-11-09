@@ -24,8 +24,11 @@ import {
  * - `mode` 决定界面显示什么（shared 模式下整个「我的凭据」区块隐藏）；
  * - `status` 是用户自己的凭据明细（含每个能力位当前用的是谁的）。
  *
- * 两者都从同一个 `GET /me/credentials` 拿（后端在响应里带了 `mode`），
- * 避免前端多打一次请求、也避免两者不一致。
+ * ## 为什么打两个请求
+ *
+ * `/me/credentials` 只回模型侧（`mode` / `byok_enabled`），Cookie 侧的策略在
+ * `/byok_config` 的 `cookie_mode` 里。两个开关是独立的，**必须各取各的，
+ * 不能从一处推断另一处**——那样会把「关掉模型 BYOK」误当成「关掉 Cookie」。
  */
 interface CredentialState {
   /** 模型凭据模式（LLM / 转写） */

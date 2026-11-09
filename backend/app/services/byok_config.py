@@ -251,7 +251,26 @@ class ByokConfigManager:
         """
         raw = self._read_raw()
 
-        # 兼容旧参数：同时写两个新字段
+        # ---- 先把「当前生效值」固化进 raw ----
+        #
+        # 老文件里可能只有 `mode`（迁移前写的），而下面要 `raw.pop("mode")`。
+        # 如果只改一个字段就 pop，另一个字段会连同旧值一起丢失：
+        #
+        #   {mode: "required"} + update(allow_custom_base_url=True)
+        #     → 没有 model_mode/cookie_mode 字段，pop 掉 mode 后
+        #     → 下次读变成 shared/shared，required 保护凭空消失。
+        #
+        # 所以先按读路径的同一套迁移规则算出当前生效值并落到新字段上，
+        # 再在此基础上做局部更新。这样「只改一个字段」不会影响另一个。
+        current = self._normalize(raw)
+        raw["model_mode"] = current["model_mode"]
+        raw["cookie_mode"] = current["cookie_mode"]
+
+        # 兼容旧参数 `mode`：同时写两个新字段。
+        #
+        # 注意不能把 `mode` 原样塞给 cookie_mode —— Cookie 没有 required，
+        # 传 required 会被下面的 COOKIE_MODES 校验拒绝。按读路径同一条规则
+        # 收敛：required → optional，其余原样。
         if mode is not None:
             normalized = str(mode).strip().lower()
             if normalized not in ALL_MODES:
@@ -259,7 +278,10 @@ class ByokConfigManager:
                     f"非法的模式: {mode!r}，可选值: {', '.join(ALL_MODES)}"
                 )
             model_mode = model_mode if model_mode is not None else normalized
-            cookie_mode = cookie_mode if cookie_mode is not None else normalized
+            if cookie_mode is None:
+                cookie_mode = (
+                    MODE_OPTIONAL if normalized == MODE_REQUIRED else normalized
+                )
 
         if model_mode is not None:
             normalized = str(model_mode).strip().lower()
