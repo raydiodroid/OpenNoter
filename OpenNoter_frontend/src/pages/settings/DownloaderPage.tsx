@@ -40,6 +40,7 @@ import {
 } from '@/services/downloader'
 import { getProxyConfig, updateProxyConfig } from '@/services/proxy'
 import { toast } from '@/lib/toast'
+import { useAuthStore } from '@/store/authStore'
 
 /**
  * 下载配置：Cookie 与网络两件事，用 Tabs 切换 —— 与「模型配置」页
@@ -386,6 +387,7 @@ export default function DownloaderPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const activeId = id || 'bilibili'
   const tab: DownloaderTab = searchParams.get('tab') === 'network' ? 'network' : 'cookie'
+  const isAdmin = useAuthStore(s => s.user?.is_superuser === true)
   const [cookieStatus, setCookieStatus] = useState<Record<string, boolean>>({})
 
   /** 切页写进 URL，方便直接分享「网络」面板的链接 */
@@ -495,9 +497,19 @@ export default function DownloaderPage() {
                 「设置 → 我的凭据」，两处割裂。现在并排放在同一 Tab 里。 */}
             <div className={sectionStack}>
               <MyCookiesSection />
-              <ListDetail list={platformList}>
-                <CookieEditor platformId={activeId} onCookieChange={handleCookieChange} />
-              </ListDetail>
+              {/*
+                站点 Cookie 编辑器**仅管理员可见**。
+
+                后端 `GET/POST /get_downloader_cookie` 挂的是 `require_admin`，
+                普通用户点进来只会拿到 403 —— 但页面照样把表单渲染出来，
+                用户填完点保存才知道没权限。这是典型的「界面承诺了后端不允许的事」。
+                所以按权限显示，与侧栏「站点设置」的 adminOnly 保持一致。
+              */}
+              {isAdmin ? (
+                <ListDetail list={platformList}>
+                  <CookieEditor platformId={activeId} onCookieChange={handleCookieChange} />
+                </ListDetail>
+              ) : null}
             </div>
           </div>
         </TabPanel>

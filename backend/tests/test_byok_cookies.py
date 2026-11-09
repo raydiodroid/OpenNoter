@@ -230,6 +230,69 @@ class TestCookieResolve:
         assert got and "SITE" in got, f"Cookie shared 应只用站点 Cookie，实际: {got}"
 
 
+class TestSubtitleCookieUsesByok:
+    """B 站字幕必须走 BYOK 解析链，不能直接读站点 Cookie。
+
+    ## 为什么单独钉
+
+    `BilibiliSubtitleFetcher` 历史上是 `CookieConfigManager().get("bilibili")`
+    直接读站点 Cookie —— 用户配了自己的 B 站 Cookie，字幕这条路却仍用站点身份。
+    表现是「配了大会员 Cookie 依然拿不到 AI 字幕」，或反过来用管理员账号拉字幕。
+
+    这类「某个次要链路偷偷绕过 BYOK」的问题很难靠人工发现：主下载链路是好的，
+    只有字幕这个分支不对。所以用静态断言把它钉住。
+    """
+
+    def test_fetcher_does_not_read_site_cookie_directly(self):
+        import inspect
+
+        from app.downloaders import bilibili_subtitle
+
+        src = inspect.getsource(bilibili_subtitle)
+        assert "CookieConfigManager().get" not in src, (
+            "BilibiliSubtitleFetcher 不应直接读站点 Cookie——"
+            "会让用户自带的 Cookie 在字幕链路上被忽略"
+        )
+
+    def test_fetcher_delegates_to_resolve_cookie(self):
+        import inspect
+
+        from app.downloaders import bilibili_subtitle
+
+        src = inspect.getsource(bilibili_subtitle)
+        assert 'resolve_cookie(user_id, "bilibili")' in src
+
+    def test_downloader_passes_user_id_to_fetcher(self):
+        """调用点必须传 self.user_id，否则 fetcher 拿不到归属用户。"""
+        import inspect
+
+        from app.downloaders import bilibili_downloader
+
+        src = inspect.getsource(bilibili_downloader)
+        assert "BilibiliSubtitleFetcher(self.user_id)" in src
+
+
+class TestCookieStatusReflectsMode:
+    """`shared` 模式下状态接口不能把用户 Cookie 显示成「我的」。
+
+    解析层在 shared 模式直接短路到站点 Cookie，但状态层若仍算作 own，
+    界面就会显示「我的」而实际用的是站点身份——显示与实际不符。
+    """
+
+    def test_shared_mode_ignores_user_cookie_rows(self, env):
+        from app.services.byok_config import byok_config
+        from app.services.credential_resolver import build_cookie_status
+
+        _save_user_cookie(1, "bilibili", "SESSDATA=USER")
+        byok_config.update(cookie_mode="shared")
+
+        status = build_cookie_status(1)
+        bili = next(p for p in status["platforms"] if p["platform"] == "bilibili")
+        assert bili["source"] != "own", (
+            "shared 模式下用户 Cookie 不参与解析，状态里也不该显示为 own"
+        )
+
+
 class TestCookieStatusApi:
     def test_status_lists_all_platforms(self, env):
         from app.services.credential_resolver import build_cookie_status

@@ -11,13 +11,16 @@
 6. fetch subtitle_url → JSON {body:[{from,to,content,...}]}
 7. 解析为 TranscriptResult
 
-AI 字幕需要登录态 cookie（SESSDATA）；通过 CookieConfigManager 注入。
+AI 字幕需要登录态 cookie（SESSDATA）；通过 ``resolve_cookie(user_id, "bilibili")``
+注入 —— 与其它下载器走同一条 BYOK 解析链（用户 Cookie → 站点 Cookie → 无）。
 
-关于 Cookie 的读取时机：这里的 ``CookieConfigManager().get("bilibili")`` 在
-``__init__`` 里读一次即可 —— ``app.services.constant.get_downloader()`` 现在是
-按任务新建下载器实例的工厂，而 ``BilibiliDownloader.download_subtitles()`` 每次
-调用都会新建一个 ``BilibiliSubtitleFetcher()``，所以后台改完 Cookie 后下一个
-任务立即生效，不需要重启进程。
+**不要改成直接读 ``CookieConfigManager().get("bilibili")``**：那只有站点 Cookie，
+会让用户自带的 Cookie 在字幕这条路上被静默忽略（历史缺陷，2026-11-09 修正）。
+
+关于读取时机：在 ``__init__`` 里读一次即可 ——
+``app.services.constant.get_downloader()`` 是按任务新建下载器实例的工厂，而
+``BilibiliDownloader.download_subtitles()`` 每次调用都会新建一个
+``BilibiliSubtitleFetcher()``，所以后台改完 Cookie 后下一个任务立即生效。
 
 注意这里用的是 **header 格式** Cookie（``name=value; name=value``），不是
 Netscape cookies.txt：B 站 API 走 requests，直接放 Cookie 头即可；Netscape
@@ -29,7 +32,6 @@ from typing import List, Optional
 import requests
 
 from app.models.transcriber_model import TranscriptResult, TranscriptSegment
-from app.services.cookie_manager import CookieConfigManager
 from app.utils.logger import get_logger
 from app.utils.url_parser import extract_video_id, extract_bilibili_p_number, resolve_bilibili_short_url
 from app.utils.url_safety import UnsafeUrlError, assert_safe_url
@@ -45,8 +47,23 @@ UA = (
 class BilibiliSubtitleFetcher:
     """通过 B 站官方 API 直拉字幕。"""
 
-    def __init__(self):
-        self._cookie = CookieConfigManager().get("bilibili") or ""
+    def __init__(self, user_id: Optional[int] = None):
+        """读 Cookie。
+
+        **必须走 `resolve_cookie` 而不是直接读 CookieConfigManager**：
+        后者只有站点 Cookie，会让「用户自带的 Cookie」在字幕这条路上被忽略——
+        表现为用户明明配了自己的 B 站 Cookie，AI 字幕却依然拿不到（站点
+        Cookie 不是大会员时），或者反过来用站点身份拉字幕。
+
+        :param user_id: 任务归属用户；None = 匿名部署，只用站点 Cookie。
+        """
+        from app.services.credential_resolver import resolve_cookie
+
+        try:
+            self._cookie = resolve_cookie(user_id, "bilibili") or ""
+        except Exception as exc:  # noqa: BLE001 - 读 Cookie 失败不该让字幕链路崩
+            logger.warning("读取 B 站 Cookie 失败，按无 Cookie 拉字幕: %s", exc)
+            self._cookie = ""
 
     def _headers(self) -> dict:
         h = {

@@ -480,7 +480,10 @@ def build_cookie_status(user_id: Optional[int]) -> dict:
     items: list[dict] = []
 
     own_by_platform: dict[str, dict] = {}
-    if user_id is not None:
+    # `shared` 模式下用户的 Cookie **不参与解析**（resolve_cookie 直接短路段到
+    # 站点 Cookie）。所以状态里也不能把它们算成「我的」——否则界面显示「我的」
+    # 而实际下载用的是站点身份，正是这类"显示与实际不符"最坑人。
+    if user_id is not None and mode != MODE_SHARED:
         for item in list_user_cookies(int(user_id)):
             own_by_platform[item["platform"]] = item
 

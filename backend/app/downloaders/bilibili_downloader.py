@@ -696,7 +696,7 @@ class BilibiliDownloader(Downloader, ABC):
         """尝试获取 B 站视频字幕（官方 player API 优先，yt-dlp 兜底）。"""
         # 1) 优先走 B 站官方 player API（直拉，无需下视频；AI 字幕需 SESSDATA cookie）
         try:
-            result = BilibiliSubtitleFetcher().fetch_subtitles(video_url)
+            result = BilibiliSubtitleFetcher(self.user_id).fetch_subtitles(video_url)
             if result and result.segments:
                 return result
         except Exception as e:
