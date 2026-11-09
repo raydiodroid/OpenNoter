@@ -8,6 +8,21 @@ image_proxy 这类「拿用户给的 URL 去服务端抓资源」的接口，如
   1. scheme 只允许 http / https（挡 file://、gopher:// 等）
   2. 主机解析出的每个 IP 都要过一遍「私网/保留地址」黑名单（挡 DNS 指向内网）
   3. 域名白名单（挡任意外部站点被当作图床代理）
+
+## 两层接口：语法层 vs 出站层（别混用）
+
+本模块对外暴露两个校验入口，语义**不同**，选错会出真问题：
+
+- `assert_url_shape_safe(url)`：**纯语法层**，不联网。只校验 scheme 与
+  「host 是 IP 字面量时不能落在私网/保留段」。用于**分类/预判/入口过滤**，
+  例如判断「用户贴的链接是不是我们支持的视频链接」。
+- `assert_safe_url(url, suffixes=...)`：**出站层**，会做真实 `socket.getaddrinfo`
+  并把每个解析结果过一遍黑名单。用于**真正要发请求之前**的网关。
+
+为什么必须分开：判断「平台是否支持」是语法/语义问题；DNS 能否解析、此刻解析
+到哪个地址属于运行环境的网络条件。两者混在一起时，公司 DNS 拦了 youtube、
+内网无 DNS、DNS 被污染，都会表现为「不支持该平台」—— 用户看到的是错误文案，
+真正的原因被藏起来。反之，把语法层当出站层用则会漏掉真实的 SSRF（DNS 指向内网）。
 """
 
 import ipaddress
@@ -103,8 +118,24 @@ def _host_allowed(host: str, suffixes) -> bool:
     return False
 
 
-def assert_safe_url(url: str, suffixes=None) -> str:
-    """校验 URL 可以安全地由服务端发起请求，通过则原样返回。"""
+def assert_url_shape_safe(url: str) -> str:
+    """**语法层**校验：只看 URL 字符串本身，不做任何网络 I/O。
+
+    能拦下的是「不依赖解析结果就能确定不安全」的情况：
+
+      - 非 http/https 协议（`file://`、`javascript:`、`gopher://`）；
+      - host 本身是 IP 字面量且落在私网/保留段（`127.0.0.1`、`10.x`、
+        `192.168.x`、`169.254.169.254`、`100.64.x` …）。
+
+    拦不下的是「域名指向内网」（那要看解析结果）—— 所以**不能**拿它当出站
+    网关用，真正发请求前必须再走 :func:`assert_safe_url`。
+
+    反过来，**也不要把 DNS 判断加回这个函数**：调用方（视频链接校验器）判的是
+    「这条链接是不是受支持平台的视频」，DNS 通不通是运行环境的事，混进来会让
+    「网络抖动」变成「平台不支持」（见模块 docstring）。
+
+    :raises UnsafeUrlError: 协议非法，或 host 是内网/保留 IP 字面量。
+    """
     parsed = urlparse(url)
     scheme = (parsed.scheme or "").lower()
     if scheme not in ALLOWED_SCHEMES:
@@ -115,10 +146,34 @@ def assert_safe_url(url: str, suffixes=None) -> str:
         raise UnsafeUrlError("URL 缺少主机名")
 
     literal = _parse_ip(host)
-    if literal is not None:
-        if _is_blocked_ip(literal):
-            raise UnsafeUrlError(f"不允许访问内网地址: {host}")
-    else:
+    if literal is not None and _is_blocked_ip(literal):
+        raise UnsafeUrlError(f"不允许访问内网地址: {host}")
+
+    return url
+
+
+def assert_safe_url(url: str, suffixes=None) -> str:
+    """**出站层**校验：语法 + 真实 DNS 解析 + 域名白名单。通过则原样返回。
+
+    这是「服务端马上要按这个 URL 发请求」时该用的函数（image_proxy、
+    probe_endpoint、短链解析、字幕下载…）。域名解析失败也会抛
+    :class:`UnsafeUrlError`：**在这里**，解析不出来就意味着请求发不出去，
+    判不安全是合理且安全的（宁可拒绝，不要盲发）。
+
+    只做分类/预判、不打算立刻发请求的调用方（如视频链接校验器）请用
+    :func:`assert_url_shape_safe`。
+
+    :param suffixes: 域名后缀白名单；``None`` 表示用默认图片 CDN 白名单，
+        ``()`` 表示不限制域名（只做 scheme + IP 层校验）。
+    """
+    # 语法层先过（与出站层的区别在这里：这一步不联网）
+    assert_url_shape_safe(url)
+
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+
+    # 只有域名才需要解析；IP 字面量已在语法层按字面量判过
+    if _parse_ip(host) is None:
         for ip_str in resolve_host(host):
             ip = _parse_ip(ip_str)
             if ip is not None and _is_blocked_ip(ip):

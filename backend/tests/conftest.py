@@ -2,12 +2,10 @@
 
 ## 为什么需要「确定化 DNS」
 
-有几个测试会走完整的 URL 校验链路：
+有几个测试会走**出站层**的 URL 校验：
 
-    is_supported_video_url(url)
-      → detect_platform / PATH_PATTERNS        （纯字符串判断，稳定）
-      → assert_safe_url(url, suffixes=())
-          → resolve_host(host)                 ← 真实 DNS！
+    assert_safe_url(url)            （image_proxy / probe_endpoint / 短链解析…）
+      → resolve_host(host)          ← 真实 DNS！
 
 最后一步是**真实的 socket.getaddrinfo**。这带来两个问题：
 
@@ -19,6 +17,16 @@
 
 2. **离线环境跑不了测试**。DNS 不通时 `resolve_host` 抛
    `UnsafeUrlError("域名解析失败")`，同样变红。
+
+## 注意：视频链接校验器**不再**触达 DNS
+
+`is_supported_video_url()` 现在只做语法判定（`assert_url_shape_safe`，不联网），
+所以它不受本 fixture 影响 —— 而这正是修复的一部分：历史上它内部会真实解析
+DNS，于是 DNS 一抖动，用户就看到「选择的平台不受支持」。
+
+因此 `test_url_safety.py` 里「DNS 失败 / DNS 污染」那几条测试**必须显式覆盖**
+本 fixture（用 `mock.patch` 直接换掉 `socket.getaddrinfo` 与 `resolve_host`），
+否则会被这里打桩出来的「一切正常」掩盖，测不出回归。
 
 ## 做法
 

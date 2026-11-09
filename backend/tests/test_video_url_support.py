@@ -45,6 +45,21 @@ class TestVideoUrlSupport(unittest.TestCase):
 
         self.assertTrue(video_url_validator.is_supported_video_url(url))
 
+    def test_accepts_youtube_watch_with_trailing_slash(self):
+        """`/watch/?v=`（多一个尾斜杠）也是真实存在的 YouTube 链接形态。
+
+        旧实现路径规则是 `^/watch$`，这种形态会被判「平台不受支持」，而它
+        与「平台支持与否」毫无关系 —— 只是路径正则少了一个可选的 `/`。
+        """
+        for url in (
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "https://www.youtube.com/watch/?v=dQw4w9WgXcQ",
+            "https://m.youtube.com/watch/?v=dQw4w9WgXcQ",
+            "https://music.youtube.com/watch/?v=dQw4w9WgXcQ",
+        ):
+            with self.subTest(url=url):
+                self.assertTrue(video_url_validator.is_supported_video_url(url))
+
 
 if __name__ == "__main__":
     unittest.main()
