@@ -443,44 +443,52 @@ export default function MindmapView({
       /**
        * HTML → 纯文本（用于导出的 XMind 标题）。
        *
-       * ## 安全要点：**一次解析，不要「先反转义再当 HTML 塞回去」**
+       * ## 安全要点：**只解析一次，不要「先反转义再当 HTML 塞回去」**
        *
-       * 旧实现是：
+       * 旧实现分两步：
        *  1. `decodeHtmlEntities()`：手写正则解数字实体 + 用 `<textarea>.innerHTML`
        *     解命名实体；
-       *  2. 把解出来的字符串赋给 `div.innerHTML`；
-       *  3. 取 `textContent`。
+       *  2. 把解出的字符串赋给 `div.innerHTML`。
        *
        * 问题在顺序：`transformMindmap` 出来的 `node.content` **已经过 DOMPurify**，
-       * 里面形如 `&lt;img src=x onerror=alert(1)&gt;` 的内容是"安全文本"。
-       * 但第 1 步把它反转义成真正的 `<img onerror=...>`，第 2 步再塞进
-       * `innerHTML` —— 此时它已经是**活 DOM**，`onerror` 会执行。
-       * 也就是说 DOMPurify 的成果被这一步自己撤销了。
+       * 形如 `&lt;img src=x onerror=...&gt;` 的内容是安全文本。第 1 步把它反转义成
+       * 真正的 `<img onerror=...>`，第 2 步再塞进 `innerHTML` —— 此时它是**活 DOM**，
+       * `onerror` 会执行。DOMPurify 的成果被这一步自己撤销了。
+       * （headless Chrome 实测：旧实现确实把 `<img onerror>` 注入进了文档。）
        *
-       * 正确做法：**只解析一次**。把原始（可能含标签和实体）的字符串交给
-       * 解析器，让它同时处理「标签」和「实体」，我们只取文本结果。
-       * 解析器创建的元素不会被插入文档，`<img>` 没有 src 也就不会发起请求，
-       * 脚本/事件属性更不会执行（`innerHTML` 本身不执行脚本，事件属性只在
-       * 元素进入文档并触发对应事件时才跑）。
+       * ## 现在的做法
        *
-       * 为了让"绝不执行"这件事不依赖解析器的细节，额外：
-       *  - 用 `document.implementation.createHTMLDocument()` 创建一个**惰性文档**
-       *    （无浏览上下文、无脚本执行、无资源加载）；
-       *  - 解析前先剥掉 `script/style` 标签内容（它们本来也不该进标题）。
+       * 把**原始**字符串（含实体）一次性交给解析器，让它同时处理标签和实体：
+       *  - 真标签（`<img>`）→ 解析成元素 → `textContent` 里没有它（标签被剥离）；
+       *  - 实体（`&lt;img&gt;`）→ 解析成**文本节点** → `textContent` 得到字面文本。
+       *
+       * 关键：解析出来的元素**不会进入文档**，也没有 browsing context
+       * （`createHTMLDocument`），所以不执行脚本、不加载资源。事件属性只在
+       * 元素入文档并触发对应事件时才跑。
+       *
+       * ## 为什么要额外剥掉「字面标签文本」
+       *
+       * 实体形式解出来是字面 `<img src=x onerror=...>` 文本 —— 安全，但作为
+       * 思维导图标题很怪。所以再过一次「剥尖括号内内容」，把这类残留清掉。
+       * 这是**纯字符串处理**，不涉及 DOM，不会重新引入注入面。
        */
       const stripHtml = (html: string): string => {
         if (!html) return html
 
-        // 惰性文档：没有 browsing context，不执行脚本、不加载资源。
+        // 惰性文档：无 browsing context，不执行脚本、不加载资源。
         const inertDoc = document.implementation.createHTMLDocument('')
         const holder = inertDoc.createElement('div')
         holder.innerHTML = html
 
-        // script/style 的内容不是"文本"，删掉（解析器已把它们变成元素，
-        // 其内容不会被 textContent 取到，但显式删除让意图更清楚）。
+        // script/style 的内容不是"文本"（解析成元素后 textContent 也取不到，
+        // 显式删除只是让意图更清楚）。
         holder.querySelectorAll('script,style').forEach(el => el.remove())
 
-        const text = holder.textContent || ''
+        let text = holder.textContent || ''
+        // 实体解出来的字面标签（如 "&lt;img ...&gt;" → "<img ...>"）在此清除。
+        // 只删"看起来像标签"的一小段，不会误伤正文里的数学小于号太多：
+        // 要求 < 后面紧跟字母或 /，且 60 字符内出现 >。
+        text = text.replace(/<\/?[a-zA-Z][^<>]{0,60}>/g, '')
         // 折叠空白：标题里不需要连续空格/换行
         return text.replace(/\s+/g, ' ').trim()
       };
