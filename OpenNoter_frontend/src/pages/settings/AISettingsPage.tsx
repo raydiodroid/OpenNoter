@@ -6,8 +6,15 @@ import { Page, PageHeader } from '@/components/Page'
 import ModelPage from './ModelPage'
 import TranscriberPage from './TranscriberPage'
 import { ByokModePanel } from './ByokSettings'
+import { MyCredentialsSection } from './MyCredentials'
 
 const panelBody = style({ paddingTop: 16 })
+/**
+ * 同一 Tab 内多个 Section 的纵向堆叠。
+ *
+ * `Section` 自身不含外边距（它是语义分组，不是卡片），所以多个 Section
+ * 直接并列会**贴着彼此**。这里统一给 24px 间距。 */
+const sectionStack = style({ display: 'flex', flexDirection: 'column', gap: 24 })
 
 type TabKey = 'model' | 'transcriber'
 
@@ -47,10 +54,16 @@ export default function AISettingsPage({
 
         <TabPanel id="model">
           <div className={panelBody}>
-            {/* BYOK：站点模式切换（仅管理员可见，组件内部判定）。
-                用户自己的凭据/Cookie 在「设置 → 我的凭据」页（MyProfilePage）。 */}
-            <ByokModePanel />
-            <ModelPage embedded isCreate={isCreate} />
+            {/* BYOK 分两层，放在同一页里：
+                - 站点默认由管理员设（ByokModePanel，仅管理员可见）
+                - 用户自己的凭据（MyCredentialsSection，人人可见，未开启 BYOK 时
+                  显示「当前站点统一使用管理员配置」）
+                原先「我的凭据」是独立的一级设置页，用户要在三个页面之间找。 */}
+            <div className={sectionStack}>
+              <MyCredentialsSection />
+              <ByokModePanel />
+              <ModelPage embedded isCreate={isCreate} />
+            </div>
           </div>
         </TabPanel>
 

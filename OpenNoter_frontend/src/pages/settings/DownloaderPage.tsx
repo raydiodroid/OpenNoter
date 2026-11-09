@@ -17,6 +17,7 @@ import GlobeIcon from '@react-spectrum/s2/icons/Location'
 import DownloadIcon from '@react-spectrum/s2/icons/Download'
 
 import { ListDetail, Page, PageHeader, Panel } from '@/components/Page'
+import { MyCookiesSection } from './MyCredentials'
 import {
   ListRow,
   ListRowBody,
@@ -60,6 +61,8 @@ const PLATFORM_HINTS: Record<string, string> = {
 
 const list = style({ display: 'flex', flexDirection: 'column', gap: 2, padding: 8 })
 const panelBody = style({ paddingTop: 16 })
+/** 同页多个 Section 的纵向堆叠：Section 自身无外边距，紧挨着会粘连 */
+const sectionStack = style({ display: 'flex', flexDirection: 'column', gap: 24 })
 const stack = style({ display: 'flex', flexDirection: 'column', gap: 16 })
 /** 表单宽度上限：与模型配置页一致，避免长表单在大屏上拉得过宽 */
 const formStack = style({ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 560 })
@@ -504,9 +507,15 @@ export default function DownloaderPage() {
 
         <TabPanel id="cookie">
           <div className={panelBody}>
-            <ListDetail list={platformList}>
-              <CookieEditor platformId={activeId} onCookieChange={handleCookieChange} />
-            </ListDetail>
+            {/* 用户自己的 Cookie（`/me/cookies`）。
+                这一页原先只改「站点 Cookie」，用户想用自己的登录态得去
+                「设置 → 我的凭据」，两处割裂。现在并排放在同一 Tab 里。 */}
+            <div className={sectionStack}>
+              <MyCookiesSection />
+              <ListDetail list={platformList}>
+                <CookieEditor platformId={activeId} onCookieChange={handleCookieChange} />
+              </ListDetail>
+            </div>
           </div>
         </TabPanel>
 

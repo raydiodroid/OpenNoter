@@ -1,7 +1,31 @@
+/**
+ * 「我的凭据」区块：模型凭据 + 平台 Cookie。
+ *
+ * ## 为什么不是独立页面
+ *
+ * 原先它是侧栏里的一个一级设置页（`/settings/profile`），但它管的两件事
+ * 本来就是另外两个设置页的「个人版」：
+ *
+ *   我的模型凭据  ←→  模型配置页（管理员配站点默认，用户配自己的）
+ *   我的平台 Cookie ←→ 下载配置页（同样分站点/个人两层）
+ *
+ * 独立成页的真实成本：用户在「下载配置」里看不到自己的 Cookie（那里只改站点
+ * Cookie），在「模型配置」里也看不到自己的凭据 —— 必须**先想到**去第三个地方。
+ * 而「我的凭据」这个名字本身也不够明确（凭据？Cookie？账号？）。
+ *
+ * 所以拆成两个 section，分别嵌到对应页面。侧栏因此少一个一级入口。
+ *
+ * ## 与 ByokSettings 的关系
+ *
+ * 站点模式切换仍留在 `ByokSettings`（管理员视角，不属于「个人」）。
+ * 本文件只负责「我自己的」那一层。
+ */
+
 import { useCallback, useEffect, useState } from 'react'
 import {
   ActionButton,
   Button,
+  ButtonGroup,
   Content,
   Dialog,
   DialogTrigger,
@@ -25,20 +49,6 @@ import {
   type CookiePlatformStatus,
 } from '@/services/credential'
 
-/**
- * 个人凭据管理页：把「模型凭据 + 平台 Cookie」放在一起。
- *
- * ## 为什么合并成一页
- *
- * 这两件事在用户心里是同一件事——「我用自己的账号和额度，而不是站点的」。
- * 分成两个页面会让用户找不到 Cookie 的入口（它比凭据更隐蔽，因为影响的是
- * 画质/字幕而不是「能不能用」）。
- *
- * ## 与旧版 ByokSettings 的关系
- *
- * 旧的 `ByokSettings.tsx` 只做了凭据（模型），本文件把它和 Cookie 一起收口。
- * 站点模式切换仍留在 `ByokSettings`（那是管理员视角，不属于「个人」页面）。
- */
 
 const row = style({
   display: 'flex',
@@ -75,17 +85,17 @@ const CAPABILITY_META: Record<
   },
 }
 
-export default function MyProfilePage() {
-  const { byokEnabled, status, cookieStatus, load, loadCookies } = useCredentialStore()
+/** 嵌在「模型配置 → AI 模型」页里的个人凭据区块。整体背景见文件头注释。 */
+export function MyCredentialsSection() {
+  const { byokEnabled, status, load } = useCredentialStore()
 
   useEffect(() => {
     void load()
-    void loadCookies()
-  }, [load, loadCookies])
+  }, [load])
 
   return (
     <>
-      <Section title="模型凭据">
+      <Section title="我的模型凭据">
         <Panel>
           {!byokEnabled ? (
             <p className={hint}>
@@ -130,8 +140,26 @@ export default function MyProfilePage() {
           )}
         </Panel>
       </Section>
+    </>
+  )
+}
 
-      <Section title="平台 Cookie">
+/**
+ * 嵌在「下载配置 → Cookie」页里的个人 Cookie 区块。
+ *
+ * 与同页的站点 Cookie 编辑器并列：站点那份是管理员给所有人用的默认值，
+ * 这份是「我自己的」，配了就用我的。
+ */
+export function MyCookiesSection() {
+  const { byokEnabled, cookieStatus, loadCookies } = useCredentialStore()
+
+  useEffect(() => {
+    void loadCookies()
+  }, [loadCookies])
+
+  return (
+    <>
+      <Section title="我的平台 Cookie">
         <Panel>
           {!byokEnabled ? (
             <p className={hint}>
@@ -272,21 +300,38 @@ function CookieDialog({ item }: { item: CookiePlatformStatus }) {
           <p className={hint}>内容会被加密保存，页面上只显示条目数，不回显原文。</p>
         </div>
       </Content>
-      <Button variant="accent" onPress={submit} isDisabled={busy}>
-        保存
-      </Button>
-      {item.configured && (
-        <Button
-          variant="negative"
-          onPress={async () => {
-            await removeCookie(item.platform)
-            toast.success('已删除')
-          }}
-          isDisabled={busy}
-        >
-          删除
+      {/*
+        ⚠️ 按钮必须包在 <ButtonGroup> 里，不能直接当 <Dialog> 的子节点。
+
+        S2 的 Dialog 会把 children **渲染四遍**（hero / header / content /
+        footer），每遍用 context 的 isHidden 隐藏不属于该区域的部分。它只给
+        `ButtonGroupContext` 在 footer 那遍设 isHidden:false —— 也就是说，
+        **只有被 ButtonGroup 包裹的按钮才会出现在弹窗底部**。
+
+        裸 <Button> 不受 ButtonGroupContext 控制，于是四遍里各渲染一次：
+        实测表现为「保存/删除」跑到弹窗左上角外面、并重复出现。
+
+        另外注意：Dialog 传了 isDismissible 时，footer 那遍的按钮组会被整个
+        隐藏（`isHidden: props.isDismissible`），此时只能靠右上角 × 关闭。
+        所以这里不传 isDismissible。
+      */}
+      <ButtonGroup>
+        <Button variant="accent" onPress={submit} isDisabled={busy}>
+          保存
         </Button>
-      )}
+        {item.configured && (
+          <Button
+            variant="negative"
+            onPress={async () => {
+              await removeCookie(item.platform)
+              toast.success('已删除')
+            }}
+            isDisabled={busy}
+          >
+            删除
+          </Button>
+        )}
+      </ButtonGroup>
     </Dialog>
   )
 }
@@ -411,26 +456,29 @@ function CapabilityDialog({ capability }: { capability: Capability }) {
           )}
         </div>
       </Content>
-      <Button variant="accent" onPress={submit} isDisabled={busy}>
-        保存
-      </Button>
-      <Button
-        variant="secondary"
-        onPress={test}
-        isDisabled={busy || !current?.configured}
-      >
-        测试连接
-      </Button>
-      <Button
-        variant="secondary"
-        onPress={() => {
-          setApiKey('')
-          void load()
-        }}
-        isDisabled={busy}
-      >
-        刷新状态
-      </Button>
+      {/* 同 CookieDialog：按钮必须包在 ButtonGroup 里，原因见那边的注释 */}
+      <ButtonGroup>
+        <Button
+          variant="secondary"
+          onPress={() => {
+            setApiKey('')
+            void load()
+          }}
+          isDisabled={busy}
+        >
+          刷新状态
+        </Button>
+        <Button
+          variant="secondary"
+          onPress={test}
+          isDisabled={busy || !current?.configured}
+        >
+          测试连接
+        </Button>
+        <Button variant="accent" onPress={submit} isDisabled={busy}>
+          保存
+        </Button>
+      </ButtonGroup>
     </Dialog>
   )
 }
