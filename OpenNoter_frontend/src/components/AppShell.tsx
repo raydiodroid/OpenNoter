@@ -22,6 +22,7 @@ import CloudStateOnlineIcon from '@react-spectrum/s2/icons/CloudStateOnline'
 import ContrastIcon from '@react-spectrum/s2/icons/Contrast'
 import DataSettingsIcon from '@react-spectrum/s2/icons/DataSettings'
 import DownloadIcon from '@react-spectrum/s2/icons/Download'
+import SettingsIcon from '@react-spectrum/s2/icons/Settings'
 import HomeIcon from '@react-spectrum/s2/icons/Home'
 import InfoCircleIcon from '@react-spectrum/s2/icons/InfoCircle'
 import Leave from '@react-spectrum/s2/icons/Leave'
@@ -46,6 +47,7 @@ interface NavItem {
 const SETTINGS_NAV: NavItem[] = [
   { key: '/settings/ai', label: '模型配置', Icon: DataSettingsIcon },
   { key: '/settings/download', label: '下载配置', Icon: DownloadIcon },
+  { key: '/settings/site', label: '站点设置', Icon: SettingsIcon, adminOnly: true },
   { key: '/settings/keys', label: '密钥管理', Icon: LockIcon },
   { key: '/settings/users', label: '用户管理', Icon: UserGroupIcon, adminOnly: true },
   { key: '/settings/monitor', label: '部署监控', Icon: CloudStateOnlineIcon, adminOnly: true },

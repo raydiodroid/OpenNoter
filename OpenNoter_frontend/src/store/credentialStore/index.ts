@@ -9,6 +9,7 @@ import {
   saveMyCookie as apiSaveCookie,
   saveMyCredential as apiSave,
   type ByokMode,
+  type CookieMode,
   type ByokStatus,
   type Capability,
   type CookiePlatform,
@@ -27,9 +28,14 @@ import {
  * 避免前端多打一次请求、也避免两者不一致。
  */
 interface CredentialState {
+  /** 模型凭据模式（LLM / 转写） */
   mode: ByokMode
+  /** 平台 Cookie 模式 —— 与 mode 是两个独立开关 */
+  cookieMode: CookieMode
   allowCustomBaseUrl: boolean
   byokEnabled: boolean
+  /** Cookie 的用户级 BYOK 是否可用（独立于 byokEnabled） */
+  cookieByokEnabled: boolean
   status: ByokStatus | null
   /** 各平台 Cookie 的状态（与凭据独立，粒度是平台不是能力位） */
   cookieStatus: CookieStatus | null
@@ -54,8 +60,10 @@ const EMPTY_MODE: ByokMode = 'shared'
 
 export const useCredentialStore = create<CredentialState>((set, get) => ({
   mode: EMPTY_MODE,
+  cookieMode: EMPTY_MODE,
   allowCustomBaseUrl: true,
   byokEnabled: false,
+  cookieByokEnabled: false,
   status: null,
   cookieStatus: null,
   loading: false,
@@ -64,20 +72,29 @@ export const useCredentialStore = create<CredentialState>((set, get) => ({
   load: async () => {
     set({ loading: true })
     try {
-      const data = await listMyCredentials({ silent: true })
+      const [data, cfg] = await Promise.all([
+        listMyCredentials({ silent: true }),
+        // Cookie 策略单独读：/me/credentials 只回模型侧，
+        // 两个开关必须各取各的，不能从一处推断另一处。
+        getByokConfig({ silent: true }).catch(() => null),
+      ])
       set({
         mode: data.mode,
+        cookieMode: cfg?.cookie_mode ?? 'shared',
         allowCustomBaseUrl: data.allow_custom_base_url,
         byokEnabled: data.byok_enabled,
+        cookieByokEnabled: (cfg?.cookie_mode ?? 'shared') !== 'shared',
         status: data,
       })
     } catch {
       // 未登录 / 接口不可用时保持默认（shared），不影响主流程
       const cfg = await getByokConfig({ silent: true }).catch(() => null)
       set({
-        mode: cfg?.mode ?? EMPTY_MODE,
+        mode: cfg?.model_mode ?? EMPTY_MODE,
+        cookieMode: cfg?.cookie_mode ?? 'shared',
         allowCustomBaseUrl: cfg?.allow_custom_base_url ?? true,
-        byokEnabled: Boolean(cfg && cfg.mode !== 'shared'),
+        byokEnabled: Boolean(cfg && cfg.model_mode !== 'shared'),
+        cookieByokEnabled: Boolean(cfg && cfg.cookie_mode !== 'shared'),
         status: null,
       })
     } finally {

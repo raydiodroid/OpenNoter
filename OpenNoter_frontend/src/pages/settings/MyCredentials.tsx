@@ -151,7 +151,9 @@ export function MyCredentialsSection() {
  * 这份是「我自己的」，配了就用我的。
  */
 export function MyCookiesSection() {
-  const { byokEnabled, cookieStatus, loadCookies } = useCredentialStore()
+  // 用 Cookie 自己的开关，不是模型的：两者是独立策略，
+  // 管理员可能让用户自带模型凭据，但仍统一用站点 Cookie（或反过来）。
+  const { cookieByokEnabled, cookieStatus, loadCookies } = useCredentialStore()
 
   useEffect(() => {
     void loadCookies()
@@ -161,7 +163,7 @@ export function MyCookiesSection() {
     <>
       <Section title="我的平台 Cookie">
         <Panel>
-          {!byokEnabled ? (
+          {!cookieByokEnabled ? (
             <p className={hint}>
               当前站点统一使用管理员配置的 Cookie，无需单独设置。
             </p>

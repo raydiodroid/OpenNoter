@@ -26,6 +26,7 @@ import ErrorBoundary from '@/components/ErrorBoundary'
 const OnboardingPage = lazy(() => import('@/pages/OnboardingPage'))
 const LoginPage = lazy(() => import('@/pages/LoginPage'))
 const AISettingsPage = lazy(() => import('@/pages/settings/AISettingsPage'))
+const SiteSettingsPage = lazy(() => import('@/pages/settings/SiteSettingsPage'))
 const DownloaderPage = lazy(() => import('@/pages/settings/DownloaderPage'))
 const KeysPage = lazy(() => import('@/pages/settings/KeysPage'))
 const UsersPage = lazy(() => import('@/pages/settings/UsersPage'))
@@ -192,6 +193,7 @@ function AppRoutes() {
                       <Routes>
                         <Route index element={<WorkbenchPage />} />
                         <Route path="/settings/ai" element={<AISettingsPage />} />
+                        <Route path="/settings/site" element={<SiteSettingsPage />} />
                         <Route path="/settings/ai/new" element={<AISettingsPage isCreate />} />
                         <Route path="/settings/ai/:id" element={<AISettingsPage />} />
                         <Route

@@ -29,10 +29,22 @@ const cfg = (o?: CallOpts) => (o?.silent ? { suppressToast: true } : undefined)
 export type Capability = 'default' | 'llm' | 'asr'
 
 /** 站点模式：只站点 / 可选 / 强制自带。 */
+/** 模型凭据的站点策略。`required` = 用户必须自带，未配置则拒绝提交。 */
 export type ByokMode = 'shared' | 'optional' | 'required'
 
+/**
+ * 平台 Cookie 的站点策略：**没有 required**。
+ *
+ * Cookie 不消耗站点额度，没配也能正常下载（只是画质低），强制用户登自己的
+ * 账号在语义上不成立。后端 `COOKIE_MODES` 只接受这两个值。
+ */
+export type CookieMode = 'shared' | 'optional'
+
 export interface ByokConfig {
-  mode: ByokMode
+  /** 模型凭据模式（LLM / 转写） */
+  model_mode: ByokMode
+  /** 平台 Cookie 模式（只有 shared / optional） */
+  cookie_mode: CookieMode
   allow_custom_base_url: boolean
   updated_at?: string | null
 }
@@ -82,7 +94,11 @@ export const getByokConfig = (opts?: CallOpts) =>
   request.get<never, ByokConfig>('/byok_config', cfg(opts))
 
 export const updateByokConfig = (
-  data: { mode?: ByokMode; allow_custom_base_url?: boolean },
+  data: {
+    model_mode?: ByokMode
+    cookie_mode?: CookieMode
+    allow_custom_base_url?: boolean
+  },
   opts?: CallOpts
 ) => request.patch<never, ByokConfig>('/byok_config', data, cfg(opts))
 
