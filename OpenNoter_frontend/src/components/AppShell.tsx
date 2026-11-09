@@ -178,7 +178,18 @@ const brandName = style({
   margin: 0,
 })
 
-const logoMark = style({ borderRadius: 'default' })
+/**
+ * 顶栏 logo。
+ *
+ * **不要加 borderRadius / overflow:hidden**。
+ *
+ * `icon.svg` 里本身就画了一个白色圆角矩形底（`76,60 → 460,452`），
+ * 自带圆角。再套一层 CSS 圆角遮罩会二次裁切：20px 下能明显看到四个角
+ * 被切掉一点，120px 放大对比时更清楚（左：被裁；右：完整）。
+ *
+ * 图标是「完整显示」而不是「塞进一个圆角容器」，所以这里只保留尺寸。
+ */
+const logoMark = style({ display: 'block', flexShrink: 0 })
 
 /** 侧栏导航占满面板宽度 */
 const navFull = style({ width: 'full' })

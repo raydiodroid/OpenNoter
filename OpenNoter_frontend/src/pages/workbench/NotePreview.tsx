@@ -100,20 +100,6 @@ const emptyCard = style({
 })
 
 /**
- * 失败详情区的纵向堆叠容器。
- *
- * 用 flex column + gap 而不是 margin，是因为这段内容在 `IllustratedMessage`
- * 的 `<Content>`（grid 单元格）内部，靠 margin 控制间距容易和
- * `alignSelf: start` 打架；flex 容器的 gap 不依赖外边距折叠。
- */
-const failureStack = style({
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 12,
-  alignItems: 'center',
-})
-
-/**
  * 失败原因代码块：等宽、可换行、左对齐（长错误串要能看全）。
  *
  * 注意它现在位于 `<Content>` 内部（见 FAILED 分支的注释），不再需要
@@ -138,6 +124,18 @@ const failureText = style({
   whiteSpace: 'pre-wrap',
 })
 
+/**
+ * 复制按钮的位置：贴错误框右下角。
+ *
+ * 不占额外一行——错误串本身通常已经很长，再加一行按钮会让这块更高；
+ * 而「复制」是次要操作，不该和「重试」抢主要位置。
+ */
+const failureActions = style({
+  display: 'flex',
+  justifyContent: 'end',
+  marginTop: 8,
+})
+
 const steps = style({
   display: 'flex',
   alignItems: 'center',
@@ -158,6 +156,7 @@ export default function NotePreview({ onRequestMoreSpace }: { onRequestMoreSpace
   const [transcriptOpen, setTranscriptOpen] = useState(false)
   const [chatMode, setChatMode] = useState<false | 'half' | 'full'>(false)
   const [retrying, setRetrying] = useState(false)
+  const [copied, setCopied] = useState(false)
 
   const versions = useMemo(() => task?.markdown ?? [], [task?.markdown])
 
@@ -226,6 +225,23 @@ export default function NotePreview({ onRequestMoreSpace }: { onRequestMoreSpace
     // 用户照着找只会更困惑。这类"指向不存在的地方"的提示比没有提示更糟。
     const failureDetail = (task.message || '').trim()
 
+    /**
+     * 复制错误原文。
+     *
+     * 用途是「贴给管理员 / 拿去搜索」——错误串里有 yt-dlp 的原始报错，
+     * 手抄不现实。复制成功后按钮短暂变成「已复制」，2 秒后还原。
+     */
+    const copyFailureDetail = async () => {
+      try {
+        await navigator.clipboard.writeText(failureDetail)
+        setCopied(true)
+        setTimeout(() => setCopied(false), 2000)
+      } catch {
+        toast.error('复制失败')
+      }
+    }
+
+
     return (
       <div className={preview}>
         <div className={centered}>
@@ -246,19 +262,28 @@ export default function NotePreview({ onRequestMoreSpace }: { onRequestMoreSpace
               */}
               <Content>
                 {failureDetail ? (
-                  <div className={failureStack}>
-                    <div>后端返回的具体原因：</div>
-                    <div className={failureBox}>
-                      <p className={failureText}>{failureDetail}</p>
+                  /*
+                    只放错误内容本身 + 一个复制按钮。
+
+                    刻意不写「后端返回的具体原因：」这类引导语 —— 用户看到
+                    一块等宽错误文本，配上「笔记生成失败」标题，已经足够知道
+                    这是什么。同理也不写「处理好后点重试」：下方那个「重试」
+                    按钮本身就是这句话，写出来是重复。
+
+                    复制按钮放在错误框右上角（悬浮），不额外占一行 ——
+                    它的用途是「把这段贴给管理员/搜索」，属于次要操作。
+                  */
+                  <div className={failureBox}>
+                    <p className={failureText}>{failureDetail}</p>
+                    <div className={failureActions}>
+                      <Button
+                        variant="secondary"
+                        size="S"
+                        onPress={copyFailureDetail}
+                      >
+                        {copied ? '已复制' : '复制'}
+                      </Button>
                     </div>
-                    {/*
-                      这里**不再重复「配置 Cookie / 代理」**。
-                      后端对网络类失败已经会在 message 末尾追加针对性的
-                      「去设置里配代理/Cookie」建议（见 note.py 的
-                      _append_network_hint），再念一遍就是同一句话出现两次。
-                      只保留后端不会说、但用户此刻需要知道的「下一步动作」。
-                    */}
-                    <div>处理好上面的问题后，可以直接点下方「重试」。</div>
                   </div>
                 ) : (
                   <>
