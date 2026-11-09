@@ -50,3 +50,22 @@ export function toNetscapeFile(cookies: readonly NetscapeCookieLike[]): string {
     lines.push(toNetscapeLine(cookie))
   return `${lines.join('\n')}\n`
 }
+
+/**
+ * 统计 Cookie 文本里有多少条（用于给用户「这次取到几条」的反馈）。
+ *
+ * 两种格式分别处理：
+ *  - Netscape（YouTube）：每行 7 个 tab 字段，注释行与空行不算；
+ *  - 请求头（B站/抖音/快手）：`a=1; b=2` 按分号数。
+ */
+export function countCookieEntries(platform: string, cookieText: string): number {
+  if (!cookieText)
+    return 0
+  if (platform === 'youtube') {
+    return cookieText
+      .split('\n')
+      .filter(line => line.trim() && !line.startsWith('# ') && !/^#(?!HttpOnly_)/.test(line))
+      .length
+  }
+  return cookieText.split(';').filter(part => part.trim()).length
+}

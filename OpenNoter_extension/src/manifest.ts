@@ -81,6 +81,10 @@ export async function getManifest() {
       'sidePanel',
       'contextMenus',
       'cookies',
+      // content script 里的「复制 Cookie」按钮要写剪贴板。
+      // 没有这个权限时 navigator.clipboard.writeText() 在部分场景会抛
+      // NotAllowedError（尤其页面本身没有用户手势上下文时）。
+      'clipboardWrite',
     ],
     // 收窄：去掉 *://*/* / <all_urls>；保留视频站 + 本机/已知后端通信。
     // 自定义公网 backendUrl 需用户在浏览器「扩展详情」里额外授权，或改此清单。

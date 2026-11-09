@@ -7,6 +7,7 @@ import { authHeaders } from '~/logic/api'
 import { fetchBilibiliSubtitle } from '~/logic/bilibili-subtitle'
 import { normalizeVideoTitle } from '~/logic/task-display'
 import { SUPPORTED_COOKIE_PLATFORMS, readBrowserCookies } from '~/logic/cookies'
+import { countCookieEntries } from '~/logic/netscape'
 import { isValidCookieTransferContext } from '~/logic/opennoter-origin'
 
 type WebExtMessageSender = Runtime.MessageSender
@@ -147,6 +148,40 @@ onMessage<{ url: string, title?: string }, 'opennoter-start'>('opennoter-start',
   if (result.ok)
     await openSidePanelInTab(sender?.tabId)
   return result
+})
+
+/**
+ * 读取当前视频站 Cookie 并返回纯文本（**不发往后端**）。
+ *
+ * ## 为什么单独一条消息
+ *
+ * 上面那条 `opennoter-cookie-transfer` 是「网页发起 → 后端落库」的闭环，
+ * 它要求 content script 注入到 OpenNoter 自己的页面里（`OPENNOTER_HOST_PERMISSIONS`
+ * 只含 localhost）。**自建部署的域名不在白名单里，那条链在非 localhost 上根本
+ * 不会启动** —— 用户点了网页上的「从当前浏览器获取」只会超时。
+ *
+ * 这条消息解决另一件事：用户**直接站在视频站点页面上**（YouTube/B站/抖音/快手），
+ * 点悬浮按钮，扩展把 Cookie 取出来放进剪贴板，用户自己粘到设置页。
+ * 完全不依赖后端、不依赖 OpenNoter 页面注入，也不需要额外域名权限
+ * （视频站本来就在 `host_permissions` 里）。
+ */
+browser.runtime.onMessage.addListener(async (message: unknown) => {
+  if (!message || typeof message !== 'object' || (message as { type?: string }).type !== 'opennoter-read-cookie')
+    return undefined
+
+  const platform = (message as { platform?: unknown }).platform
+  if (typeof platform !== 'string' || !(SUPPORTED_COOKIE_PLATFORMS as string[]).includes(platform))
+    return { ok: false, error: '不支持的平台' }
+
+  try {
+    const cookie = await readBrowserCookies(platform as Exclude<Platform, 'local'>)
+    if (!cookie)
+      return { ok: false, error: '当前浏览器没有该平台的 Cookie，请先登录目标站点' }
+    return { ok: true, cookie, platform, count: countCookieEntries(platform, cookie) }
+  }
+  catch (e) {
+    return { ok: false, error: (e as Error).message || '读取 Cookie 失败' }
+  }
 })
 
 // 这里必须显式标注参数类型：polyfill 的 OnMessageListener 是个联合类型，

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildTrustedOrigins, isValidCookieTransferContext } from '../logic/opennoter-origin'
-import { toNetscapeFile, toNetscapeLine } from '../logic/netscape'
+import { countCookieEntries, toNetscapeFile, toNetscapeLine } from '../logic/netscape'
 
 /** 测试用示例域名（不是任何真实部署）。 */
 const SELF_HOST = 'https://notes.example.com'
@@ -150,5 +150,38 @@ describe('toNetscapeFile', () => {
     const dataLines = out.split('\n').filter(l => l.trim() && !l.startsWith('# '))
     expect(dataLines).toHaveLength(2)
     expect(dataLines[1].startsWith('#HttpOnly_')).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// countCookieEntries：给用户「这次取到几条」的反馈
+// ---------------------------------------------------------------------------
+
+describe('countCookieEntries', () => {
+  it('counts netscape data lines, ignoring the header and comments', () => {
+    const text = [
+      '# Netscape HTTP Cookie File',
+      '# comment',
+      '.youtube.com\tTRUE\t/\tTRUE\t1800000000\tSID\tabc',
+      '.youtube.com\tTRUE\t/\tTRUE\t1790000000\tPREF\txyz',
+      '',
+    ].join('\n')
+    expect(countCookieEntries('youtube', text)).toBe(2)
+  })
+
+  it('counts #HttpOnly_ lines as data, not comments', () => {
+    const text = [
+      '# Netscape HTTP Cookie File',
+      '#HttpOnly_.youtube.com\tTRUE\t/\tTRUE\t1800000000\tSID\tabc',
+    ].join('\n')
+    expect(countCookieEntries('youtube', text)).toBe(1)
+  })
+
+  it('counts header-style cookies by semicolons', () => {
+    expect(countCookieEntries('bilibili', 'SESSDATA=a; bili_jct=b; DedeUserID=c')).toBe(3)
+  })
+
+  it('returns 0 for empty input', () => {
+    expect(countCookieEntries('youtube', '')).toBe(0)
   })
 })
