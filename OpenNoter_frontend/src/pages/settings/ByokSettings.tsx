@@ -20,6 +20,37 @@ import { updateByokConfig, type ByokMode } from '@/services/credential'
 
 const row = style({ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 })
 const hint = style({ fontSize: 'body-xs', color: 'neutral-subdued', marginTop: 4 })
+
+/**
+ * Radio 选项的文字块。
+ *
+ * **两个约束，缺一个就出问题：**
+ *
+ * 1. **文字必须用普通 DOM 元素，不能用 S2 的 `Text`。**
+ *    `Radio` 底层的 RAC `RadioField` 给 TextContext 挂的 slots 只有
+ *    `description`（没有 DEFAULT_SLOT）。而 S2 的 `Text` 内部会走
+ *    `useSlottedContext(TextContext, props.slot)`：上下文有 slots、但传入的
+ *    slot 名（这里没传，即 DEFAULT_SLOT）不在其中时，它**直接抛异常**：
+ *
+ *        Error: A slot prop is required. Valid slot names are "description".
+ *
+ *    于是整个「模型配置」页会被 ErrorBoundary 接住变成「这个页面出错了」。
+ *    只有管理员看得到（`ByokModePanel` 按 is_superuser 渲染），所以是管理员必崩。
+ *    同理 `Checkbox` / `Switch` / `Tag` 也是「有 slots 无 DEFAULT_SLOT」，
+ *    子节点文字一律用普通 DOM 元素。
+ *
+ * 2. **标题和描述必须包在同一个容器里，不能做 Radio 的两个平级子节点。**
+ *    RAC `RadioField` 是个两列 grid（`[圆圈 | 文字]`），`Radio` 的 children
+ *    会按 DOM 顺序各自落进网格：第一个子节点进第 2 列，**第二个子节点落到下一个
+ *    空位**，于是描述把第 1 列撑宽、标题被挤到右边去（实测标题 x 从 28px 变成
+ *    626px）。包一层 flex column 后整块只占一个网格位，标题才对齐圆圈右侧。
+ *
+ * `OnboardingPage` 的选项卡就是这个写法，这里与它保持一致。
+ */
+const optionText = style({ display: 'flex', flexDirection: 'column', gap: 2 })
+const optionLabel = style({ font: 'ui', color: 'neutral' })
+/** Radio 内的描述：间距交给 optionText 的 gap，这里不能再带 marginTop（会叠成 6px） */
+const optionDesc = style({ fontSize: 'body-xs', color: 'neutral-subdued' })
 const actions = style({ display: 'flex', gap: 8, marginTop: 8 })
 
 const MODE_OPTIONS: { id: ByokMode; label: string; desc: string }[] = [
@@ -92,8 +123,12 @@ export function ByokModePanel() {
         >
           {MODE_OPTIONS.map(opt => (
             <Radio key={opt.id} value={opt.id}>
-              <Text>{opt.label}</Text>
-              <div className={hint}>{opt.desc}</div>
+              {/* 标题与描述必须包在同一个容器里；文字不能用 <Text>。
+                  两个约束的原因见 optionText / optionLabel 的注释。 */}
+              <span className={optionText}>
+                <span className={optionLabel}>{opt.label}</span>
+                <span className={optionDesc}>{opt.desc}</span>
+              </span>
             </Radio>
           ))}
         </RadioGroup>
