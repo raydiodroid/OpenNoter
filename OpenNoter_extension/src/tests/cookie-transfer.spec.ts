@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildTrustedOrigins, isValidCookieTransferContext } from '../logic/opennoter-origin'
+import { toNetscapeFile, toNetscapeLine } from '../logic/netscape'
 
 /** 测试用示例域名（不是任何真实部署）。 */
 const SELF_HOST = 'https://notes.example.com'
@@ -83,5 +84,71 @@ describe('isValidCookieTransferContext', () => {
       frameId: 0,
       configuredBackendUrl: BACKEND,
     })).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// YouTube 的 Netscape 序列化
+// ---------------------------------------------------------------------------
+//
+// 背景：扩展原先 `COOKIE_NAME_ALLOWLISTS.youtube = []` 且 `readBrowserCookies`
+// 在空 allowlist 时直接返回空串 —— 浏览器一键同步对 YouTube 完全失效。
+//
+// 但 YouTube 又**必须**用 Cookie（机房出口 IP 会被风控要求登录验证），
+// 所以这里补上 Netscape 导出。格式不能错：yt-dlp 只认 7 字段 tab 分隔的
+// cookies.txt，传 `name=value; ...` 请求头形式会被后端 normalize 拒绝。
+
+describe('toNetscapeLine', () => {
+  const base = {
+    domain: '.youtube.com',
+    httpOnly: false,
+    secure: true,
+    path: '/',
+    name: 'SID',
+    value: 'abc123',
+  } as any
+
+  it('produces exactly 7 tab-separated fields', () => {
+    const line = toNetscapeLine(base)
+    expect(line.split('\t')).toHaveLength(7)
+  })
+
+  it('marks includeSubdomains TRUE only for dot-prefixed domains', () => {
+    expect(toNetscapeLine({ ...base, domain: '.youtube.com' }).split('\t')[1]).toBe('TRUE')
+    expect(toNetscapeLine({ ...base, domain: 'youtube.com' }).split('\t')[1]).toBe('FALSE')
+  })
+
+  it('prefixes HttpOnly cookies with #HttpOnly_', () => {
+    const line = toNetscapeLine({ ...base, httpOnly: true })
+    expect(line.startsWith('#HttpOnly_.youtube.com')).toBe(true)
+  })
+
+  it('floors fractional expirationDate and writes 0 for session cookies', () => {
+    expect(toNetscapeLine({ ...base, expirationDate: 1800000000.7 }).split('\t')[4])
+      .toBe('1800000000')
+    expect(toNetscapeLine({ ...base, expirationDate: undefined }).split('\t')[4]).toBe('0')
+  })
+})
+
+describe('toNetscapeFile', () => {
+  it('returns empty string for no cookies (so caller can detect "nothing to sync")', () => {
+    expect(toNetscapeFile([])).toBe('')
+  })
+
+  it('emits the standard header line first', () => {
+    const out = toNetscapeFile([
+      { domain: '.youtube.com', name: 'SID', value: 'x', secure: true },
+    ] as any)
+    expect(out.split('\n')[0]).toBe('# Netscape HTTP Cookie File')
+  })
+
+  it('round-trips multiple cookies as separate data lines', () => {
+    const out = toNetscapeFile([
+      { domain: '.youtube.com', name: 'SID', value: 'a', secure: true },
+      { domain: '.youtube.com', name: 'PREF', value: 'b', httpOnly: true },
+    ] as any)
+    const dataLines = out.split('\n').filter(l => l.trim() && !l.startsWith('# '))
+    expect(dataLines).toHaveLength(2)
+    expect(dataLines[1].startsWith('#HttpOnly_')).toBe(true)
   })
 })

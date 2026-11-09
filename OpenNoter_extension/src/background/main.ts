@@ -1,13 +1,13 @@
 import { onMessage } from 'webext-bridge/background'
+import type { Runtime } from 'webextension-polyfill'
 import type { Platform, Settings, TaskRecord } from '~/logic/types'
 import { DEFAULT_SETTINGS, MAX_TASKS, SETTINGS_KEY, TASKS_KEY } from '~/logic/constants'
 import { detectPlatform } from '~/logic/platform'
 import { authHeaders } from '~/logic/api'
 import { fetchBilibiliSubtitle } from '~/logic/bilibili-subtitle'
 import { normalizeVideoTitle } from '~/logic/task-display'
-import { COOKIE_NAME_ALLOWLISTS, readBrowserCookies, SUPPORTED_COOKIE_PLATFORMS } from '~/logic/cookies'
+import { SUPPORTED_COOKIE_PLATFORMS, readBrowserCookies } from '~/logic/cookies'
 import { isValidCookieTransferContext } from '~/logic/opennoter-origin'
-import type { Runtime } from 'webextension-polyfill'
 
 type WebExtMessageSender = Runtime.MessageSender
 
@@ -141,7 +141,7 @@ async function openSidePanelInTab(tabId?: number) {
 
 // ---------- 消息桥 ----------
 
-onMessage<{ url: string; title?: string }, 'opennoter-start'>('opennoter-start', async ({ data, sender }) => {
+onMessage<{ url: string, title?: string }, 'opennoter-start'>('opennoter-start', async ({ data, sender }) => {
   const result = await startTask(data.url, data.title)
   // 成功就把侧边栏拉起来给用户看进度
   if (result.ok)
@@ -166,12 +166,13 @@ browser.runtime.onMessage.addListener(async (message: unknown, sender: WebExtMes
     typeof request.requestId !== 'string'
     || request.requestId.length > 100
     || typeof request.transferId !== 'string'
-    || !/^[A-Za-z0-9_-]{32,128}$/.test(request.transferId)
+    || !/^[\w-]{32,128}$/.test(request.transferId)
     || typeof request.platform !== 'string'
     || !(SUPPORTED_COOKIE_PLATFORMS as string[]).includes(request.platform)
     || typeof request.pageOrigin !== 'string'
-  )
+  ) {
     return fail('浏览器 Cookie 请求无效')
+  }
 
   if (typeof sender.tab?.id !== 'number')
     return fail('请从 OpenNoter 设置页发起 Cookie 获取')
@@ -191,19 +192,21 @@ browser.runtime.onMessage.addListener(async (message: unknown, sender: WebExtMes
       platform: request.platform,
       frameId: sender.frameId,
       configuredBackendUrl: cookieSettings.backendUrl,
-    }))
+    })) {
       return fail('Cookie 获取仅允许从 OpenNoter 下载设置页发起')
+    }
 
     const tabUrl = new URL(tab.url)
     const platform = request.platform as Exclude<Platform, 'local'>
     const cookie = await readBrowserCookies(platform)
     if (!cookie) {
-      const error = COOKIE_NAME_ALLOWLISTS[platform].length
-        ? '当前浏览器没有该平台下载器需要的 Cookie，请先登录对应网站'
-        : '该平台的下载器当前不使用 Cookie，无需同步'
-      return fail(error)
+      // 四个平台现在都支持同步；空结果只可能是「浏览器里没有该站 Cookie」
+      return fail('当前浏览器没有该平台的 Cookie，请先登录目标站点后再同步')
     }
-    if (cookie.length > 32768)
+    // YouTube 走 Netscape 全量导出，条目多、每行 7 个字段，比请求头长得多。
+    // 后端 NETSCAPE_MAX_LENGTH 是上限；这里放宽到与之匹配，避免误拦。
+    const limit = platform === 'youtube' ? 262144 : 32768
+    if (cookie.length > limit)
       return fail('Cookie 数据过大，请改用扫码登录或手动设置')
 
     const response = await fetch(new URL('/api/complete_browser_cookie_transfer', tabUrl.origin), {
