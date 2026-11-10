@@ -191,36 +191,8 @@ class TranscriberConfigRequest(BaseModel):
 
 
 def _build_transcriber_types():
-    """转写引擎清单。
-
-    `groq` 是代码里的槽位名（走 OpenAI 兼容的 /audio/transcriptions），
-    实际指向哪个服务取决于 providers 表中 id=groq 的 base_url：
-    可能是 Groq 云端，也可能是自建网关（如本地 FunASR）。标签按真实目标
-    生成，避免界面上写「Groq（在线）」而实际连的是本地服务。
-    """
-    base_url = ""
-    try:
-        from app.services.provider import ProviderService
-
-        provider = ProviderService.get_provider_by_id("groq")
-        base_url = (provider or {}).get("base_url") or ""
-    except Exception:
-        base_url = ""
-
-    if "groq.com" in base_url:
-        groq_label = "Groq（云端）"
-    elif base_url:
-        groq_label = "自建端点（OpenAI 兼容）"
-    else:
-        groq_label = "OpenAI 兼容端点"
-
-    return [
-        {"value": "fast-whisper", "label": "Faster Whisper（本地）"},
-        {"value": "bcut", "label": "必剪（在线）"},
-        {"value": "kuaishou", "label": "快手（在线）"},
-        {"value": "groq", "label": groq_label},
-        {"value": "mlx-whisper", "label": "MLX Whisper（仅macOS）"},
-    ]
+    from app.services.asr_providers import AsrProviderService
+    return [{"value": p["id"], "label": p["name"]} for p in AsrProviderService.list()]
 
 
 WHISPER_MODEL_SIZES = ["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo"]
@@ -230,17 +202,19 @@ WHISPER_MODEL_SIZES = ["tiny", "base", "small", "medium", "large-v3", "large-v3-
 def get_transcriber_config():
     from app.transcriber.transcriber_provider import MLX_WHISPER_AVAILABLE
     from app.transcriber.whisper_models import get_registry, BUILTIN_WHISPER_MODELS
-    from app.services.provider import ProviderService
+    from app.services.asr_providers import AsrProviderService
 
     registry = get_registry()
     config = transcriber_config_manager.get_config()
+    providers = AsrProviderService.list()
+    selected = next((p for p in providers if p["id"] == config["transcriber_type"]), {})
     return R.success(data={
         **config,
-        "available_types": _build_transcriber_types(),
-        # 前端据此展示「当前实际连的是哪个端点 / 哪个模型」
-        "resolved_endpoint": (ProviderService.get_provider_by_id("groq") or {}).get("base_url", ""),
-        "resolved_model": transcriber_config_manager.get_config().get("groq_model", ""),
-        "has_asr_key": bool((ProviderService.get_provider_by_id("groq") or {}).get("api_key")),
+        "available_types": [{"value": p["id"], "label": p["name"]} for p in providers],
+        "providers": providers,
+        "resolved_endpoint": selected.get("base_url", ""),
+        "resolved_model": selected.get("model_name", ""),
+        "has_asr_key": selected.get("has_api_key", False),
         # 内置可见档位 + 用户自定义模型，供前端下拉
         "whisper_model_sizes": registry.visible_model_names(),
         "whisper_builtin_models": BUILTIN_WHISPER_MODELS,
@@ -259,35 +233,18 @@ class AsrEndpointRequest(BaseModel):
 
 @router.post("/update_asr_endpoint")
 def update_asr_endpoint(data: AsrEndpointRequest, admin: User = Depends(require_admin)):
-    from app.services.provider import ProviderService
-
-    base_url = (data.base_url or "").strip()
-    if not base_url.lower().startswith(("http://", "https://")):
-        return R.error(msg="端点地址必须以 http:// 或 https:// 开头")
-
-    payload = {"base_url": base_url}
-    # 只传新 key 才覆盖；前端若回传掩码值（含 *），ProviderService 会自行忽略
+    # Compatibility endpoint for older clients; it only edits the legacy groq entry.
+    from app.services.asr_providers import AsrProviderService
+    payload = {"base_url": data.base_url}
     if data.api_key:
-        payload["api_key"] = data.api_key.strip()
-    ProviderService.update_provider("groq", payload)
-
-    current = transcriber_config_manager.get_config()
-    model = (data.model or "").strip()
-    transcriber_config_manager.update_config(
-        transcriber_type=current.get("transcriber_type", "groq"),
-        whisper_model_size=None,
-        groq_model=model or None,
-    )
-
-    provider = ProviderService.get_provider_by_id("groq") or {}
-    return R.success(
-        msg="转写端点已更新",
-        data={
-            "base_url": provider.get("base_url", ""),
-            "has_api_key": bool(provider.get("api_key")),
-            "model": transcriber_config_manager.get_config().get("groq_model", ""),
-        },
-    )
+        payload["api_key"] = data.api_key
+    if data.model:
+        payload["model_name"] = data.model
+    try:
+        provider = AsrProviderService.update("groq", payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return R.success(data={"base_url": provider["base_url"], "has_api_key": provider["has_api_key"], "model": provider["model_name"]})
 
 
 class WhisperCustomModelRequest(BaseModel):
@@ -322,10 +279,16 @@ def delete_whisper_model(name: str, admin: User = Depends(require_admin)):
 
 @router.post("/transcriber_config")
 def update_transcriber_config(data: TranscriberConfigRequest, admin: User = Depends(require_admin)):
-    config = transcriber_config_manager.update_config(
-        transcriber_type=data.transcriber_type,
-        whisper_model_size=data.whisper_model_size,
-    )
+    from app.services.asr_providers import AsrProviderService, LOCK
+    with LOCK:
+        try:
+            AsrProviderService.require_enabled(data.transcriber_type)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        config = transcriber_config_manager.update_config(
+            transcriber_type=data.transcriber_type,
+            whisper_model_size=data.whisper_model_size,
+        )
     return R.success(data=config)
 
 

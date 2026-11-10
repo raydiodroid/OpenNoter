@@ -1,6 +1,31 @@
 import request from '@/lib/api'
 
+export interface AsrProvider {
+  id: string
+  name: string
+  engine: string
+  logo: string
+  base_url: string
+  model_name: string
+  enabled: boolean
+  builtin: boolean
+  has_api_key: boolean
+}
+export type AsrProviderInput = Pick<AsrProvider, 'name' | 'logo' | 'base_url' | 'model_name'> & {
+  api_key?: string
+  enabled?: boolean
+}
+export const createAsrProvider = (data: AsrProviderInput): Promise<AsrProvider> =>
+  request.post('/asr/providers', data)
+export const updateAsrProvider = (
+  id: string,
+  data: Partial<AsrProviderInput>
+): Promise<AsrProvider> => request.patch(`/asr/providers/${encodeURIComponent(id)}`, data)
+export const deleteAsrProvider = (id: string) =>
+  request.delete(`/asr/providers/${encodeURIComponent(id)}`)
+
 export interface TranscriberConfig {
+  providers: AsrProvider[]
   transcriber_type: string
   whisper_model_size: string
   available_types: { value: string; label: string }[]
@@ -58,10 +83,7 @@ export const getModelsStatus = async (): Promise<ModelsStatusResponse> => {
   return await request.get('/transcriber_models_status')
 }
 
-export const downloadModel = async (data: {
-  model_size: string
-  transcriber_type?: string
-}) => {
+export const downloadModel = async (data: { model_size: string; transcriber_type?: string }) => {
   return await request.post('/transcriber_download', data)
 }
 

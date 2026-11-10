@@ -16,6 +16,7 @@ def create_app(lifespan) -> FastAPI:
         api_keys,
         me_credentials,
         me_cookies,
+        asr_providers,
     )
     # FastAPI 自带的 /docs /redoc /openapi.json 关掉，改为在下方挂自定义的
     # 「需鉴权」版本：既保留纵深防御（匿名看不到接口结构），又让 API 调用方
@@ -30,6 +31,7 @@ def create_app(lifespan) -> FastAPI:
     app.include_router(note.router, prefix="/api")
     app.include_router(provider.router, prefix="/api")
     app.include_router(model.router,prefix="/api")
+    app.include_router(asr_providers.router, prefix="/api")
     app.include_router(config.router,  prefix="/api")
     # 健康检查免认证，容器探针与前端存活判定依赖它
     app.include_router(config.public_router, prefix="/api")

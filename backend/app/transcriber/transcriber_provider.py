@@ -98,11 +98,16 @@ def get_transcriber(transcriber_type="fast-whisper", model_size=None, device="cu
     """
     logger.info(f'请求转录器类型: {transcriber_type}')
 
-    if user_id is not None or transcriber_type == "groq":
+    online = transcriber_type == "groq" or transcriber_type.startswith("asr_")
+    if user_id is not None or online:
         from app.services.credential_resolver import resolve_asr
-        credential = resolve_asr(user_id, online=transcriber_type == "groq")
+        credential = resolve_asr(user_id, online=online, **({"provider_id": transcriber_type} if online else {}))
         if credential is not None:
             return GroqTranscriber(credential=credential)
+
+    if require_ready:
+        from app.services.asr_providers import AsrProviderService
+        AsrProviderService.require_enabled(transcriber_type)
 
     try:
         transcriber_enum = TranscriberType(transcriber_type)

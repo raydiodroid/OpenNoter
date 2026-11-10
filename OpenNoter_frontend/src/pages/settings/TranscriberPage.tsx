@@ -13,6 +13,7 @@ import {
   Picker,
   PickerItem,
   Row,
+  Switch,
   TableBody,
   TableHeader,
   TableView,
@@ -34,7 +35,8 @@ import {
   ListRowMeta,
   ListRowTitle,
 } from '@/components/ListRow'
-import { ProviderMark } from '@/components/Brand'
+import { AsrMark } from '@/components/AsrMark'
+import { ASR_ICONS } from '@/lib/asrIcons'
 import { hostOf } from '@/lib/format'
 import { StatusIndicator } from '@/components/StatusIndicator'
 import {
@@ -43,7 +45,10 @@ import {
   downloadModel,
   getModelsStatus,
   getTranscriberConfig,
-  updateAsrEndpoint,
+  createAsrProvider,
+  updateAsrProvider,
+  deleteAsrProvider,
+  type AsrProvider,
   updateTranscriberConfig,
   type ModelStatus,
   type TranscriberConfig,
@@ -105,6 +110,8 @@ export default function TranscriberPage({ embedded = false }: { embedded?: boole
   const [mlxStatus, setMlxStatus] = useState<ModelStatus[]>([])
   const [mlxAvailable, setMlxAvailable] = useState(false)
 
+  const [providerName, setProviderName] = useState('')
+  const [providerLogo, setProviderLogo] = useState('cloud')
   const [asrBaseUrl, setAsrBaseUrl] = useState('')
   const [asrApiKey, setAsrApiKey] = useState('')
   const [asrModel, setAsrModel] = useState('')
@@ -159,7 +166,8 @@ export default function TranscriberPage({ embedded = false }: { embedded?: boole
       try {
         const data = await getTranscriberConfig()
         setConfig(data)
-        setSelectedType(data.transcriber_type)
+        const selected = data.providers.find(p => p.id === data.transcriber_type)
+        if (selected) selectProvider(selected)
         setSelectedSize(data.whisper_model_size)
       } catch {
         toast.error('获取转写器配置失败')
@@ -171,11 +179,26 @@ export default function TranscriberPage({ embedded = false }: { embedded?: boole
     refreshStatuses()
   }, [refreshStatuses])
 
-  useEffect(() => {
-    if (!config) return
-    setAsrBaseUrl(previous => previous || config.resolved_endpoint || '')
-    setAsrModel(previous => previous || config.resolved_model || '')
-  }, [config])
+  function selectProvider(provider: AsrProvider) {
+    setSelectedType(provider.id)
+    setProviderName(provider.name)
+    setProviderLogo(provider.logo)
+    setAsrBaseUrl(provider.base_url)
+    setAsrModel(provider.model_name)
+    setAsrApiKey('')
+  }
+
+  const startCreate = () => {
+    setSelectedType('new')
+    setProviderName('')
+    setProviderLogo('cloud')
+    setAsrBaseUrl('')
+    setAsrModel('')
+    setAsrApiKey('')
+  }
+  const selectedProvider = config?.providers.find(p => p.id === selectedType)
+  const isCreate = selectedType === 'new'
+  const isOnline = isCreate || selectedProvider?.engine === 'groq'
 
   useEffect(() => {
     const downloading =
@@ -195,30 +218,81 @@ export default function TranscriberPage({ embedded = false }: { embedded?: boole
   }
 
   const save = async () => {
+    if (!providerName.trim()) {
+      toast.error('请填写供应商名称')
+      return
+    }
+    if (isOnline && (!/^https?:\/\/.+/.test(asrBaseUrl.trim()) || !asrModel.trim())) {
+      toast.error('请填写有效的 API 地址和模型名称')
+      return
+    }
     setSaving(true)
     try {
-      if (selectedType === 'groq') {
-        if (!/^https?:\/\/.+/.test(asrBaseUrl.trim())) {
-          toast.error('API 地址需要以 http:// 或 https:// 开头')
-          return
-        }
-        await updateAsrEndpoint({
-          base_url: asrBaseUrl.trim(),
-          api_key: asrApiKey.trim() || undefined,
-          model: asrModel.trim() || undefined,
-        })
-        setAsrApiKey('')
+      const details = { name: providerName.trim(), logo: providerLogo }
+      const connection = {
+        base_url: asrBaseUrl.trim(),
+        model_name: asrModel.trim(),
+        api_key: asrApiKey.trim() || undefined,
       }
+      const provider = isCreate
+        ? await createAsrProvider({ ...details, ...connection })
+        : await updateAsrProvider(selectedType, { ...details, ...(isOnline ? connection : {}) })
+      if (isWhisperType(selectedType) && selectedSize !== config?.whisper_model_size) {
+        await updateTranscriberConfig({
+          transcriber_type: config!.transcriber_type,
+          whisper_model_size: selectedSize,
+        })
+      }
+      selectProvider(provider)
+      await reloadConfig()
+      toast.success(isCreate ? '供应商已添加，可设为默认使用' : '供应商已保存')
+    } catch {
+      toast.error('保存失败')
+    } finally {
+      setSaving(false)
+    }
+  }
 
+  const setDefault = async () => {
+    setSaving(true)
+    try {
       await updateTranscriberConfig({
         transcriber_type: selectedType,
         whisper_model_size: isWhisperType(selectedType) ? selectedSize : undefined,
       })
-      toast.success('转写器配置已保存')
       await reloadConfig()
-      await refreshStatuses()
+      toast.success('默认转写供应商已更新')
     } catch {
-      toast.error('保存失败')
+      toast.error('切换默认供应商失败')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const toggle = async (provider: AsrProvider, enabled: boolean) => {
+    setSaving(true)
+    try {
+      await updateAsrProvider(provider.id, { enabled })
+      await reloadConfig()
+      if (!enabled && provider.id === config?.transcriber_type)
+        toast.info('默认供应商已停用，请选择其他默认供应商')
+    } catch {
+      toast.error('切换启用状态失败')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const removeProvider = async () => {
+    setSaving(true)
+    try {
+      await deleteAsrProvider(selectedType)
+      const data = await getTranscriberConfig()
+      setConfig(data)
+      selectProvider(data.providers.find(p => p.id === data.transcriber_type) || data.providers[0])
+      toast.success('供应商已删除')
+    } catch {
+      toast.error('删除失败')
     } finally {
       setSaving(false)
     }
@@ -313,37 +387,49 @@ export default function TranscriberPage({ embedded = false }: { embedded?: boole
       <StatusIndicator tone="neutral">未下载</StatusIndicator>
     )
 
-  const selectedEngine = config.available_types.find(type => type.value === selectedType)
   const dirty =
-    selectedType !== config.transcriber_type ||
+    isCreate ||
+    providerName.trim() !== selectedProvider?.name ||
+    providerLogo !== selectedProvider?.logo ||
     (isWhisperType(selectedType) && selectedSize !== config.whisper_model_size) ||
-    (selectedType === 'groq' &&
-      (asrBaseUrl.trim() !== (config.resolved_endpoint || '') ||
-        asrModel.trim() !== (config.resolved_model || '') ||
+    (isOnline &&
+      (asrBaseUrl.trim() !== selectedProvider?.base_url ||
+        asrModel.trim() !== selectedProvider?.model_name ||
         Boolean(asrApiKey.trim())))
   const engineList = (
     <Panel padded={false}>
-      <div className={listCard} aria-label="转写引擎">
-        {config.available_types.map(type => (
-          <ListRow key={type.value} selected={selectedType === type.value}>
+      <div className={listCard} aria-label="转写供应商">
+        <Button variant="secondary" onPress={startCreate} isDisabled={saving} styles={maxForm}>
+          <AddIcon />
+          <Text>添加供应商</Text>
+        </Button>
+        {config.providers.map(provider => (
+          <ListRow key={provider.id} selected={selectedType === provider.id}>
             <ListRowButton
-              aria-current={selectedType === type.value ? 'true' : undefined}
-              onClick={() => setSelectedType(type.value)}
+              aria-current={selectedType === provider.id ? 'true' : undefined}
+              onClick={() => selectProvider(provider)}
               disabled={saving}
             >
-              <ProviderMark name="custom" size={20} />
+              <AsrMark name={provider.logo} />
               <ListRowBody>
-                <ListRowTitle>{type.label}</ListRowTitle>
+                <ListRowTitle>{provider.name}</ListRowTitle>
                 <ListRowMeta>
-                  {type.value === 'groq'
-                    ? hostOf(config.resolved_endpoint || '') || '未配置地址'
-                    : isWhisperType(type.value)
+                  {provider.engine === 'groq'
+                    ? hostOf(provider.base_url) || '未配置地址'
+                    : isWhisperType(provider.id)
                       ? '本地模型'
-                      : '在线服务'}
-                  {config.transcriber_type === type.value ? ' · 当前使用' : ''}
+                      : '内置在线服务'}
+                  {config.transcriber_type === provider.id ? ' · 默认' : ''}
+                  {!provider.enabled ? ' · 已停用' : ''}
                 </ListRowMeta>
               </ListRowBody>
             </ListRowButton>
+            <Switch
+              aria-label={`启用 ${provider.name}`}
+              isSelected={provider.enabled}
+              isDisabled={saving}
+              onChange={enabled => toggle(provider, enabled)}
+            />
           </ListRow>
         ))}
       </div>
@@ -354,17 +440,45 @@ export default function TranscriberPage({ embedded = false }: { embedded?: boole
     <ListDetail list={engineList}>
       <div className={pageStack}>
         <Section
-          title="转写引擎"
-          description="保存后对新任务立即生效。在线引擎无需下载模型，本地 Whisper 首次使用需要下载。"
+          title="转写供应商"
+          description="可添加多家服务，启用后设为默认。新任务使用默认供应商，个人 ASR 凭据仍按站点策略优先生效。"
         >
           <div className={maxForm}>
             <Panel>
               <div className={detailHead}>
-                <ProviderMark name="custom" size={20} />
-                <h2 className={detailTitle}>{selectedEngine?.label || '转写引擎'}</h2>
+                <AsrMark name={providerLogo} />
+                <h2 className={detailTitle}>
+                  {isCreate ? '添加供应商' : selectedProvider?.name || '转写供应商'}
+                </h2>
               </div>
               <div className={formStack}>
-                {selectedType === 'groq' && (
+                <TextField
+                  label="供应商名称"
+                  value={providerName}
+                  onChange={setProviderName}
+                  isRequired
+                  isDisabled={saving}
+                  styles={maxForm}
+                />
+                <Picker
+                  label="图标"
+                  selectedKey={providerLogo}
+                  onSelectionChange={key => setProviderLogo(String(key))}
+                  isDisabled={saving}
+                >
+                  {ASR_ICONS.map(icon => (
+                    <PickerItem key={icon.id} id={icon.id} textValue={icon.label}>
+                      <AsrMark name={icon.id} />
+                      <Text>{icon.label}</Text>
+                    </PickerItem>
+                  ))}
+                </Picker>
+                {selectedProvider && !selectedProvider.enabled && (
+                  <Notice variant="notice">
+                    <Text>此供应商已停用。启用后才能设为默认或用于转写。</Text>
+                  </Notice>
+                )}
+                {isOnline && (
                   <>
                     <Notice variant="informative">
                       <Text>
@@ -376,7 +490,7 @@ export default function TranscriberPage({ embedded = false }: { embedded?: boole
                       apiKey={asrApiKey}
                       onApiKeyChange={setAsrApiKey}
                       keyPlaceholder={
-                        config.has_asr_key ? '已配置，留空则不修改' : '尚未配置，请填写'
+                        selectedProvider?.has_api_key ? '已配置，留空则不修改' : '尚未配置，请填写'
                       }
                       baseUrl={asrBaseUrl}
                       onBaseUrlChange={setAsrBaseUrl}
@@ -415,7 +529,7 @@ export default function TranscriberPage({ embedded = false }: { embedded?: boole
                   value={
                     isWhisperType(selectedType)
                       ? '本地转写引擎'
-                      : selectedType === 'groq'
+                      : isOnline
                         ? '在线服务（OpenAI 兼容）'
                         : '在线转写引擎'
                   }
@@ -440,19 +554,24 @@ export default function TranscriberPage({ embedded = false }: { embedded?: boole
                     }}
                   >
                     <Button
-                      variant="accent"
+                      variant="secondary"
                       onPress={() => {
                         if (needsModelDownload()) {
                           setConfirmOpen(true)
                           return
                         }
-                        void save()
+                        void setDefault()
                       }}
                       isDisabled={
-                        saving || !dirty || (selectedType === 'mlx-whisper' && !mlxAvailable)
+                        saving ||
+                        isCreate ||
+                        dirty ||
+                        !selectedProvider?.enabled ||
+                        selectedType === config.transcriber_type ||
+                        (selectedType === 'mlx-whisper' && !mlxAvailable)
                       }
                     >
-                      {saving ? '保存中…' : '保存修改'}
+                      {selectedType === config.transcriber_type ? '默认使用' : '设为默认'}
                     </Button>
                     <AlertDialog
                       title="所选模型尚未下载"
@@ -461,14 +580,40 @@ export default function TranscriberPage({ embedded = false }: { embedded?: boole
                       cancelLabel="取消"
                       onPrimaryAction={() => {
                         setConfirmOpen(false)
-                        void save()
+                        void setDefault()
                       }}
                     >
-                      保存后，请在下方下载 {selectedSize} 模型（
+                      切换后，请在下方下载 {selectedSize} 模型（
                       {SIZE_HINT[selectedSize] || '体积未知'}）。
                       下载完成前，需要本地转写的新任务会提示模型未就绪。
                     </AlertDialog>
                   </DialogTrigger>
+                  {selectedProvider && !selectedProvider.builtin && (
+                    <DialogTrigger>
+                      <Button
+                        variant="negative"
+                        isDisabled={saving || selectedType === config.transcriber_type}
+                      >
+                        删除供应商
+                      </Button>
+                      <AlertDialog
+                        title="删除供应商"
+                        variant="destructive"
+                        primaryActionLabel="删除"
+                        cancelLabel="取消"
+                        onPrimaryAction={() => void removeProvider()}
+                      >
+                        删除 {selectedProvider.name} 及其连接凭据？历史笔记会保留。
+                      </AlertDialog>
+                    </DialogTrigger>
+                  )}
+                  <Button
+                    variant="accent"
+                    onPress={() => void save()}
+                    isDisabled={saving || !dirty}
+                  >
+                    {saving ? '保存中…' : isCreate ? '添加供应商' : '保存修改'}
+                  </Button>
                 </div>
               </div>
             </Panel>

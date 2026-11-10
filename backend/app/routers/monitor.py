@@ -440,7 +440,12 @@ def _asr_config() -> dict:
 
     ttype = (cfg.get("transcriber_type") or "").strip()
     model_size = cfg.get("whisper_model_size")
-    groq_model = cfg.get("groq_model")
+    from app.services.asr_providers import AsrProviderService
+    try:
+        entry = AsrProviderService.require_enabled(ttype)
+    except ValueError as exc:
+        return {"kind": "unknown", "transcriber_type": ttype, "ready": False, "reason": str(exc)}
+    groq_model = entry["model_name"]
 
     if ttype in ("fast-whisper", "mlx-whisper"):
         return {
@@ -458,11 +463,11 @@ def _asr_config() -> dict:
             "ready": True,
             "note": "在线引擎，端点与密钥由代码内置，不依赖供应商配置",
         }
-    if ttype == "groq":
+    if entry["engine"] == "groq":
         return {
             "kind": "provider",
             "transcriber_type": ttype,
-            "provider_id": "groq",
+            "provider_id": ttype,
             "model": groq_model or None,
             "ready": bool(readiness.get("ready")),
             "reason": readiness.get("reason") or None,
@@ -492,18 +497,11 @@ def monitor_status(admin: User = Depends(require_admin)):
     asr_provider: Optional[dict] = None
     if asr_cfg.get("kind") == "provider":
         try:
-            db = SessionLocal()
-            try:
-                row = db.query(Provider).filter(Provider.id == "groq").first()
-                if row is not None:
-                    asr_provider = {
-                        "id": row.id,
-                        "name": row.name,
-                        "base_url": row.base_url,
-                        "api_key": reveal_api_key(row.api_key),
-                    }
-            finally:
-                db.close()
+            from app.services.asr_providers import AsrProviderService
+            id_ = asr_cfg["provider_id"]
+            entry = AsrProviderService.get(id_)
+            credential = AsrProviderService.credential(id_)
+            asr_provider = {"id": id_, "name": entry["name"], "base_url": credential.base_url, "api_key": credential.api_key}
         except Exception as exc:
             logger.warning(f"读取转写供应商失败: {exc}")
 

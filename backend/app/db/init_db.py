@@ -6,6 +6,7 @@ from app.db.models.api_keys import ApiKey  # noqa: F401
 from app.db.models.user_credentials import UserCredential  # noqa: F401  BYOK
 from app.db.models.user_cookies import UserCookie  # noqa: F401  BYOK Cookie
 from app.db.models.task_attempts import TaskAttempt  # noqa: F401
+from app.db.models.asr_providers import AsrProvider  # noqa: F401
 from app.db.engine import get_engine, Base
 
 

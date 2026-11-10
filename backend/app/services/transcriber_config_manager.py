@@ -1,5 +1,6 @@
 import json
 import os
+import tempfile
 from pathlib import Path
 from typing import Optional, Dict, Any
 
@@ -21,8 +22,16 @@ class TranscriberConfigManager:
             return {}
 
     def _write(self, data: Dict[str, Any]):
-        with self.path.open("w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        fd, name = tempfile.mkstemp(prefix='.transcriber-', dir=self.path.parent)
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(name, self.path)
+        finally:
+            if os.path.exists(name):
+                os.unlink(name)
 
     def get_config(self) -> Dict[str, Any]:
         """获取当前转写器配置，fallback 到环境变量默认值。

@@ -1,4 +1,6 @@
 import type {
+  AsrProvider,
+  AsrProviderInput,
   DeployStatus,
   GenerateRequest,
   Model,
@@ -152,6 +154,16 @@ export async function deleteModel(modelId: number | string): Promise<void> {
 }
 
 // ---- Transcriber ----
+export function createAsrProvider(data: AsrProviderInput): Promise<AsrProvider> {
+  return request('/api/asr/providers', { method: 'POST', body: JSON.stringify(data) })
+}
+export function updateAsrProvider(id: string, data: Partial<AsrProviderInput>): Promise<AsrProvider> {
+  return request(`/api/asr/providers/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(data) })
+}
+export function deleteAsrProvider(id: string) {
+  return request(`/api/asr/providers/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
 export function updateAsrEndpoint(data: { base_url: string, api_key?: string, model?: string }) {
   return request('/api/update_asr_endpoint', { method: 'POST', body: JSON.stringify(data) })
 }

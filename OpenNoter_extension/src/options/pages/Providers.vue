@@ -25,7 +25,7 @@ const isBuiltIn = computed(() => editing.value?.type === 'built-in')
 
 async function refresh() {
   try {
-    providers.value = await getProviders()
+    providers.value = (await getProviders()).filter(provider => provider.id !== 'groq')
   }
   catch (e) {
     message.value = { kind: 'err', text: `加载供应商失败：${(e as Error).message}` }

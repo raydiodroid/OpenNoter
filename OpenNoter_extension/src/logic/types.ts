@@ -170,7 +170,7 @@ export interface ProviderCreatePayload {
   logo?: string
 }
 
-export type TranscriberType = 'fast-whisper' | 'bcut' | 'kuaishou' | 'groq' | 'mlx-whisper'
+export type TranscriberType = 'fast-whisper' | 'bcut' | 'kuaishou' | 'groq' | 'mlx-whisper' | `asr_${string}`
 export type WhisperModelSize = 'tiny' | 'base' | 'small' | 'medium' | 'large-v3' | 'large-v3-turbo'
 
 export interface TranscriberOption {
@@ -178,7 +178,21 @@ export interface TranscriberOption {
   label: string
 }
 
+export interface AsrProvider {
+  id: TranscriberType
+  name: string
+  engine: string
+  logo: string
+  base_url: string
+  model_name: string
+  enabled: boolean
+  builtin: boolean
+  has_api_key: boolean
+}
+export type AsrProviderInput = Pick<AsrProvider, 'name' | 'logo' | 'base_url' | 'model_name'> & { api_key?: string, enabled?: boolean }
+
 export interface TranscriberConfig {
+  providers: AsrProvider[]
   resolved_endpoint?: string
   resolved_model?: string
   has_asr_key?: boolean
