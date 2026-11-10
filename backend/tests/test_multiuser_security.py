@@ -84,9 +84,18 @@ class U:
 
 
 def _status(notes: Path, task_id: str, payload: dict):
-    (notes / f"{task_id}.status.json").write_text(
-        json.dumps(payload, ensure_ascii=False), encoding="utf-8"
-    )
+    from app.db.init_db import init_db
+    from app.db.engine import SessionLocal
+    from app.db.models.users import User
+    from app.services.task_service import TaskService
+    init_db()
+    owner = payload.get("user_id")
+    with SessionLocal.begin() as db:
+        if owner is not None and db.get(User, owner) is None:
+            db.add(User(id=owner, email=f"u{owner}@example.com"))
+    service = TaskService(notes)
+    attempt = service.claim(task_id, user_id=owner, platform="test", video_url="test", request={}, retry=False)
+    service.update(task_id, payload["status"], payload.get("message"), attempt_id=attempt)
 
 
 # ---------------------------------------------------------------------------
@@ -159,6 +168,7 @@ def quota_mod(tmp_path, monkeypatch):
     for name in saved:
         sys.modules.pop(name, None)
 
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'quota.db'}")
     notes = tmp_path / "nr"
     notes.mkdir()
     monkeypatch.setenv("NOTE_OUTPUT_DIR", str(notes))
@@ -166,6 +176,8 @@ def quota_mod(tmp_path, monkeypatch):
     try:
         _install_app_namespace()
         from app.services import quota
+        from app.db.init_db import init_db
+        init_db()
 
         monkeypatch.setattr(quota, "_note_dir", lambda: notes, raising=False)
         yield quota, notes

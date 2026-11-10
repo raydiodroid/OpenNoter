@@ -1,3 +1,4 @@
+import { setSessionIdentity } from '@/lib/sessionScope'
 import { create } from 'zustand'
 import { getAuthConfig, getMe, login as apiLogin, logout as apiLogout, type IUser } from '@/services/auth'
 import { getAccessToken, setAccessToken, setUnauthorizedHandler } from '@/lib/api'
@@ -15,6 +16,8 @@ interface AuthState {
   refresh: () => Promise<void>
 }
 
+let authOperation = 0
+
 export const useAuthStore = create<AuthState>(set => ({
   ready: false,
   enforced: false,
@@ -22,8 +25,10 @@ export const useAuthStore = create<AuthState>(set => ({
   user: null,
 
   init: async () => {
+    const operation = ++authOperation
     try {
       const conf = await getAuthConfig()
+      if (operation !== authOperation) return
       set({ enforced: conf.enforced, oidcEnabled: conf.oidc_enabled })
       // 供 axios 拦截器判断是否该在 401 时跳登录（模块间避免循环依赖）
       ;(window as unknown as { __OPENNOTER_AUTH_ENFORCED__?: boolean }).__OPENNOTER_AUTH_ENFORCED__ =
@@ -35,43 +40,65 @@ export const useAuthStore = create<AuthState>(set => ({
       // 在没有 token 时不必强求 getMe 成功 —— 失败即视为未登录（见 catch）。
       try {
         const me = await getMe()
+        if (operation !== authOperation) return
+        setSessionIdentity(me.id)
         set({ user: me })
       } catch {
+        if (operation !== authOperation) return
+        setSessionIdentity(conf.enforced ? null : 'anonymous')
         set({ user: null })
       }
     } catch {
-      // 后端不可达或老版本没有 /auth/config，按「不强制」处理，避免挡住主流程
+      if (operation !== authOperation) return
+      // 认证配置不可达时保持锁定，避免把未知身份当成匿名并加载缓存。
       ;(window as unknown as { __OPENNOTER_AUTH_ENFORCED__?: boolean }).__OPENNOTER_AUTH_ENFORCED__ =
-        false
-      set({ enforced: false, user: null })
+        true
+      setSessionIdentity(null)
+      set({ enforced: true, user: null })
     } finally {
-      set({ ready: true })
+      if (operation === authOperation) set({ ready: true })
     }
   },
 
   login: async (email, password) => {
+    const operation = ++authOperation
     const res = await apiLogin(email, password)
+    if (operation !== authOperation) return
     // 登录接口同时返回 token 与 Set-Cookie。Web 端靠 Cookie 即可；
     // 桌面端（tauri://localhost 跨站 + SameSite=Lax）带不上 Cookie，
     // 必须把 token 存进内存，由拦截器以 Authorization: Bearer 下发（F1）。
     setAccessToken(res.token ?? null)
+    setSessionIdentity(res.user.id)
     set({ user: res.user })
   },
 
   logout: async () => {
+    const operation = ++authOperation
+    setSessionIdentity(null)
+    let succeeded = false
     try {
       await apiLogout()
+      succeeded = true
     } finally {
       // 内存 token 必须一并清掉，否则退出后仍带着旧凭据
-      setAccessToken(null)
-      set({ user: null })
+      if (operation === authOperation) {
+        setAccessToken(null)
+        if (succeeded && !useAuthStore.getState().enforced) setSessionIdentity('anonymous')
+        set({ user: null })
+      }
     }
   },
 
   refresh: async () => {
+    const operation = authOperation
     try {
-      set({ user: await getMe() })
+      const me = await getMe()
+      if (operation !== authOperation) return
+      setSessionIdentity(me.id)
+      set({ user: me })
     } catch {
+      if (operation !== authOperation) return
+      setSessionIdentity(null)
       set({ user: null })
     }
   },
@@ -85,6 +112,8 @@ export const isLoggedIn = () => Boolean(useAuthStore.getState().user)
 // 异步的 setState 会赶不上，导致「token 清了但 user 还在」→ AuthGuard 认为仍登录
 // → 不跳登录页、可所有请求都 401。这是 F1 原症状的变体，必须在模块加载时就挂好。
 setUnauthorizedHandler(() => {
+  authOperation++
+  setSessionIdentity(null)
   setAccessToken(null)
   useAuthStore.setState({ user: null })
 })

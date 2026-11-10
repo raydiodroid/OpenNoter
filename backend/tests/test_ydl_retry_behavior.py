@@ -11,6 +11,9 @@ MODULE_PATH = ROOT / "app" / "downloaders" / "youtube_downloader.py"
 
 def _stub(monkeypatch, name, **attrs):
     module = types.ModuleType(name)
+    directory = ROOT.joinpath(*name.split("."))
+    if directory.is_dir():
+        module.__path__ = [str(directory)]
     for key, value in attrs.items():
         setattr(module, key, value)
     monkeypatch.setitem(sys.modules, name, module)

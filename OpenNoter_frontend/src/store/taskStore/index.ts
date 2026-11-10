@@ -1,8 +1,12 @@
+import { onSessionChange, sessionEpoch, sessionScope } from '@/lib/sessionScope'
 import { create } from 'zustand'
+import { toast } from '@/lib/toast'
 import { createJSONStorage, persist } from 'zustand/middleware'
 import { v4 as uuidv4 } from 'uuid'
 import { del, get, set } from 'idb-keyval'
 import type { AudioMeta, MarkdownVersion, Task, TaskFormData, TaskStatus, Transcript } from '@/types'
+
+let scopeHydration: Promise<void> = Promise.resolve()
 
 const emptyTranscript = (): Transcript => ({
   full_text: '',
@@ -42,6 +46,9 @@ function normalizeMarkdown(task: any): MarkdownVersion[] {
 function normalizeTask(task: any): Task {
   return {
     id: task.id,
+    attemptId: task.attemptId,
+    needsRefresh: task.needsRefresh,
+    message: task.message,
     status: task.status === 'FAILD' ? 'FAILED' : task.status,
     markdown: normalizeMarkdown(task),
     transcript: task.transcript ?? emptyTranscript(),
@@ -116,32 +123,38 @@ export const useTaskStore = create<TaskState>()(
       lastSyncedAt: null,
 
       syncFromServer: async () => {
+        if (!sessionScope() || useTaskStore.getState().syncing) return
+        const epoch = sessionEpoch()
+        await scopeHydration
+        if (epoch !== sessionEpoch()) return
         const { listTasks } = await import('@/services/note')
         set({ syncing: true })
         try {
-          const res = await listTasks({ limit: 200 })
-          const remote = res?.items ?? []
+          const remote: Awaited<ReturnType<typeof listTasks>>['items'] = []
+          let offset = 0
+          while (true) {
+            const res = await listTasks({ limit: 200, offset, include_deleted: true })
+            if (epoch !== sessionEpoch()) return
+            remote.push(...res.items)
+            offset += res.items.length
+            if (offset >= res.total) break
+            if (res.items.length === 0) throw new Error('任务列表分页不完整')
+          }
           set(state => {
             const localById = new Map(state.tasks.map(t => [t.id, t]))
             const remoteIds = new Set(remote.map(r => r.task_id))
-            const running = new Set([
-              'PENDING',
-              'PARSING',
-              'DOWNLOADING',
-              'TRANSCRIBING',
-              'SUMMARIZING',
-              'FORMATTING',
-              'SAVING',
-            ])
-
             const merged: Task[] = []
 
             // 1) 服务端有的：沿用本地已有内容，否则建占位条目
-            for (const r of remote) {
+            for (const r of new Map(remote.map(r => [r.task_id, r])).values()) {
+              if (r.deleted) continue
               const local = localById.get(r.task_id)
               if (local) {
                 merged.push({
                   ...local,
+                  attemptId: r.attempt_id ?? local.attemptId,
+                  needsRefresh: local.needsRefresh || Boolean(r.attempt_id && r.attempt_id !== local.attemptId),
+                  formData: { ...local.formData, ...r.request },
                   status: (r.status as TaskStatus) || local.status,
                   // 同步服务端的 message：失败原因要能跨刷新保留
                   // （否则用户刷新页面后，失败页只剩一句泛泛提示）。
@@ -150,6 +163,7 @@ export const useTaskStore = create<TaskState>()(
               } else {
                 merged.push({
                   id: r.task_id,
+                  attemptId: r.attempt_id ?? undefined,
                   status: (r.status as TaskStatus) || 'PENDING',
                   message: r.message ?? undefined,
                   markdown: [],
@@ -165,22 +179,23 @@ export const useTaskStore = create<TaskState>()(
                     provider_id: '',
                     style: '',
                     extras: '',
+                    ...r.request,
                   } as TaskFormData,
                 })
               }
             }
 
-            // 2) 本地有、服务端没有的：正在跑的保留，已结束的移除
+            // 2) 缺席不等于删除：分页期间列表可能变化，只采纳明确的删除标记。
             for (const t of state.tasks) {
               if (remoteIds.has(t.id)) continue
-              if (running.has(t.status)) merged.push(t)
+              merged.push(t)
             }
 
-            return { tasks: merged, syncing: false, lastSyncedAt: new Date().toISOString() }
+            return { tasks: merged, currentTaskId: merged.some(t => t.id === state.currentTaskId) ? state.currentTaskId : null, syncing: false, lastSyncedAt: new Date().toISOString() }
           })
         } catch {
           // 离线/未登录：保留本地缓存，不打断使用
-          set({ syncing: false })
+          if (epoch === sessionEpoch()) set({ syncing: false })
         }
       },
 
@@ -221,6 +236,8 @@ export const useTaskStore = create<TaskState>()(
             return {
               ...task,
               status: 'SUCCESS',
+              needsRefresh: false,
+              message: '',
               markdown: sameContent ? task.markdown : [version, ...task.markdown],
               transcript,
               audioMeta: { ...task.audioMeta, ...audioMeta },
@@ -229,17 +246,21 @@ export const useTaskStore = create<TaskState>()(
         })),
 
       removeTask: id => {
-        set(state => ({
-          tasks: state.tasks.filter(t => t.id !== id),
-          currentTaskId: state.currentTaskId === id ? null : state.currentTaskId,
-        }))
-        // 动态 import 避免 store ↔ service 的循环依赖
-        import('@/services/note')
-          .then(({ deleteTask }) => deleteTask(id).catch(() => undefined))
-          .catch(() => undefined)
+        const epoch = sessionEpoch()
+        import('@/services/note').then(async ({ deleteTask }) => {
+          await deleteTask(id)
+          if (epoch !== sessionEpoch()) return
+          set(state => ({
+            tasks: state.tasks.filter(t => t.id !== id),
+            currentTaskId: state.currentTaskId === id ? null : state.currentTaskId,
+          }))
+        }).catch((err: unknown) => {
+          if (epoch === sessionEpoch()) toast.error((err as Error).message || '删除任务失败，请重试')
+        })
       },
 
       retryTask: async id => {
+        const epoch = sessionEpoch()
         const task = useTaskStore.getState().tasks.find(t => t.id === id)
         if (!task) return
         // 先乐观置为 PENDING，避免用户连点两次
@@ -250,6 +271,7 @@ export const useTaskStore = create<TaskState>()(
           const { generateNote } = await import('@/services/note')
           await generateNote({ ...task.formData, task_id: id })
         } catch (err) {
+          if (epoch !== sessionEpoch()) return
           // 提交失败：退回 FAILED，让用户能看到并再次重试
           set(state => ({
             tasks: state.tasks.map(t =>
@@ -263,15 +285,19 @@ export const useTaskStore = create<TaskState>()(
       setCurrentTask: id => set({ currentTaskId: id }),
 
       hydrateTask: async id => {
+        const epoch = sessionEpoch()
         const task = useTaskStore.getState().tasks.find(t => t.id === id)
         // 已经有正文的不补（本地缓存的正常路径，零额外请求）；
         // 状态不是 SUCCESS 的交给常规轮询，不在这里抢。
-        if (!task || task.markdown.length > 0 || task.status !== 'SUCCESS') return false
+        if (!task || (task.markdown.length > 0 && !task.needsRefresh) || task.status !== 'SUCCESS') return false
 
         // 动态 import 与 retryTask / removeTask 同范式，避免 store ↔ service 循环依赖
         const { getTaskStatus } = await import('@/services/note')
         try {
           const res = await getTaskStatus(id)
+          if (epoch !== sessionEpoch()) return false
+          const latest = useTaskStore.getState().tasks.find(t => t.id === id)
+          if (!latest || (latest.attemptId !== task.attemptId && res.attempt_id !== latest.attemptId)) return false
           if (res?.status === 'SUCCESS' && res.result?.markdown) {
             // 走既有的 markSuccess：它按内容去重（`markdown.some(v => v.content === ...)`），
             // 重复补拉不会产生重复版本；markdown 结构仍是 MarkdownVersion[]，持久化格式不变。
@@ -282,11 +308,10 @@ export const useTaskStore = create<TaskState>()(
             })
             return true
           }
-          // SUCCESS 但拿不到正文：结果文件确实不存在（F4 的 SUCCESS 早于落盘窗口、
-          // 或已被删除）。退回 SAVING 让轮询再等一轮，而不是永久空白。
+          // SUCCESS 但拿不到正文：显示终态错误，允许用户重试。
           // 次数上限由调用方（useTaskPolling）控制，这里不做循环。
-          if (res?.status === 'SUCCESS') {
-            useTaskStore.getState().updateTask(id, { status: 'SAVING' as TaskStatus })
+          if (res?.status === 'SUCCESS' || res?.status === 'FAILED') {
+            useTaskStore.getState().updateTask(id, { status: 'FAILED', message: res.message || '笔记内容缺失，请重新生成' })
           }
           return false
         } catch {
@@ -298,7 +323,9 @@ export const useTaskStore = create<TaskState>()(
       reset: () => set({ tasks: [], currentTaskId: null }),
     }),
     {
-      name: 'task-storage',
+      name: 'task-storage:locked',
+      skipHydration: true,
+      partialize: state => ({ tasks: state.tasks, currentTaskId: state.currentTaskId }),
       version: 2,
       migrate: (persisted: any) => {
         const state = persisted as { tasks?: any[]; currentTaskId?: string | null }
@@ -308,7 +335,11 @@ export const useTaskStore = create<TaskState>()(
         }
       },
       storage: createJSONStorage(() => ({
-        getItem: async (name: string) => (await get(name)) ?? null,
+        getItem: async (name: string) => {
+          const epoch = sessionEpoch()
+          const value = await get(name)
+          return epoch === sessionEpoch() ? value ?? null : null
+        },
         setItem: async (name: string, value: string) => {
           await set(name, value)
         },
@@ -325,3 +356,14 @@ export const selectCurrentTask = (state: TaskState) =>
 
 export const isRunningStatus = (status: TaskStatus) =>
   status !== 'SUCCESS' && status !== 'FAILED'
+
+// Legacy unscoped caches are deliberately not assigned to the next logged-in user.
+function switchTaskScope() {
+  const scope = sessionScope()
+  useTaskStore.persist.setOptions({ name: 'task-storage:locked' })
+  useTaskStore.setState({ tasks: [], currentTaskId: null, syncing: false, lastSyncedAt: null })
+  useTaskStore.persist.setOptions({ name: `task-storage:${scope ?? 'locked'}` })
+  scopeHydration = scope ? Promise.resolve(useTaskStore.persist.rehydrate()) : Promise.resolve()
+}
+onSessionChange(switchTaskScope)
+if (sessionScope()) switchTaskScope()

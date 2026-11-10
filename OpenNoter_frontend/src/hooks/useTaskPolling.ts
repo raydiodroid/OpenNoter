@@ -1,3 +1,5 @@
+import { useAuthStore } from '@/store/authStore'
+import { sessionEpoch, sessionScope } from '@/lib/sessionScope'
 import { useEffect } from 'react'
 import { isRunningStatus, useTaskStore } from '@/store/taskStore'
 import { getTaskStatus } from '@/services/note'
@@ -26,10 +28,16 @@ const HYDRATE_MAX_ATTEMPTS = 3
  * 只看「本地有没有正文」，**不看 `has_result`** —— 该字段在 `list_tasks_for_user` 的
  * DB 分支不存在，依赖它会让判断恒假（见方案 F10 的说明）。
  */
-const taskNeedsHydration = (task: Task) => task.status === 'SUCCESS' && task.markdown.length === 0
+const taskNeedsHydration = (task: Task) => task.status === 'SUCCESS' && (task.markdown.length === 0 || task.needsRefresh)
 
 export const useTaskPolling = (interval = 3000) => {
+  const userId = useAuthStore(s => s.user?.id)
+  const ready = useAuthStore(s => s.ready)
+  const enforced = useAuthStore(s => s.enforced)
   useEffect(() => {
+    if (!ready || !sessionScope() || (enforced && !userId)) return
+    const epoch = sessionEpoch()
+    let cancelled = false
     let busy = false
     const authFailCounts = new Map<string, number>()
     // taskId → 已尝试补拉次数。用 Map 而非 Set，保证「后端落盘慢一拍」时还能重试几次。
@@ -43,7 +51,7 @@ export const useTaskPolling = (interval = 3000) => {
     }, SYNC_INTERVAL)
 
     const tick = async () => {
-      if (busy) return
+      if (busy || cancelled || epoch !== sessionEpoch()) return
       const { tasks, updateTask, markSuccess, hydrateTask } = useTaskStore.getState()
       const active = tasks.filter(task => isRunningStatus(task.status))
       // 占位条目：syncFromServer 建的空正文条目（远端 SUCCESS、本地 markdown 为空）。
@@ -54,16 +62,18 @@ export const useTaskPolling = (interval = 3000) => {
       busy = true
       try {
         for (const task of placeholders) {
-          const tried = hydrateAttempts.get(task.id) ?? 0
+          const tried = hydrateAttempts.get(`${task.id}:${task.attemptId}`) ?? 0
           // 超过上限：认定服务端结果确实不存在，别再打接口
           if (tried >= HYDRATE_MAX_ATTEMPTS) continue
-          hydrateAttempts.set(task.id, tried + 1)
-          if (await hydrateTask(task.id)) hydrateAttempts.delete(task.id)
+          hydrateAttempts.set(`${task.id}:${task.attemptId}`, tried + 1)
+          if (await hydrateTask(task.id)) hydrateAttempts.delete(`${task.id}:${task.attemptId}`)
         }
 
         for (const task of active) {
           try {
             const res = await getTaskStatus(task.id)
+            if (cancelled || epoch !== sessionEpoch()) return
+            updateTask(task.id, { attemptId: res.attempt_id ?? task.attemptId })
             authFailCounts.delete(task.id)
             if (res.status === 'SUCCESS' && res.result) {
               markSuccess(task.id, {
@@ -82,9 +92,10 @@ export const useTaskPolling = (interval = 3000) => {
               updateTask(task.id, { status: res.status, message: res.message })
             }
           } catch (err: unknown) {
+            if (cancelled || epoch !== sessionEpoch()) return
             const code = (err as { code?: number })?.code
             // 401/403：鉴权或归属失败，再吞下去只会永远「生成中」
-            if (code === 401 || code === 403) {
+            if (code === 401 || code === 403 || code === 404) {
               const n = (authFailCounts.get(task.id) || 0) + 1
               authFailCounts.set(task.id, n)
               if (n >= AUTH_FAIL_THRESHOLD) {
@@ -109,8 +120,9 @@ export const useTaskPolling = (interval = 3000) => {
     const timer = setInterval(tick, interval)
     tick()
     return () => {
+      cancelled = true
       clearInterval(timer)
       clearInterval(syncTimer)
     }
-  }, [interval])
+  }, [interval, userId, ready, enforced])
 }

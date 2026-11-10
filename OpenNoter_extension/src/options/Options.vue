@@ -1,13 +1,17 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
+import CredentialsPage from './pages/Credentials.vue'
 import GeneralPage from './pages/General.vue'
 import ProvidersPage from './pages/Providers.vue'
 import TranscriberPage from './pages/Transcriber.vue'
 import DownloaderPage from './pages/Downloader.vue'
 import MonitorPage from './pages/Monitor.vue'
+import { activeScope } from '~/logic/storage'
+import { getCurrentUser } from '~/logic/api'
 
 const TABS = [
   { id: 'general', label: '通用', icon: '⚙️', component: GeneralPage },
+  { id: 'credentials', label: '我的凭据', icon: '', component: CredentialsPage },
   { id: 'providers', label: '模型供应商', icon: '🧠', component: ProvidersPage },
   { id: 'transcriber', label: '音频转写配置', icon: '🎙️', component: TranscriberPage },
   { id: 'downloader', label: '下载配置', icon: '🍪', component: DownloaderPage },
@@ -15,6 +19,20 @@ const TABS = [
 ] as const
 
 const activeTab = ref<typeof TABS[number]['id']>('general')
+const isAdmin = ref(false)
+const visibleTabs = computed(() => TABS.filter(t => isAdmin.value || ['general', 'credentials', 'downloader'].includes(t.id)))
+watch(activeScope, async (scope) => {
+  isAdmin.value = false
+  activeTab.value = 'general'
+  if (!scope)
+    return
+  try {
+    const me = await getCurrentUser()
+    if (scope === activeScope.value)
+      isAdmin.value = me.is_superuser
+  }
+  catch { /* API errors remain visible in General. */ }
+}, { immediate: true })
 const ActiveComponent = computed(() => TABS.find(t => t.id === activeTab.value)?.component ?? GeneralPage)
 </script>
 
@@ -22,12 +40,16 @@ const ActiveComponent = computed(() => TABS.find(t => t.id === activeTab.value)?
   <div class="flex h-screen bg-gray-50 text-gray-800">
     <aside class="w-56 shrink-0 border-r bg-white flex flex-col">
       <div class="px-4 py-4 border-b">
-        <div class="text-lg font-bold">OpenNoter</div>
-        <div class="text-xs text-gray-500">浏览器插件设置</div>
+        <div class="text-lg font-bold">
+          OpenNoter
+        </div>
+        <div class="text-xs text-gray-500">
+          浏览器插件设置
+        </div>
       </div>
       <nav class="flex-1 overflow-auto py-2">
         <button
-          v-for="tab in TABS"
+          v-for="tab in visibleTabs"
           :key="tab.id"
           class="w-full text-left px-4 py-2 text-sm flex items-center gap-2 hover:bg-gray-100"
           :class="activeTab === tab.id ? 'bg-blue-50 text-blue-700 font-medium border-l-2 border-blue-500' : 'text-gray-700'"
@@ -43,7 +65,7 @@ const ActiveComponent = computed(() => TABS.find(t => t.id === activeTab.value)?
     </aside>
 
     <main class="flex-1 overflow-auto">
-      <component :is="ActiveComponent" />
+      <component :is="ActiveComponent" :key="activeTab === 'general' ? 'general' : `${activeScope}:${activeTab}`" />
     </main>
   </div>
 </template>

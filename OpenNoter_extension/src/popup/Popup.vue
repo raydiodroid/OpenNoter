@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { connectionKey } from '~/logic/client'
+import { createTaskPoller } from '~/logic/task-poller'
+import { activeScope, settings, settingsReady, tasks, tasksReady, upsertTask } from '~/logic/storage'
 import { detectPlatform } from '~/logic/platform'
-import { settings, settingsReady, tasks, tasksReady, upsertTask } from '~/logic/storage'
 import { generateNote, getTaskStatus, resolveImageUrl } from '~/logic/api'
 import { fetchBilibiliSubtitle } from '~/logic/bilibili-subtitle'
 import { NOTE_FORMATS, NOTE_STYLES, type NoteFormat, type TaskRecord } from '~/logic/types'
@@ -18,8 +20,6 @@ const errorMsg = ref('')
 const activeTaskId = ref<string>('')
 const activeTask = computed<TaskRecord | undefined>(() => tasks.value?.find(t => t.taskId === activeTaskId.value))
 
-let pollTimer: ReturnType<typeof setTimeout> | null = null
-
 async function loadActiveTab() {
   try {
     const [tab] = await browser.tabs.query({ active: true, currentWindow: true })
@@ -32,28 +32,13 @@ async function loadActiveTab() {
   }
 }
 
-async function poll(taskId: string) {
-  try {
-    const res = await getTaskStatus(taskId)
-    upsertTask({
-      taskId,
-      videoUrl: activeTask.value?.videoUrl ?? tabUrl.value,
-      platform: (activeTask.value?.platform ?? platform.value)!,
-      status: res.status,
-      message: res.message,
-      createdAt: activeTask.value?.createdAt ?? Date.now(),
-      updatedAt: Date.now(),
-      result: res.result ?? activeTask.value?.result,
-      title: activeTask.value?.title || normalizeVideoTitle(tabTitle.value),
-    })
-    if (res.status !== 'SUCCESS' && res.status !== 'FAILED')
-      pollTimer = setTimeout(() => poll(taskId), 3000)
+const poller = createTaskPoller(getTaskStatus, (taskId, res) => {
+  const cur = tasks.value.find(t => t.taskId === taskId)
+  if (cur) {
+    upsertTask({ ...cur, status: res.status, message: res.message, result: res.result ?? cur.result, updatedAt: Date.now() })
   }
-  catch (e) {
-    errorMsg.value = (e as Error).message
-    pollTimer = setTimeout(() => poll(taskId), 5000)
-  }
-}
+}, (e) => { errorMsg.value = e.message })
+const poll = poller.start
 
 async function start() {
   errorMsg.value = ''
@@ -61,14 +46,15 @@ async function start() {
     errorMsg.value = '当前页面不是支持的视频链接'
     return
   }
-  if (!settings.value.providerId || !settings.value.modelName) {
-    errorMsg.value = '请先去设置页选择供应商和模型'
+  if (submitting.value)
     return
-  }
+  const connection = connectionKey(settings.value)
   submitting.value = true
   try {
     // B 站：在用户浏览器里直接抓字幕（带本地登录态 cookie），跳过后端的 download_subtitles 与音频转写
     const prefetched = platform.value === 'bilibili' ? await fetchBilibiliSubtitle(tabUrl.value) : null
+    if (connection !== connectionKey(settings.value))
+      return
     const formats = settings.value.formats || []
     const { task_id } = await generateNote({
       video_url: tabUrl.value,
@@ -87,6 +73,8 @@ async function start() {
       grid_size: settings.value.video_understanding ? settings.value.grid_size : undefined,
       prefetched_transcript: prefetched ?? undefined,
     })
+    if (connection !== connectionKey(settings.value))
+      return
     activeTaskId.value = task_id
     upsertTask({
       taskId: task_id,
@@ -103,6 +91,8 @@ async function start() {
     openSidePanel()
   }
   catch (e) {
+    if (connection !== connectionKey(settings.value))
+      return
     errorMsg.value = (e as Error).message
   }
   finally {
@@ -143,10 +133,7 @@ function selectTask(id: string) {
   // 不清的话，快速点几个任务会累加多个 setTimeout 链 —— 每个都在轮询自己的
   // taskId 并写 store，既浪费请求，也让「当前任务」的进度被别的任务回写覆盖。
   // `Sidepanel.vue` 的 selectTask 早就这么做了，这里对齐。
-  if (pollTimer) {
-    clearTimeout(pollTimer)
-    pollTimer = null
-  }
+  poller.stop()
 
   activeTaskId.value = id
   const t = tasks.value?.find(x => x.taskId === id)
@@ -175,8 +162,12 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
-  if (pollTimer)
-    clearTimeout(pollTimer)
+  poller.stop()
+})
+watch(activeScope, () => {
+  poller.stop()
+  activeTaskId.value = ''
+  errorMsg.value = ''
 })
 </script>
 
@@ -187,7 +178,9 @@ onUnmounted(() => {
         <span class="font-semibold text-base">OpenNoter</span>
         <PlatformBadge :platform="platform" />
       </div>
-      <button class="text-xs text-gray-500 hover:text-gray-800" @click="openOptions">设置</button>
+      <button class="text-xs text-gray-500 hover:text-gray-800" @click="openOptions">
+        设置
+      </button>
     </header>
 
     <div class="text-xs text-gray-500 truncate" :title="normalizeVideoTitle(tabTitle) || tabUrl">
@@ -231,7 +224,9 @@ onUnmounted(() => {
       </div>
 
       <details class="text-xs">
-        <summary class="cursor-pointer text-gray-500">高级</summary>
+        <summary class="cursor-pointer text-gray-500">
+          高级
+        </summary>
         <label class="flex flex-col gap-1 mt-2">
           <span class="text-gray-600">额外提示词（追加到 prompt 末尾）</span>
           <textarea
@@ -335,7 +330,9 @@ onUnmounted(() => {
     </section>
 
     <details v-if="(tasks?.length ?? 0) > 0" class="text-xs">
-      <summary class="cursor-pointer text-gray-500">最近任务（{{ tasks!.length }}）</summary>
+      <summary class="cursor-pointer text-gray-500">
+        最近任务（{{ tasks!.length }}）
+      </summary>
       <ul class="mt-1 flex flex-col gap-1 max-h-32 overflow-auto">
         <li
           v-for="t in tasks"

@@ -2,7 +2,6 @@
 import json
 import os
 import uuid
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
@@ -12,9 +11,7 @@ from pydantic import BaseModel, validator, field_validator, model_validator
 from dataclasses import asdict
 
 from app.db.video_task_dao import (
-    get_task_by_id,
     get_task_ids_by_video,
-    delete_task_by_task_id,
 )
 from app.db.models.users import User
 from app.enmus.exception import NoteErrorEnum
@@ -22,7 +19,10 @@ from app.enmus.note_enums import DownloadQuality
 from app.exceptions.note import NoteError
 from app.services.auth import auth_enforced, get_optional_user
 from app.services.model_selection import resolve_model_selection
-from app.services.note import NoteGenerator, logger, transcript_cache_path
+from app.utils.logger import get_logger
+from app.storage.task_files import LocalTaskStorage, cache_fingerprint
+
+logger = get_logger(__name__)
 from app.services.task_serial_executor import task_serial_executor
 from app.services.vector_store import VectorStoreManager
 from app.utils.response import ResponseWrapper as R
@@ -32,12 +32,9 @@ from app.validators.video_url_validator import is_supported_video_url
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import StreamingResponse
 import httpx
-from app.enmus.task_status_enums import TaskStatus
 from app.utils.note_paths import (
     UnsafeTaskId,
     is_safe_task_id,
-    note_file,
-    resolve_under,
     validate_task_id,
 )
 from app.utils.upload_paths import (
@@ -49,9 +46,6 @@ from app.utils.upload_paths import (
     set_upload_owner,
     uploads_dir,
 )
-
-# from app.services.downloader import download_raw_audio
-# from app.services.whisperer import transcribe_audio
 
 router = APIRouter(dependencies=[Depends(get_optional_user)])
 
@@ -264,10 +258,8 @@ def save_note_to_file(task_id: str, note):
     调用方（`run_note_task`）负责把它降级成任务失败，而不是让后台线程静默
     写到一个意料之外的路径上。
     """
-    os.makedirs(NOTE_OUTPUT_DIR, exist_ok=True)
-    target = note_file(NOTE_OUTPUT_DIR, str(task_id), ".json")
-    with open(target, "w", encoding="utf-8") as f:
-        json.dump(asdict(note), f, ensure_ascii=False, indent=2)
+    from app.services.task_service import TaskService
+    TaskService(NOTE_OUTPUT_DIR).save_result(task_id, asdict(note))
 
 
 def _persist_prefetched_transcript(task_id: str, video_url: str, quality, transcript: dict) -> None:
@@ -302,121 +294,27 @@ def _persist_prefetched_transcript(task_id: str, video_url: str, quality, transc
         "segments": cleaned_segments,
     }
 
-    target = transcript_cache_path(task_id, video_url, quality)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    with open(target, "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
-    logger.info(f"已写入客户端预取字幕缓存: {target} ({len(cleaned_segments)} 段)")
-
-
-def _log_task_failure(task_id: str):
-    """返回一个 done-callback：线程池任务抛异常时记日志并标 FAILED。
-
-    F26 的配套：改成 submit 之后，异常不再经过 `future.result()` 传播，
-    如果不显式处理，一次崩溃只会留下一条 concurrent.futures 的默认告警
-    （甚至完全没有），而任务状态会永远停在执行中。
-    """
-
-    def _cb(future):
-        exc = future.exception()
-        if exc is None:
-            return
-        logger.error(f"任务执行异常 (task_id={task_id}): {exc}", exc_info=exc)
-        try:
-            # 用 `__new__` 跳过 `__init__`：构造 NoteGenerator 会去初始化转写器
-            # （拉起 torch/whisper，几百毫秒到几秒），而这里只想写一个状态文件。
-            # `_update_status` 只用到模块级 logger 与 DB 同步，不需要实例状态。
-            gen = NoteGenerator.__new__(NoteGenerator)
-            gen._update_status(  # noqa: SLF001 - 内部方法，此处是唯一安全的降级入口
-                task_id, TaskStatus.FAILED,
-                message=f"任务执行异常: {type(exc).__name__}",
-            )
-        except Exception as inner:  # noqa: BLE001 - 兜底失败也只记日志
-            logger.error(f"标记任务失败时又出错 (task_id={task_id}): {inner}")
-
-    return _cb
+    suffix = f"_{cache_fingerprint(video_url, quality)}_transcript.json"
+    LocalTaskStorage(NOTE_OUTPUT_DIR).write(task_id, payload, suffix)
+    logger.info("已写入客户端预取字幕缓存: %s (%s 段)", task_id, len(cleaned_segments))
 
 
 def run_note_task(task_id: str, video_url: str, platform: str, quality: DownloadQuality,
                   link: bool = False, screenshot: bool = False, model_name: str = None, provider_id: str = None,
                   _format: list = None, style: str = None, extras: str = None, video_understanding: bool = False,
-                  video_interval=0, grid_size=[], user_id: int = None
+                  video_interval=0, grid_size=None, user_id: int = None, attempt_id: str = None
                   ):
 
-    if not model_name or not provider_id:
-        raise HTTPException(status_code=400, detail="请选择模型和提供者")
-
-    # BYOK：把任务归属用户显式传进来。
-    #
-    # **不能用 contextvar**：真正的执行发生在 task_serial_executor 的
-    # ThreadPoolExecutor 线程里，contextvars 在 submit 下不会传播（已验证）。
-    # 这就是为什么 user_id 必须作为参数一路传下去。
-    generator = NoteGenerator(user_id=user_id)
-
-    def _execute_note_task():
-        return generator.generate(
-            video_url=video_url,
-            platform=platform,
-            quality=quality,
-            task_id=task_id,
-            model_name=model_name,
-            provider_id=provider_id,
-            link=link,
-            _format=_format,
-            style=style,
-            extras=extras,
-            screenshot=screenshot,
-            video_understanding=video_understanding,
-            video_interval=video_interval,
-            grid_size=grid_size,
-        )
-
-    def _run_and_finalize():
-        """在**线程池内**完成「生成 → 落盘 → 标成功 → 建索引」全流程。
-
-        F26：把收尾也放进池里，而不是让 `run_note_task`（本身已占一个
-        Starlette BackgroundTask 线程）阻塞等结果。见 `submit()` 的注释。
-        """
-        note = generator.generate(
-            video_url=video_url,
-            platform=platform,
-            quality=quality,
-            task_id=task_id,
-            model_name=model_name,
-            provider_id=provider_id,
-            link=link,
-            _format=_format,
-            style=style,
-            extras=extras,
-            screenshot=screenshot,
-            video_understanding=video_understanding,
-            video_interval=video_interval,
-            grid_size=grid_size,
-        )
-        logger.info(f"Note generated: {task_id}")
-        if not note or not note.markdown:
-            logger.warning(f"任务 {task_id} 执行失败，跳过保存")
-            return
-        # 先落盘再标 SUCCESS（顺序不可颠倒，见 save_and_mark_success 的注释）
-        if not generator.save_and_mark_success(task_id, note, save_note_to_file):
-            return
-
-        # 自动建立向量索引（用于 AI 问答），失败不影响笔记生成
-        try:
-            from app.services.vector_store import VectorStoreManager
-            VectorStoreManager().index_task(task_id)
-        except Exception as e:
-            logger.warning(f"向量索引失败（不影响笔记）: {e}")
-
-    logger.info(f"任务进入执行队列 (task_id={task_id})")
-    # F26：只提交、立即返回。不再 `run()`（那会阻塞 background 线程白等）。
-    future = task_serial_executor.submit(_run_and_finalize)
-    # F49：登记 task_id，供运行期 stale-task reaper 判断「它到底还在不在跑」。
-    # 没有这层登记，reaper 只能看状态文件 —— 那会把正在正常执行的长任务误判成僵尸。
-    task_serial_executor.track(task_id, future)
-    # 兜底：池内未捕获异常必须留下日志，否则会静默消失
-    # （BackgroundTask 的异常会进 ASGI 日志，但线程池里的不会）。
-    future.add_done_callback(_log_task_failure(task_id))
+    from app.services.task_service import TaskService
+    from app.services.task_worker import submit_note
+    state = TaskService(NOTE_OUTPUT_DIR).snapshot(task_id)
+    return submit_note(
+        task_id, user_id=user_id, attempt_id=attempt_id or (state["attempt_id"] if state else None),
+        root=NOTE_OUTPUT_DIR, video_url=video_url, platform=platform, quality=quality,
+        link=link, screenshot=screenshot, model_name=model_name, provider_id=provider_id,
+        _format=_format, style=style, extras=extras, video_understanding=video_understanding,
+        video_interval=video_interval, grid_size=grid_size,
+    )
 
 
 def _ownerless_accessible(user: Optional[User]) -> bool:
@@ -445,16 +343,8 @@ def _ownerless_accessible(user: Optional[User]) -> bool:
 
 
 def _can_access_task(task_id: str, user: Optional[User]) -> bool:
-    """统一的「当前用户能否操作该任务」判定。
-
-    规则：
-      - 有归属：必须登录且 id 匹配；管理员不例外（管理员用管理接口，不走这条）
-      - 无归属：见 `_ownerless_accessible`
-    """
-    owner = _task_owner(task_id)
-    if owner is not None:
-        return bool(user) and owner == user.id
-    return _ownerless_accessible(user)
+    from app.services.task_access import can_access_task
+    return can_access_task(task_id, user, NOTE_OUTPUT_DIR)
 
 
 def _can_access_task_from_payload(payload: dict, user: Optional[User]) -> bool:
@@ -465,42 +355,13 @@ def _can_access_task_from_payload(payload: dict, user: Optional[User]) -> bool:
     return _ownerless_accessible(user)
 
 
-def _task_owner(task_id: str):
-    """读任务归属：先 DB，再状态文件；都没有则视为无归属。
-
-    ## 为什么 DB 优先（安全）
-
-    状态文件在 NOTE_OUTPUT_DIR 里，而历史实现允许客户端自带 task_id 提交任务，
-    于是「请求内写出的 `{task_id}.status.json`」成了可被攻击者影响的数据源。
-    DB 行只有在任务真正创建时才会插入，攻击者无法凭空造出别人的归属，所以
-    判 ACL 时以 DB 为准；文件只作为「DB 还没这一行」时的兼容回退（老部署）。
-
-    两个数据源都要过 `note_file()` 沙箱：越界 task_id 直接视为「查不到」，
-    不读目录外的文件。
-    """
-    try:
-        row = get_task_by_id(task_id)
-        if row is not None and getattr(row, "user_id", None) is not None:
-            return row.user_id
-    except Exception:
-        pass
-
-    try:
-        status_path = note_file(NOTE_OUTPUT_DIR, str(task_id), ".status.json")
-    except UnsafeTaskId:
-        return None
-    if status_path.exists():
-        try:
-            with open(status_path, "r", encoding="utf-8") as f:
-                owner = json.load(f).get("user_id")
-            if owner is not None:
-                return owner
-        except Exception:
-            pass
-    return None
-
-
 def _purge_task(task_id: str) -> tuple[list[str], bool]:
+    from app.services.quota import _submit_lock
+    with _submit_lock:
+        return _purge_task_locked(task_id)
+
+
+def _purge_task_locked(task_id: str) -> tuple[list[str], bool]:
     """清掉一个任务的落盘文件、指纹缓存、向量索引和数据库记录。
 
     返回 (被删掉的文件列表, 数据库里是否有记录)。
@@ -516,65 +377,24 @@ def _purge_task(task_id: str) -> tuple[list[str], bool]:
     glob 阶段只用**已校验**的 task_id 组 pattern（`Path.glob` 对绝对路径 pattern
     会抛 NotImplementedError，也不该接受）。
     """
-    removed: list[str] = []
-    note_dir = Path(NOTE_OUTPUT_DIR)
-
+    from app.services.task_service import TaskService, RUNNING
     try:
-        validate_task_id(task_id)
+        state = TaskService(NOTE_OUTPUT_DIR).snapshot(task_id)
     except UnsafeTaskId:
-        # 越界 task_id 不可能对应一个真实任务：跳过文件清理，只负责删 DB 行。
-        logger.warning(f"拒绝清理越界 task_id 的文件: {task_id!r}")
-        had_row = delete_task_by_task_id(task_id)
-        return removed, had_row
-
-    exact_names = (
-        f"{task_id}.status.json",
-        f"{task_id}.json",
-        f"{task_id}_transcript.json",
-        f"{task_id}_audio.json",
-        f"{task_id}_markdown.md",
-    )
-    candidates: list[Path] = []
-    for name in exact_names:
-        try:
-            candidates.append(resolve_under(note_dir, name))
-        except UnsafeTaskId:  # 兜底：理论上 validate_task_id 已挡住
-            continue
-
-    if note_dir.exists():
-        for pattern in (
-            f"{task_id}_*_audio.json",
-            f"{task_id}_*_transcript.json",
-            f"{task_id}_*_markdown.md",
-            f"{task_id}_*_markdown.status.json",
-        ):
-            for hit in note_dir.glob(pattern):
-                # glob 结果也要再断言一次：pattern 已由校验过的 task_id 组成，
-                # 但符号链接等情况下 resolve 后仍可能落到目录外。
-                try:
-                    candidates.append(resolve_under(note_dir, hit.name))
-                except UnsafeTaskId:
-                    continue
-
-    seen: set[str] = set()
-    for path in candidates:
-        key = str(path)
-        if key in seen:
-            continue
-        seen.add(key)
-        if path.exists() and path.is_file():
-            try:
-                path.unlink()
-                removed.append(key)
-            except OSError as e:
-                logger.warning(f"删除任务文件失败 {path}: {e}")
+        return [], False
+    if task_serial_executor.is_active(task_id) or (state and state["status"] in RUNNING):
+        raise HTTPException(status_code=409, detail="任务仍在执行，请等待结束后删除")
+    from app.services.task_service import TaskConflict
+    try:
+        removed, had_row = TaskService(NOTE_OUTPUT_DIR).delete(task_id)
+    except TaskConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     try:
         VectorStoreManager().delete_index(task_id)
     except Exception as e:
         logger.warning(f"删除向量索引失败 (task_id={task_id}): {e}")
 
-    had_row = delete_task_by_task_id(task_id)
     return removed, had_row
 
 
@@ -684,32 +504,6 @@ async def upload(file: UploadFile = File(...), user: User | None = Depends(get_o
     return R.success({"url": f"/uploads/{store_name}", "filename": store_name, "size": written})
 
 
-def _transcriber_readiness_gate():
-    """转写引擎就绪门禁：模型没下好就别开任务。
-
-    本地转写引擎（fast-whisper / mlx-whisper）必须等模型下载完才能跑视频，
-    否则任务会卡在首次下载（慢 / OOM / 截断），用户只看到一个静默失败的任务。
-    客户端已抓好字幕（prefetched_transcript）则不需要转写，可以跳过检查。
-
-    就绪时返回 None，否则返回一个错误响应。
-    """
-    from app.services.transcriber_config_manager import TranscriberConfigManager
-    readiness = TranscriberConfigManager().is_model_ready()
-    if readiness["ready"]:
-        return None
-    logger.warning(f"拒绝创建笔记任务：{readiness['reason']}")
-    return R.error(
-        msg=readiness["reason"],
-        code=NoteErrorEnum.TRANSCRIBER_NOT_READY.code,
-        data={
-            "reason": "transcriber_model_not_ready",
-            "transcriber_type": readiness["transcriber_type"],
-            "model_size": readiness["model_size"],
-            "downloading": readiness["downloading"],
-        },
-    )
-
-
 def _submit_note_task(background_tasks: BackgroundTasks, *, video_url: str, platform: str,
                       quality: DownloadQuality, screenshot: bool, link: bool,
                       model_name: Optional[str], provider_id: Optional[str],
@@ -734,11 +528,11 @@ def _submit_note_task(background_tasks: BackgroundTasks, *, video_url: str, plat
             status_code=429,
         )
 
-    # 先快速拦一次（无锁），避免无谓的模型解析；真正防并发突破在 begin_submit。
-    try:
-        check_submit_quota(user)
-    except QuotaExceeded as exc:
-        return _quota_error(exc)
+    if user is not None:
+        try:
+            check_submit_quota(user)
+        except QuotaExceeded as exc:
+            return _quota_error(exc)
 
     # 模型/供应商当场校验（无副作用）。不在这里校验的话，错的 provider_id
     # 会先返回 200 + task_id，任务在后台才失败。
@@ -760,6 +554,7 @@ def _submit_note_task(background_tasks: BackgroundTasks, *, video_url: str, plat
             return R.error(msg=str(_sel_exc), code=400)
         raise
 
+    retry = bool(task_id)
     if task_id:
         # ---------------------------------------------------------------
         # 「重试」复用已有 task_id：两道校验，缺一不可
@@ -793,15 +588,26 @@ def _submit_note_task(background_tasks: BackgroundTasks, *, video_url: str, plat
     # 配额校验与写 PENDING 必须同临界区，否则并发双检都能通过并突破上限。
     try:
         tid = task_id
+        attempt_id = None
 
         def _write_pending():
-            NoteGenerator()._update_status(
-                tid,
-                TaskStatus.PENDING,
-                user_id=user.id if user else None,
-                platform=platform,
-                video_id=str(video_url),
-            )
+            nonlocal attempt_id
+            from app.services.task_service import TaskService, TaskConflict
+            request = dict(video_url=str(video_url), platform=platform,
+                           quality=getattr(quality, "value", quality), format=fmt,
+                           screenshot=screenshot, link=link, model_name=model_name,
+                           provider_id=provider_id, style=style, extras=extras,
+                           video_understanding=video_understanding,
+                           video_interval=video_interval, grid_size=grid_size)
+            if task_serial_executor.is_active(tid):
+                raise HTTPException(status_code=409, detail="任务仍在执行")
+            try:
+                attempt_id = TaskService(NOTE_OUTPUT_DIR).claim(
+                    tid, user_id=getattr(user, "id", None), platform=platform,
+                    video_url=str(video_url), request=request, retry=retry,
+                )
+            except TaskConflict as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
 
         begin_submit(user, _write_pending)
     except QuotaExceeded as exc:
@@ -817,7 +623,7 @@ def _submit_note_task(background_tasks: BackgroundTasks, *, video_url: str, plat
     background_tasks.add_task(run_note_task, task_id, video_url, platform, quality, link,
                               screenshot, model_name, provider_id, fmt, style,
                               extras, video_understanding, video_interval, grid_size,
-                              getattr(user, "id", None))
+                              getattr(user, "id", None), attempt_id)
     return task_id
 
 
@@ -829,11 +635,6 @@ def generate_note(data: VideoRequest, background_tasks: BackgroundTasks,
     if is_upload_ref(str(data.video_url)) or data.platform == "local":
         _assert_upload_owned(str(data.video_url), user)
 
-    # 就绪门禁（客户端已抓好字幕则不需要转写，跳过检查）
-    if not data.prefetched_transcript:
-        gate = _transcriber_readiness_gate()
-        if gate is not None:
-            return gate
 
     task_id = _submit_note_task(
         background_tasks,
@@ -879,11 +680,6 @@ def create_note(data: CreateNoteRequest, background_tasks: BackgroundTasks,
     if platform == "local" or is_upload_ref(str(data.url)):
         _assert_upload_owned(str(data.url), user)
 
-    # 客户端已抓好字幕则不需要转写，跳过就绪门禁
-    if not data.prefetched_transcript:
-        gate = _transcriber_readiness_gate()
-        if gate is not None:
-            return gate
 
     task_id = _submit_note_task(
         background_tasks,
@@ -915,6 +711,7 @@ def list_tasks(
     offset: int = 0,
     status: Optional[str] = None,
     user: User | None = Depends(get_optional_user),
+    include_deleted: bool = False,
 ):
     """列出当前用户的笔记任务（供前端「历史」列表使用）。
 
@@ -936,109 +733,13 @@ def list_tasks(
     is_admin = bool(user and user.is_superuser)
     wanted_status = (status or "").strip().upper() or None
 
-    # ---- 首选：查 DB（有 user_id / updated_at 索引，O(log n)）----
-    # 文件扫描是 O(全部状态文件)：实测 5000 个文件单次 137ms、20000 个 715ms。
-    # 多用户下每个用户每次刷新都付这个成本，不可接受。
-    try:
-        from app.db.video_task_dao import list_tasks_for_user
-
-        db_items, db_total = list_tasks_for_user(
-            user.id if user else None,
-            is_admin=is_admin,
-            limit=limit,
-            offset=offset,
-            status=wanted_status,
-            # 显式传目录：`list_tasks_for_user` 需要它判断 has_result，
-            # 不传则回落到 NOTE_OUTPUT_DIR 环境变量（测试里 monkeypatch 的是
-            # 模块属性 `mod.NOTE_OUTPUT_DIR`，不一定同步到 env）。
-            note_dir=NOTE_OUTPUT_DIR,
-        )
-        # DB 有数据就直接返回；为空则回退到扫文件——
-        # 兼容「迁移前就已存在、还没进 DB」的历史任务。
-        if db_total > 0:
-            return R.success(
-                {"items": db_items, "total": db_total, "limit": limit, "offset": offset,
-                 "source": "db"}
-            )
-    except Exception as exc:
-        logger.warning(f"DB 列表查询失败，回退到文件扫描：{exc}")
-
-    # ---- 回退：扫文件（历史数据 / DB 未迁移时）----
-    note_dir = Path(NOTE_OUTPUT_DIR)
-    if not note_dir.exists():
-        return R.success({"items": [], "total": 0, "limit": limit, "offset": offset})
-
-    items: list[dict] = []
-    scan_errors = 0
-
-    try:
-        # 排除 `{task_id}_markdown.status.json` 这类缓存残留：
-        # 它们会被误认为独立任务，让列表出现重复项。
-        status_files = [
-            p
-            for p in note_dir.glob("*.status.json")
-            if not any(
-                p.name[: -len(".status.json")].lower().endswith(sfx)
-                for sfx in ("_markdown", "_audio", "_transcript", "_meta")
-            )
-        ]
-    except OSError as exc:
-        logger.warning(f"扫描任务目录失败: {exc}")
-        return R.success({"items": [], "total": 0, "limit": limit, "offset": offset})
-
-    for path in status_files:
-        try:
-            st = path.stat()
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            if not isinstance(payload, dict):
-                raise ValueError("not a dict")
-        except Exception:
-            scan_errors += 1
-            continue
-
-        owner = payload.get("user_id")
-        if owner is not None:
-            if user is None or owner != user.id:
-                continue
-        elif not is_admin:
-            # 无归属的历史数据：只让管理员看到
-            continue
-
-        task_status = str(payload.get("status") or "").upper()
-        if wanted_status and task_status != wanted_status:
-            continue
-
-        task_id = path.name[: -len(".status.json")]
-        # 只有成功的任务才有正文；列表里给个标记，前端点开再拉全文
-        result_path = path.with_name(f"{task_id}.json")
-        items.append(
-            {
-                "task_id": task_id,
-                "status": task_status,
-                "message": payload.get("message") or None,
-                "has_result": result_path.exists(),
-                "updated_at": datetime.fromtimestamp(
-                    st.st_mtime, tz=timezone.utc
-                ).isoformat(),
-                "failed_at": payload.get("failed_at"),
-            }
-        )
-
-    items.sort(key=lambda x: x["updated_at"], reverse=True)
-    total = len(items)
-    page = items[offset : offset + limit]
-
-    if scan_errors:
-        logger.warning(f"列表扫描跳过 {scan_errors} 个无法解析的状态文件")
-
-    return R.success(
-        {
-            "items": page,
-            "total": total,
-            "limit": limit,
-            "offset": offset,
-        }
+    from app.db.video_task_dao import list_tasks_for_user
+    items, total = list_tasks_for_user(
+        getattr(user, "id", None), is_admin=is_admin or (user is None and not auth_enforced()),
+        limit=limit, offset=offset, status=wanted_status, note_dir=NOTE_OUTPUT_DIR,
+        include_deleted=include_deleted,
     )
+    return R.success({"items": items, "total": total, "limit": limit, "offset": offset, "source": "db"})
 
 
 @router.get("/tasks/{task_id}")
@@ -1059,114 +760,47 @@ def get_task_status(task_id: str, user: User | None = Depends(get_optional_user)
     # status 文件可以让 ACL 通过，再把 NOTE_OUTPUT_DIR 之外的任意 JSON 当
     # 「任务结果」返回给调用方。校验失败按「任务不存在」处理（不泄露路径）。
     try:
-        status_path = note_file(NOTE_OUTPUT_DIR, task_id, ".status.json")
-        result_path = note_file(NOTE_OUTPUT_DIR, task_id, ".json")
+        validate_task_id(task_id)
     except UnsafeTaskId:
         raise HTTPException(status_code=400, detail="非法 task_id")
 
-    # 优先读状态文件
-    # 先初始化为 None：状态文件不存在 / 损坏时都走「无状态」分支。
-    # （不在 if 内首次赋值，否则后面的 `if status_content is not None`
-    #  在文件不存在时会 NameError。）
-    status_content = None
-    if os.path.exists(status_path):
-        # O-2：状态文件可能**损坏**（进程被 kill 在写一半、磁盘满、手工编辑出错）。
-        # 旧实现裸 `json.load` 会抛 JSONDecodeError → 未捕获 → **500**，
-        # 于是这个任务**永久**无法轮询（每次都 500），前端一直转圈。
-        #
-        # 这里的语义选择：把它当成「没有可读的状态」，继续走后面的分支
-        # （有结果文件则按 SUCCESS 返回，否则按 DB 判断），而不是让整个接口炸掉。
-        # 同时记一条 error 日志，因为这是个需要人看一眼的运维信号。
-        try:
-            with open(status_path, "r", encoding="utf-8") as f:
-                status_content = json.load(f)
-            if not isinstance(status_content, dict):
-                raise ValueError(f"状态文件不是对象（{type(status_content).__name__}）")
-        except (ValueError, OSError) as exc:
-            logger.error(
-                "状态文件损坏，按「无状态」降级处理 (task_id=%s, path=%s): %s",
-                task_id, status_path, exc,
-            )
-            status_content = None
-
-    if status_content is not None:
-        # 归属校验：与删除/列表用同一套规则（见 _can_access_task）。
-        if not _can_access_task_from_payload(status_content, user):
+    from app.services.task_service import TaskService
+    service = TaskService(NOTE_OUTPUT_DIR)
+    state = service.snapshot(task_id)
+    if state is not None:
+        if state["deleted"]:
+            raise HTTPException(status_code=404, detail="任务不存在")
+        if not _can_access_task_from_payload(state, user):
             raise HTTPException(status_code=403, detail="无权访问该任务")
+        result = None
+        status = state["status"] or ("SUCCESS" if service.storage.read(task_id) is not None else "FAILED")
+        message = state["message"]
+        if status == "SUCCESS":
+            result = service.storage.read(task_id)
+            if result is None:
+                service.fail_missing_result(task_id, state["attempt_id"])
+                status, message = "FAILED", "笔记结果文件缺失或损坏，请重新生成"
+        return R.success(dict(task_id=task_id, status=status, message=message,
+                              result=result, request=state["request"], attempt_id=state["attempt_id"]))
 
-        status = status_content.get("status")
-        message = status_content.get("message", "")
-
-        if status == TaskStatus.SUCCESS.value:
-            # 成功状态的话，继续读取最终笔记内容
-            if os.path.exists(result_path):
-                with open(result_path, "r", encoding="utf-8") as rf:
-                    result_content = json.load(rf)
-                return R.success({
-                    "status": status,
-                    "result": result_content,
-                    "message": message,
-                    "task_id": task_id
-                })
-            else:
-                # 状态文件说 SUCCESS，但结果文件不存在 —— 这是**数据不一致**，
-                # 不是「还在排队」。旧实现返回 PENDING 会让前端永远 3 秒轮询
-                # 一个再也不会变化的任务（前端认为它还在跑）。
-                #
-                # 正确语义：告诉前端"还在收尾"，让它继续等；同时记一条错误日志
-                # 便于排查为什么 SUCCESS 了却没文件（理论上 save_and_mark_success
-                # 已保证不会发生，这里是兜底）。
-                logger.error(
-                    f"状态文件为 SUCCESS 但结果文件缺失 (task_id={task_id})，返回 SAVING"
-                )
-                return R.success({
-                    "status": TaskStatus.SAVING.value,
-                    "message": "任务正在收尾，请稍候",
-                    "task_id": task_id
-                })
-
-        if status == TaskStatus.FAILED.value:
-            # 任务失败是一次「查询到任务状态」的成功结果，不是接口本身出错。
-            # 之前这里走 R.error，客户端拿到非 0 的 code 只能当异常处理，
-            # 反而读不到 status=FAILED，失败任务会一直显示成「生成中」。
-            return R.success({
-                "status": status,
-                "message": message or "任务失败",
-                "task_id": task_id
-            })
-
-        # 处理中状态
-        return R.success({
-            "status": status,
-            "message": message,
-            "task_id": task_id
-        })
-
-    # 没有状态文件，但有结果 —— 同样做归属校验，堵住「仅凭 UUID 读笔记」旁路
-    if os.path.exists(result_path):
-        if not _can_access_task(task_id, user):
+    # Read-only compatibility for artifacts not adopted at startup.
+    legacy = service.storage.read(task_id, ".status.json")
+    result = service.storage.read(task_id)
+    if legacy is not None:
+        if not _can_access_task_from_payload(legacy, user):
             raise HTTPException(status_code=403, detail="无权访问该任务")
-        with open(result_path, "r", encoding="utf-8") as f:
-            result_content = json.load(f)
-        return R.success({
-            "status": TaskStatus.SUCCESS.value,
-            "result": result_content,
-            "task_id": task_id
-        })
-
-    # 文件和数据库都没有 → 这个 task_id 根本不存在，别装作「排队中」
-    if get_task_by_id(task_id) is None:
-        raise HTTPException(status_code=404, detail="任务不存在")
-
-    if not _can_access_task(task_id, user):
-        raise HTTPException(status_code=403, detail="无权访问该任务")
-
-    # 什么都没有，默认PENDING
-    return R.success({
-        "status": TaskStatus.PENDING.value,
-        "message": "任务排队中",
-        "task_id": task_id
-    })
+        from app.services.task_service import RUNNING, TERMINAL
+        status = legacy.get("status")
+        message = legacy.get("message") or ""
+        if status not in RUNNING | TERMINAL or (status == "SUCCESS" and result is None):
+            status, message = "FAILED", "笔记结果或状态文件损坏，请重新生成"
+        return R.success(dict(task_id=task_id, status=status, message=message,
+                              result=result if status == "SUCCESS" else None))
+    if result is not None:
+        if not _ownerless_accessible(user):
+            raise HTTPException(status_code=403, detail="无权访问该任务")
+        return R.success(dict(task_id=task_id, status="SUCCESS", result=result))
+    raise HTTPException(status_code=404, detail="任务不存在")
 
 
 @router.get("/image_proxy")

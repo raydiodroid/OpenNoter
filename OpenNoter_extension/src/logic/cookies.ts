@@ -1,5 +1,5 @@
 import type { Platform } from './types'
-import { toNetscapeFile } from './netscape'
+import { countCookieEntries, toNetscapeFile } from './netscape'
 
 // 两种 Cookie 格式，按平台区分（**不能混用**）：
 //
@@ -82,7 +82,7 @@ export async function syncCookieToBackend(platform: Exclude<Platform, 'local'>):
         error: '当前浏览器没有该平台的 Cookie，请先登录目标站点后再同步',
       }
     }
-    const count = cookieStr.split('; ').length
+    const count = countCookieEntries(platform, cookieStr)
     const { setDownloaderCookie } = await import('./api')
     await setDownloaderCookie(platform, cookieStr)
     return { ok: true, count }

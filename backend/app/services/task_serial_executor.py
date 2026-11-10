@@ -61,6 +61,24 @@ class ConcurrentTaskExecutor:
         """
         return self._pool.submit(fn, *args, **kwargs)
 
+    def submit_task(self, task_id: str, fn: Callable[..., Any]) -> Future:
+        """Register before releasing the lock; duplicate ids never replace a live Future."""
+        with self._active_lock:
+            old = self._active.get(task_id)
+            if old is not None and not old.done():
+                raise ValueError("任务仍在执行")
+            limit = int(os.getenv("TASK_MAX_QUEUED", "200"))
+            if sum(not f.done() for f in self._active.values()) >= limit:
+                raise ValueError("任务队列已满")
+            future = self._pool.submit(fn)
+            self._active[task_id] = future
+        def discard(fut):
+            with self._active_lock:
+                if self._active.get(task_id) is fut:
+                    self._active.pop(task_id, None)
+        future.add_done_callback(discard)
+        return future
+
     # ------------------------------------------------------------------
     # 运行期任务跟踪（F49 的 stale-task reaper 依赖它）
     # ------------------------------------------------------------------
@@ -77,7 +95,8 @@ class ConcurrentTaskExecutor:
 
         def _discard(_fut):
             with self._active_lock:
-                self._active.pop(task_id, None)
+                if self._active.get(task_id) is _fut:
+                    self._active.pop(task_id, None)
 
         future.add_done_callback(_discard)
 
@@ -89,7 +108,8 @@ class ConcurrentTaskExecutor:
             return False
         if fut.done():
             with self._active_lock:
-                self._active.pop(task_id, None)
+                if self._active.get(task_id) is fut:
+                    self._active.pop(task_id, None)
             return False
         return True
 

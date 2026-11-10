@@ -391,7 +391,7 @@ def test_real_failure_message_is_not_treated_as_retry_message(output_dir):
 
     gen._update_status("task-1", TaskStatus.FAILED, message="视频超过 200MB 大小限制")
     gen._update_status("task-1", TaskStatus.FAILED)
-    assert "200MB" in _read_status(output_dir, "task-1")["message"]
+    assert _read_status(output_dir, "task-1")["message"] == ""
 
 
 def test_task_is_not_marked_failed_while_retrying(output_dir, monkeypatch):

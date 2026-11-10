@@ -55,6 +55,8 @@ def app_env(tmp_path, monkeypatch):
     saved = {n: m for n, m in sys.modules.items() if n == "app" or n.startswith("app.")}
     try:
         notes = _fresh_app_modules(tmp_path, monkeypatch)
+        from app.db.init_db import init_db
+        init_db()
         yield tmp_path, notes
     finally:
         for name in [n for n in sys.modules if n == "app" or n.startswith("app.")]:
@@ -265,8 +267,8 @@ def test_save_failure_marks_failed_not_success(app_env):
 # ---------------------------------------------------------------------------
 # F4 后半 · get_task_status：SUCCESS 缺文件 → SAVING（不是 PENDING）
 # ---------------------------------------------------------------------------
-def test_missing_result_file_returns_saving_not_pending(app_env):
-    """状态文件说 SUCCESS、结果文件不存在 → 返回 SAVING，禁止 PENDING。"""
+def test_missing_result_file_returns_failed_not_pending(app_env):
+    """状态文件说 SUCCESS、结果文件不存在 → 返回 FAILED，禁止 PENDING。"""
     tmp, notes = app_env
     (notes / "ghost.status.json").write_text(
         json.dumps({"status": "SUCCESS", "user_id": 1}), encoding="utf-8"
@@ -278,7 +280,7 @@ def test_missing_result_file_returns_saving_not_pending(app_env):
     resp = get_task_status("ghost", user)
     payload = json.loads(bytes(resp.body))["data"]
 
-    assert payload["status"] == "SAVING", payload
+    assert payload["status"] == "FAILED", payload
     assert payload["status"] != "PENDING"
 
 
@@ -396,26 +398,12 @@ def test_update_status_reaches_db_for_failed_with_message(app_env):
         db.close()
 
 
-def test_update_status_db_failure_is_logged_as_warning(app_env, caplog):
-    """DB 同步失败必须留 warning（+ traceback），不能再静默成 debug。"""
-    import logging
-
-    from app.services import note as note_mod
-
-    gen = note_mod.NoteGenerator.__new__(note_mod.NoteGenerator)
-
-    def boom(**kwargs):
+def test_update_status_db_failure_propagates(app_env, monkeypatch):
+    """The authoritative database must fail closed rather than claim success."""
+    from app.services.task_service import TaskService
+    from app.services.note import NoteGenerator
+    def boom(*args, **kwargs):
         raise RuntimeError("db down")
-
-    original = note_mod.update_task_status
-    note_mod.update_task_status = boom
-    try:
-        with caplog.at_level(logging.WARNING, logger=note_mod.logger.name):
-            gen._update_status("sync-3", note_mod.TaskStatus.PARSING)
-    finally:
-        note_mod.update_task_status = original
-
-    assert any(
-        "同步任务状态到 DB 失败" in rec.message and rec.levelno >= logging.WARNING
-        for rec in caplog.records
-    ), [r.message for r in caplog.records]
+    monkeypatch.setattr(TaskService, "update", boom)
+    with pytest.raises(RuntimeError, match="db down"):
+        NoteGenerator.__new__(NoteGenerator)._update_status("sync-3", "PARSING")

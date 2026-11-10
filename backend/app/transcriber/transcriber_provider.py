@@ -71,7 +71,8 @@ def get_whisper_transcriber(model_size="base", device="cuda"):
     return _init_transcriber(TranscriberType.FAST_WHISPER, WhisperTranscriber, model_size=model_size, device=device)
 
 def get_bcut_transcriber():
-    return _init_transcriber(TranscriberType.BCUT, BcutTranscriber)
+    # Upload sessions are mutable and belong to one task, not the process.
+    return BcutTranscriber()
 
 def get_kuaishou_transcriber():
     return _init_transcriber(TranscriberType.KUAISHOU, KuaishouTranscriber)
@@ -83,7 +84,7 @@ def get_mlx_whisper_transcriber(model_size="base"):
     return _init_transcriber(TranscriberType.MLX_WHISPER, MLXWhisperTranscriber, model_size=model_size)
 
 # 通用入口
-def get_transcriber(transcriber_type="fast-whisper", model_size=None, device="cuda"):
+def get_transcriber(transcriber_type="fast-whisper", model_size=None, device="cuda", user_id=None, require_ready=False):
     """
     获取指定类型的转录器实例
 
@@ -97,6 +98,12 @@ def get_transcriber(transcriber_type="fast-whisper", model_size=None, device="cu
     """
     logger.info(f'请求转录器类型: {transcriber_type}')
 
+    if user_id is not None or transcriber_type == "groq":
+        from app.services.credential_resolver import resolve_asr
+        credential = resolve_asr(user_id, online=transcriber_type == "groq")
+        if credential is not None:
+            return GroqTranscriber(credential=credential)
+
     try:
         transcriber_enum = TranscriberType(transcriber_type)
     except ValueError:
@@ -106,6 +113,12 @@ def get_transcriber(transcriber_type="fast-whisper", model_size=None, device="cu
     # The explicit value normally comes from the persisted frontend setting and
     # must take precedence over Docker's startup default.
     whisper_model_size = model_size or os.environ.get("WHISPER_MODEL_SIZE", "base")
+
+    if require_ready and transcriber_enum in {TranscriberType.FAST_WHISPER, TranscriberType.MLX_WHISPER}:
+        from app.transcriber.model_readiness import _check_whisper_model_exists, _check_mlx_whisper_model_exists
+        check = _check_whisper_model_exists if transcriber_enum == TranscriberType.FAST_WHISPER else _check_mlx_whisper_model_exists
+        if not check(whisper_model_size):
+            raise RuntimeError(f"转写模型 {transcriber_type} / {whisper_model_size} 尚未下载就绪，请先在转写设置中下载")
 
     if transcriber_enum == TranscriberType.FAST_WHISPER:
         return get_whisper_transcriber(whisper_model_size, device=device)

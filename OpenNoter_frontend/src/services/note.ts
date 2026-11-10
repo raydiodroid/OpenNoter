@@ -18,6 +18,9 @@ export const getTaskStatus = (taskId: string) =>
 
 /** 任务列表项：后端只返回轻量字段，正文按需拉取 */
 export interface TaskListItem {
+  attempt_id?: string | null
+  deleted?: boolean
+  request?: Partial<TaskFormData> | null
   task_id: string
   status: string
   message: string | null
@@ -40,7 +43,7 @@ export interface TaskListResponse {
  * 改成从服务端拉，历史才真正跟着账号走。
  * suppressToast：轮询失败不该每 30 秒弹一次提示。
  */
-export const listTasks = (params?: { limit?: number; offset?: number; status?: string }) =>
+export const listTasks = (params?: { limit?: number; offset?: number; status?: string; include_deleted?: boolean }) =>
   request.get<never, TaskListResponse>('/tasks', { params, suppressToast: true })
 
 /** 删除任务：连带清掉笔记结果、状态文件、向量索引和数据库记录。 */

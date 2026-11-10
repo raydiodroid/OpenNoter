@@ -5,6 +5,7 @@ from app.db.models.users import User  # noqa: F401  建表需要先导入
 from app.db.models.api_keys import ApiKey  # noqa: F401
 from app.db.models.user_credentials import UserCredential  # noqa: F401  BYOK
 from app.db.models.user_cookies import UserCookie  # noqa: F401  BYOK Cookie
+from app.db.models.task_attempts import TaskAttempt  # noqa: F401
 from app.db.engine import get_engine, Base
 
 
@@ -12,3 +13,5 @@ def init_db():
     engine = get_engine()
 
     Base.metadata.create_all(bind=engine)
+    from app.db.task_migrations import migrate_task_schema
+    migrate_task_schema(engine)

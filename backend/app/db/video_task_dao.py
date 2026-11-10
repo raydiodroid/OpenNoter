@@ -1,3 +1,5 @@
+import json
+
 from app.db.models.video_tasks import VideoTask
 from app.db.engine import get_db
 from app.utils.logger import get_logger
@@ -282,6 +284,7 @@ def list_tasks_for_user(
     offset: int = 0,
     status: str | None = None,
     note_dir: "str | os.PathLike | None" = None,
+    include_deleted: bool = False,
 ) -> tuple[list[dict], int]:
     """按用户查任务列表（走 DB 索引，不扫文件）。
 
@@ -332,7 +335,9 @@ def list_tasks_for_user(
 
     db = next(get_db())
     try:
-        q = db.query(VideoTask).filter(VideoTask.deleted_at.is_(None))
+        q = db.query(VideoTask)
+        if not include_deleted:
+            q = q.filter(VideoTask.deleted_at.is_(None))
 
         if user_id is not None:
             if is_admin:
@@ -342,6 +347,8 @@ def list_tasks_for_user(
             q = q.filter(cond)
         elif not is_admin:
             return [], 0
+        else:
+            q = q.filter(VideoTask.user_id.is_(None))
 
         if status:
             q = q.filter(VideoTask.status == status.strip().upper())
@@ -350,7 +357,8 @@ def list_tasks_for_user(
 
         rows = (
             q.order_by(
-                sa_func.coalesce(VideoTask.updated_at, VideoTask.created_at).desc()
+                sa_func.coalesce(VideoTask.updated_at, VideoTask.created_at).desc(),
+                VideoTask.id.desc(),
             )
             .limit(limit)
             .offset(offset)
@@ -360,22 +368,26 @@ def list_tasks_for_user(
         items = []
         for row in rows:
             updated = row.updated_at or row.created_at
+            has_result = _has_result(row.task_id)
             items.append(
                 {
+                    "request": json.loads(row.request_json) if row.request_json else None,
                     "task_id": row.task_id,
-                    "status": (row.status or "").upper() or "PENDING",
+                    "attempt_id": row.attempt_id,
+                    "deleted": row.deleted_at is not None,
+                    "status": (row.status or "").upper() or ("SUCCESS" if has_result else "FAILED"),
                     "message": row.error,
                     "platform": row.platform,
                     "video_id": row.video_id,
                     # 与文件扫描分支的字段对齐（GET /tasks 的 item 契约）
-                    "has_result": _has_result(row.task_id),
+                    "has_result": has_result,
                     "updated_at": updated.isoformat() if updated else None,
                     "failed_at": row.failed_at.isoformat() if row.failed_at else None,
                 }
             )
         return items, int(total)
     except Exception as e:
-        logger.warning(f"按用户查询任务列表失败: {e}")
-        return [], 0
+        logger.error(f"按用户查询任务列表失败: {e}")
+        raise
     finally:
         db.close()

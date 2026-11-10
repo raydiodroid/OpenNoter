@@ -3,7 +3,6 @@ import os
 
 from app.decorators.timeit import timeit
 from app.models.transcriber_model import TranscriptResult, TranscriptSegment
-from app.services.provider import ProviderService
 from app.transcriber.base import Transcriber
 from app.utils.openai_client import build_openai_client
 import ffmpeg
@@ -15,8 +14,12 @@ MAX_SIZE_BYTES = MAX_SIZE_MB * 1024 * 1024
 def compress_audio(input_path: str, target_bitrate='64k') -> str:
     output_fd, output_path = tempfile.mkstemp(suffix=".mp3")  # 临时输出文件
     os.close(output_fd)  # 关闭文件描述符，ffmpeg 会用路径操作
-    ffmpeg.input(input_path).output(output_path, audio_bitrate=target_bitrate).run(quiet=True, overwrite_output=True)
-    return output_path
+    try:
+        ffmpeg.input(input_path).output(output_path, audio_bitrate=target_bitrate).run(quiet=True, overwrite_output=True)
+        return output_path
+    except Exception:
+        os.unlink(output_path)
+        raise
 
 
 def _resolve_groq_model() -> str:
@@ -38,38 +41,40 @@ def _resolve_groq_model() -> str:
 class GroqTranscriber(Transcriber, ABC):
 
 
+    def __init__(self, credential=None):
+        self.credential = credential
+
     @timeit
     def transcript(self, file_path: str) -> TranscriptResult:
         file_size = os.path.getsize(file_path)
-        if file_size > MAX_SIZE_BYTES:
-            print(f"文件超过 {MAX_SIZE_MB}MB，开始压缩（当前 {round(file_size / (1024 * 1024), 2)}MB）...")
-            file_path = compress_audio(file_path)
-            print(f"压缩完成，临时路径：{file_path}")
-        provider = ProviderService.get_provider_by_id('groq')
-
-        if not provider:
-            raise Exception("Groq 供应商未配置,请配置以后使用。")
-        # build_openai_client 会校验 api_key 非空（空 key 会抛天书般的
-        # `Illegal header value b'Bearer '`），并自动注入全局代理
+        from app.services.credential_resolver import resolve_asr
+        credential = self.credential or resolve_asr(None, online=True)
         client = build_openai_client(
-            api_key=provider.get('api_key'),
-            base_url=provider.get('base_url'),
-            key_label="Groq 转写引擎的 API Key",
+            api_key=credential.api_key, base_url=credential.base_url,
+            key_label="音频转写 API Key", timeout=180.0, max_retries=1,
         )
-        filename = file_path
-
-        with open(filename, "rb") as file:
-            transcription = client.audio.transcriptions.create(
-                file=(filename, file.read()),
-                model=_resolve_groq_model(),
-                response_format="verbose_json",
-            )
-            print(transcription.text)
-        print(transcription)
+        compressed = None
+        try:
+            if file_size > MAX_SIZE_BYTES:
+                compressed = compress_audio(file_path)
+                file_path = compressed
+            filename = file_path
+            with open(filename, "rb") as file:
+                transcription = client.audio.transcriptions.create(
+                    file=(filename, file.read()), model=credential.model_name,
+                    response_format="verbose_json",
+                )
+        finally:
+            client.close()
+            if compressed:
+                try:
+                    os.unlink(compressed)
+                except OSError:
+                    pass
         segments = []
         full_text = ""
 
-        for seg in transcription.segments:
+        for seg in (getattr(transcription, "segments", None) or []):
             text = seg.text.strip()
             full_text += text + " "
             segments.append(TranscriptSegment(
@@ -79,8 +84,8 @@ class GroqTranscriber(Transcriber, ABC):
             ))
 
         result = TranscriptResult(
-            language=transcription.language,
-            full_text=full_text.strip(),
+            language=getattr(transcription, "language", "unknown"),
+            full_text=full_text.strip() or transcription.text,
             segments=segments,
             raw=transcription.to_dict()
         )

@@ -58,6 +58,8 @@ export interface TaskFormData {
 }
 
 export interface Task {
+  attemptId?: string
+  needsRefresh?: boolean
   id: string
   status: TaskStatus
   markdown: MarkdownVersion[]
@@ -111,6 +113,7 @@ export interface RemoteModel {
 }
 
 export interface NoteStatusResponse {
+  attempt_id?: string
   status: TaskStatus
   result?: {
     markdown: string

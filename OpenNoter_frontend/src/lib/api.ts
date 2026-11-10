@@ -1,6 +1,7 @@
 import axios, { AxiosInstance, AxiosResponse } from 'axios'
 import { toast } from '@/lib/toast'
 import { API_BASE, isTauri } from '@/lib/urls'
+import { sessionEpoch } from '@/lib/sessionScope'
 
 // 纯 URL 工具已拆到零依赖的 `lib/urls.ts`（见那里的注释），这里原样回导，
 // 让所有既有 `import { apiUrl } from '@/lib/api'` 的调用点一行都不用改。
@@ -21,6 +22,7 @@ declare module 'axios' {
   export interface AxiosRequestConfig {
     /** 预期内的失败（探活、轮询、onboarding 撞名）不弹全局提示，由调用方自己处理 */
     suppressToast?: boolean
+    sessionEpoch?: number
   }
 }
 
@@ -112,6 +114,7 @@ const request: AxiosInstance = axios.create({
 
 // 请求拦截器：桌面端有 token 就带 Authorization
 request.interceptors.request.use(config => {
+  config.sessionEpoch = sessionEpoch()
   if (accessToken) {
     config.headers = config.headers ?? {}
     config.headers.Authorization = `Bearer ${accessToken}`
@@ -121,6 +124,9 @@ request.interceptors.request.use(config => {
 
 request.interceptors.response.use(
   ((response: AxiosResponse<IResponse>) => {
+    if (response.config.sessionEpoch !== sessionEpoch()) {
+      return Promise.reject(new Error('登录身份已改变，已忽略旧请求'))
+    }
     const res = response.data
     if (res?.code === 0) {
       return res.data
@@ -132,6 +138,9 @@ request.interceptors.response.use(
     return Promise.reject(res)
   }) as any,
   (error) => {
+    if (error?.config?.sessionEpoch !== undefined && error.config.sessionEpoch !== sessionEpoch()) {
+      return Promise.reject(new Error('登录身份已改变，已忽略旧请求'))
+    }
     const suppress = error?.config?.suppressToast === true
     const status = error?.response?.status
     const payload = error?.response?.data

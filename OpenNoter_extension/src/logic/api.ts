@@ -11,63 +11,25 @@ import type {
   TranscriberType,
   WhisperModelSize,
 } from './types'
-import { settings } from './storage'
-
-interface ApiEnvelope<T> {
-  code: number
-  msg: string
-  data: T
-}
+import { settings, settingsReady } from './storage'
+import { ApiError, apiRequest, connectionKey } from './client'
 
 function backendUrl(): string {
   return (settings.value?.backendUrl || 'http://localhost:8483').replace(/\/$/, '')
 }
 
-/**
- * 鉴权头：后端开了强制认证时，除 /sys_health 外的接口都要求凭据。
- * 插件没有浏览器 cookie（cookies 对 localhost 不适用），所以走 API Key。
- */
-/**
- * 认证头（F3）。
- *
- * **必须导出**：`background/main.ts` 的右键菜单 / `opennoter-start` 消息走的是
- * 独立 `fetch`，不在本模块的 `request()` 覆盖范围内。它原先只带
- * `Content-Type`，默认 `AUTH_ENFORCE=true` 的后端会稳定 401 ——
- * 表现为「弹窗能用、右键菜单不能用」这种时好时坏的怪象。
- */
 export function authHeaders(): Record<string, string> {
-  const key = (settings.value?.apiKey || '').trim()
+  const key = settings.value.apiKey.trim()
   return key ? { 'x-api-key': key } : {}
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${backendUrl()}${path}`, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...authHeaders(),
-      ...(init?.headers || {}),
-    },
-  })
-  if (!res.ok) {
-    // 401/403 单独给可操作提示，而不是丢一句裸状态码
-    if (res.status === 401) {
-      throw new Error('HTTP 401：后端已开启强制认证，请在插件设置里填写 API Key')
-    }
-    if (res.status === 403) {
-      throw new Error(`HTTP 403：当前凭据无权访问 ${path}（需要管理员权限）`)
-    }
-    throw new Error(`HTTP ${res.status}: ${await res.text()}`)
-  }
-  const body = (await res.json()) as ApiEnvelope<T> | T
-  // 后端 ResponseWrapper 包了 {code, msg, data}；非 0 视为业务错
-  if (body && typeof body === 'object' && 'code' in body) {
-    const env = body as ApiEnvelope<T>
-    if (env.code !== 0)
-      throw new Error(env.msg || '后端返回失败')
-    return env.data
-  }
-  return body as T
+  await settingsReady
+  const config = { ...settings.value }
+  const result = await apiRequest<T>(config, path, init)
+  if (connectionKey(config) !== connectionKey(settings.value))
+    throw new ApiError('连接设置已改变，请重新操作', 409)
+  return result
 }
 
 export async function getProviders(): Promise<Provider[]> {
@@ -100,19 +62,49 @@ export async function listAvailableModels(): Promise<AvailableModel[]> {
   return request<AvailableModel[]>('/api/models')
 }
 
+export interface CookieStatus {
+  mode: string
+  byok_enabled: boolean
+  platforms: Array<{ platform: string, configured: boolean, source: string, entry_count: number }>
+}
+export const getCookieStatus = () => request<CookieStatus>('/api/me/cookies')
+export const getCurrentUser = () => request<{ id: number, is_superuser: boolean }>('/api/auth/me')
+export const getByokConfig = () => request<{ mode: string, cookie_mode: string }>('/api/byok_config')
+
 export async function setDownloaderCookie(platform: string, cookie: string): Promise<void> {
-  await request('/api/update_downloader_cookie', {
-    method: 'POST',
-    body: JSON.stringify({ platform, cookie }),
-  })
+  const config = { ...settings.value }
+  const policy = await request<{ cookie_mode: string }>('/api/byok_config')
+  if (connectionKey(config) !== connectionKey(settings.value))
+    throw new ApiError('连接设置已改变', 409)
+  if (policy.cookie_mode !== 'shared') {
+    await request(`/api/me/cookies/${encodeURIComponent(platform)}`, {
+      method: cookie.trim() ? 'PUT' : 'DELETE',
+      ...(cookie.trim() ? { body: JSON.stringify({ cookie }) } : {}),
+    })
+  }
+  else {
+    await request('/api/update_downloader_cookie', { method: 'POST', body: JSON.stringify({ platform, cookie }) })
+  }
 }
 
 export async function getDownloaderCookie(platform: string): Promise<string | null> {
-  // 后端：未配置时返回 {code:0, msg:'未找到Cookies', data:null}；配置时 data: {platform, cookie}
-  const data = await request<{ platform: string, cookie: string } | null>(
-    `/api/get_downloader_cookie/${platform}`,
-  )
+  const policy = await request<{ cookie_mode: string }>('/api/byok_config')
+  if (policy.cookie_mode !== 'shared')
+    return null // Own cookies are intentionally never disclosed.
+  const data = await request<{ platform: string, cookie: string } | null>(`/api/get_downloader_cookie/${platform}`)
   return data?.cookie ?? null
+}
+
+export interface CredentialStatus {
+  mode: string
+  credentials: Array<{ capability: string, base_url: string, model_name: string, masked_key: string }>
+}
+export const getMyCredentials = () => request<CredentialStatus>('/api/me/credentials')
+export function saveMyCredential(capability: string, data: { base_url: string, api_key: string, model_name: string }) {
+  return request(`/api/me/credentials/${capability}`, { method: 'PUT', body: JSON.stringify(data) })
+}
+export function deleteMyCredential(capability: string) {
+  return request(`/api/me/credentials/${capability}`, { method: 'DELETE' })
 }
 
 // ---- Provider CRUD ----
@@ -160,6 +152,10 @@ export async function deleteModel(modelId: number | string): Promise<void> {
 }
 
 // ---- Transcriber ----
+export function updateAsrEndpoint(data: { base_url: string, api_key?: string, model?: string }) {
+  return request('/api/update_asr_endpoint', { method: 'POST', body: JSON.stringify(data) })
+}
+
 export async function getTranscriberConfig(): Promise<TranscriberConfig> {
   return request<TranscriberConfig>('/api/transcriber_config')
 }
@@ -187,7 +183,7 @@ export async function downloadTranscriberModel(modelSize: WhisperModelSize, tran
 
 // ---- RAG Chat ----
 export interface ChatMessage {
-  role: 'user' | 'assistant' | 'system'
+  role: 'user' | 'assistant'
   content: string
 }
 
@@ -206,8 +202,8 @@ export async function askChat(payload: {
   task_id: string
   question: string
   history: ChatMessage[]
-  provider_id: string
-  model_name: string
+  provider_id?: string
+  model_name?: string
 }): Promise<unknown> {
   return request('/api/chat/ask', {
     method: 'POST',
@@ -256,38 +252,20 @@ export async function getSysHealth(): Promise<SysHealth> {
 }
 
 export async function generateNote(payload: GenerateRequest): Promise<{ task_id: string }> {
-  return request<{ task_id: string }>('/api/generate_note', {
+  return request<{ task_id: string }>('/api/notes', {
     method: 'POST',
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ ...payload, url: payload.video_url, provider_id: payload.provider_id || undefined, model_name: payload.model_name || undefined }),
   })
 }
 
 export async function getTaskStatus(taskId: string): Promise<TaskStatusResponse> {
-  // /task_status 永远 HTTP 200；body 是 ResponseWrapper：
-  //   成功：{code:0, data:{status, message, task_id, result?}}
-  //   任务失败：{code:500, msg:'xxx', data:null}
-  // 这里手动拆，把任务失败翻译成 status:'FAILED'，避免 request() 抛错让 UI 收不到状态
-  // 必须带鉴权头：强制认证开启后裸 fetch 会 401，进度永远失败
-  const res = await fetch(`${backendUrl()}/api/task_status/${taskId}`, {
-    headers: {
-      ...authHeaders(),
-    },
-  })
-  if (res.status === 401)
-    throw new Error('HTTP 401：后端已开启强制认证，请在插件设置里填写 API Key')
-  if (res.status === 403)
-    throw new Error(`HTTP 403：无权查询任务 ${taskId}`)
-  if (!res.ok)
-    throw new Error(`HTTP ${res.status}`)
-  const body = (await res.json()) as { code: number, msg: string, data: TaskStatusResponse | null }
-  if (body.code === 0 && body.data)
-    return body.data
-  return { status: 'FAILED', message: body.msg || '任务失败', task_id: taskId }
+  return request<TaskStatusResponse>(`/api/tasks/${encodeURIComponent(taskId)}`)
 }
 
 export async function ping(): Promise<boolean> {
   try {
-    await getProviders()
+    // This user-facing endpoint works in both anonymous and authenticated deployments.
+    await request('/api/models')
     return true
   }
   catch {
@@ -316,7 +294,7 @@ export function resolveImageUrl(url: string | undefined | null): string {
   if (url.startsWith('/'))
     return `${base}${url}`
   // B 站封面、抖音封面等会做 referer 校验；走后端代理
-  if (/(hdslb|byteimg|kpcdn|akamaized|ytimg)\.com/i.test(url))
+  if (/(?:hdslb|byteimg|kpcdn|akamaized|ytimg)\.com/i.test(url))
     return `${base}/api/image_proxy?url=${encodeURIComponent(url)}`
   return url
 }

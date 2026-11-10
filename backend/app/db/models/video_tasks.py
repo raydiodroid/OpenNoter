@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, func
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import declarative_base
 
 from app.db.engine import Base
@@ -27,3 +27,5 @@ class VideoTask(Base):
     # 否则「累计任务」「24h 失败」会随用户删笔记一起倒退/消失——
     # 监控指标不该被普通用户操作篡改（审计结论）。
     deleted_at = Column(DateTime, nullable=True, index=True)
+    attempt_id = Column(String(36), nullable=True)
+    request_json = Column(Text, nullable=True)

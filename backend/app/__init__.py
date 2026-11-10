@@ -1,22 +1,22 @@
 from fastapi import FastAPI
 
-from .routers import (
-    note,
-    provider,
-    model,
-    config,
-    chat,
-    auth,
-    monitor,
-    api_keys,
-    me_credentials,
-    me_cookies,
-)
 from .openapi import register_api_docs
 from .api_guide import register_guide
 
 
 def create_app(lifespan) -> FastAPI:
+    from .routers import (
+        note,
+        provider,
+        model,
+        config,
+        chat,
+        auth,
+        monitor,
+        api_keys,
+        me_credentials,
+        me_cookies,
+    )
     # FastAPI 自带的 /docs /redoc /openapi.json 关掉，改为在下方挂自定义的
     # 「需鉴权」版本：既保留纵深防御（匿名看不到接口结构），又让 API 调用方
     # 拿到标准 OpenAPI schema。

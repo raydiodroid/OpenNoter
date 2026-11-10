@@ -1,3 +1,4 @@
+import { onSessionChange } from '@/lib/sessionScope'
 import { create } from 'zustand'
 import {
   addProvider as apiAddProvider,
@@ -77,3 +78,5 @@ export const useProviderStore = create<ProviderState>((set, get) => ({
     await get().fetchAll()
   },
 }))
+
+onSessionChange(() => useProviderStore.setState(useProviderStore.getInitialState(), true))

@@ -88,7 +88,7 @@ class BcutTranscriber(Transcriber):
         resp = self.session.post(
             API_REQ_UPLOAD,
             data=payload,
-            headers=self.headers
+            headers=self.headers, timeout=(10, 60)
         )
         resp.raise_for_status()
         resp = resp.json()
@@ -116,7 +116,7 @@ class BcutTranscriber(Transcriber):
             resp = self.session.put(
                 self.__upload_urls[clip],
                 data=file_binary[start_range:end_range],
-                headers={'Content-Type': 'application/octet-stream'}
+                headers={'Content-Type': 'application/octet-stream'}, timeout=(10, 120)
             )
             resp.raise_for_status()
             etag = resp.headers.get("Etag", "").strip('"')
@@ -135,7 +135,7 @@ class BcutTranscriber(Transcriber):
         resp = self.session.post(
             API_COMMIT_UPLOAD,
             data=data,
-            headers=self.headers
+            headers=self.headers, timeout=(10, 60)
         )
         resp.raise_for_status()
         resp = resp.json()
@@ -151,7 +151,7 @@ class BcutTranscriber(Transcriber):
     def _create_task(self) -> str:
         """开始创建转换任务"""
         resp = self.session.post(
-            API_CREATE_TASK, json={"resource": self.__download_url, "model_id": "8"}, headers=self.headers
+            API_CREATE_TASK, json={"resource": self.__download_url, "model_id": "8"}, headers=self.headers, timeout=(10, 60)
         )
         resp.raise_for_status()
         resp = resp.json()
@@ -169,7 +169,7 @@ class BcutTranscriber(Transcriber):
         resp = self.session.get(
             API_QUERY_RESULT, 
             params={"model_id": 7, "task_id": self.task_id}, 
-            headers=self.headers
+            headers=self.headers, timeout=(10, 60)
         )
         resp.raise_for_status()
         resp = resp.json()
@@ -184,7 +184,12 @@ class BcutTranscriber(Transcriber):
     def transcript(self, file_path: str) -> TranscriptResult:
         """执行识别过程，符合 Transcriber 接口"""
         with self._lock:
-            return self._transcript_locked(file_path)
+            try:
+                return self._transcript_locked(file_path)
+            finally:
+                close = getattr(self.session, "close", None)
+                if close:
+                    close()
 
     def _transcript_locked(self, file_path: str) -> TranscriptResult:
         try:
@@ -202,7 +207,10 @@ class BcutTranscriber(Transcriber):
             logger.info("等待转录结果...")
             task_resp = None
             max_retries = 500
+            deadline = time.monotonic() + 600
             for i in range(max_retries):
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("必剪转写超过 10 分钟")
                 task_resp = self._query_result()
                 
                 if task_resp["state"] == 4:  # 完成状态

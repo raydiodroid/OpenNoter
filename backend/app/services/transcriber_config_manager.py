@@ -100,7 +100,7 @@ class TranscriberConfigManager:
         # 继续 import 会抛 ImportError → 落到下面的「保守放行」分支 →
         # 门禁对「模型未下载」恒返回 ready=True，等于没拦（审计 P0-4）。
         try:
-            from app.routers.config import (
+            from app.transcriber.model_readiness import (
                 _check_whisper_model_exists,
                 _check_mlx_whisper_model_exists,
             )

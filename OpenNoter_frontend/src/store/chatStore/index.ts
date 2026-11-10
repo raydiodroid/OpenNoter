@@ -1,3 +1,4 @@
+import { onSessionChange, sessionScope } from '@/lib/sessionScope'
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { ChatSource } from '@/services/chat'
@@ -38,7 +39,18 @@ export const useChatStore = create<ChatState>()(
       getMessages: (taskId) => get().chatHistory[taskId] || [],
     }),
     {
-      name: 'opennoter-chat-storage',
+      name: 'opennoter-chat-storage:locked',
+      skipHydration: true,
     },
   ),
 )
+
+function switchChatScope() {
+  useChatStore.persist.setOptions({ name: 'opennoter-chat-storage:locked' })
+  useChatStore.setState({ chatHistory: {} })
+  const scope = sessionScope()
+  useChatStore.persist.setOptions({ name: `opennoter-chat-storage:${scope ?? 'locked'}` })
+  if (scope) void useChatStore.persist.rehydrate()
+}
+onSessionChange(switchChatScope)
+if (sessionScope()) switchChatScope()

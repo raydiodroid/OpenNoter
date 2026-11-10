@@ -74,6 +74,7 @@ def env(tmp_path, monkeypatch):
         from app.db.models.users import User  # noqa: F401
         from app.db.models.api_keys import ApiKey  # noqa: F401
         from app.db.models.video_tasks import VideoTask  # noqa: F401
+        from app.db.models.task_attempts import TaskAttempt  # noqa: F401
 
         Base.metadata.create_all(bind=get_engine())
 
@@ -256,10 +257,17 @@ def test_submit_allows_own_retry(env, monkeypatch):
 
     mod = env.mod
     tid = "my-task"
+    from app.db.engine import SessionLocal
+    from app.db.models.users import User
+    with SessionLocal.begin() as db:
+        if db.get(User, 7) is None:
+            db.add(User(id=7, email="retry@example.com"))
     (env.notes / f"{tid}.status.json").write_text(
         json.dumps({"status": "FAILED", "user_id": 7}), encoding="utf-8"
     )
 
+    from app.services.task_service import TaskService
+    TaskService(env.notes).import_legacy(env.notes)
     import app.services.quota as quota_mod
     monkeypatch.setattr(quota_mod, "check_submit_quota", lambda u: None)
     monkeypatch.setattr(quota_mod, "begin_submit", lambda u, fn: fn())

@@ -1,3 +1,4 @@
+import { onSessionChange } from '@/lib/sessionScope'
 import { create } from 'zustand'
 import {
   addModel as apiAddModel,
@@ -77,3 +78,5 @@ export const useModelStore = create<ModelState>((set, get) => ({
     await get().loadEnabled()
   },
 }))
+
+onSessionChange(() => useModelStore.setState(useModelStore.getInitialState(), true))

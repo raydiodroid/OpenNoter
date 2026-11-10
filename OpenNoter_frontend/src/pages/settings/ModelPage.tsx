@@ -13,6 +13,7 @@ import { style } from '@react-spectrum/s2/style' with { type: 'macro' }
 import AddIcon from '@react-spectrum/s2/icons/Add'
 
 import { EmptyState, ListDetail, Page, PageHeader, Panel, Section } from '@/components/Page'
+import { ModelConnectionFields } from '@/components/ModelConnectionFields'
 import { Chip } from '@/components/Chip'
 import {
   ListRow,
@@ -274,6 +275,7 @@ function ProviderDetail({ id, isCreate }: { id?: string; isCreate?: boolean }) {
 
           <TextField
             label="名称"
+            styles={fullWidth}
             value={name}
             onChange={value => {
               setName(value)
@@ -282,25 +284,18 @@ function ProviderDetail({ id, isCreate }: { id?: string; isCreate?: boolean }) {
             isDisabled={isBuiltIn}
             isRequired
           />
-          <TextField
-            label="API Key"
-            type="password"
-            value={apiKey}
-            onChange={value => {
+          <ModelConnectionFields
+            isDisabled={saving}
+            apiKey={apiKey}
+            onApiKeyChange={value => {
               setApiKey(value)
               setDirty(true)
             }}
-            placeholder="sk-…"
-          />
-          <TextField
-            label="API 地址"
-            value={baseUrl}
-            onChange={value => {
+            baseUrl={baseUrl}
+            onBaseUrlChange={value => {
               setBaseUrl(value)
               setDirty(true)
             }}
-            placeholder="https://api.openai.com/v1"
-            isRequired
           />
           <LabeledValue
             label="类型"

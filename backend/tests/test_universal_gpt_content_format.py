@@ -83,6 +83,10 @@ def _install_stubs():
     sys.modules["app.models.transcriber_model"] = transcriber_model_mod
 
 
+from tests.module_isolation import isolated_loader
+
+
+@isolated_loader
 def _load_universal_gpt_class():
     _install_stubs()
     root = pathlib.Path(__file__).resolve().parents[1]

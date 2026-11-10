@@ -34,7 +34,8 @@ def test_note_generator_forwards_configured_whisper_model_size():
             calls.append(kwargs)
             return object()
 
-        note_service.get_transcriber = fake_get_transcriber
+        from app.transcriber import transcriber_provider
+        transcriber_provider.get_transcriber = fake_get_transcriber
 
         generator = note_service.NoteGenerator.__new__(note_service.NoteGenerator)
         generator.transcriber_type = "fast-whisper"
@@ -46,6 +47,8 @@ def test_note_generator_forwards_configured_whisper_model_size():
             {
                 "transcriber_type": "fast-whisper",
                 "model_size": "large-v3-turbo",
+                "user_id": None,
+                "require_ready": True,
             }
         ]
         """

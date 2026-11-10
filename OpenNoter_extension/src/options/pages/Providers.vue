@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import ModelConnectionFields from '~/components/ModelConnectionFields.vue'
 import {
   addModel,
   addProvider,
@@ -147,8 +148,12 @@ onMounted(refresh)
   <div class="p-6 flex gap-6">
     <aside class="w-64 shrink-0 flex flex-col gap-2">
       <div class="flex justify-between items-center">
-        <h1 class="text-xl font-bold">模型供应商</h1>
-        <button class="btn-secondary" @click="startCreate">新增</button>
+        <h1 class="text-xl font-bold">
+          模型供应商
+        </h1>
+        <button class="btn-secondary" @click="startCreate">
+          新增
+        </button>
       </div>
       <div class="bg-white border rounded">
         <div
@@ -159,7 +164,9 @@ onMounted(refresh)
           @click="select(p.id)"
         >
           <div class="flex items-center gap-2 min-w-0">
-            <div class="truncate">{{ p.name }}</div>
+            <div class="truncate">
+              {{ p.name }}
+            </div>
             <span
               class="tag"
               :class="p.type === 'built-in' ? 'bg-purple-100 text-purple-700' : 'bg-gray-100 text-gray-600'"
@@ -191,22 +198,19 @@ onMounted(refresh)
             <span class="w-20 text-right text-gray-600">名称</span>
             <input v-model="editing.name" class="input flex-1" :disabled="isBuiltIn">
           </label>
-          <label class="flex items-center gap-3 text-sm">
-            <span class="w-20 text-right text-gray-600">API Key</span>
-            <input v-model="editing.api_key" class="input flex-1" type="password">
-          </label>
-          <label class="flex items-center gap-3 text-sm">
-            <span class="w-20 text-right text-gray-600">API 地址</span>
-            <input v-model="editing.base_url" class="input flex-1">
-          </label>
+          <ModelConnectionFields v-model:api-key="editing.api_key" v-model:base-url="editing.base_url" />
           <label v-if="!isCreating" class="flex items-center gap-3 text-sm">
             <span class="w-20 text-right text-gray-600">类型</span>
             <input :value="editing.type" class="input flex-1" disabled>
           </label>
 
           <div class="flex items-center gap-2 pt-2">
-            <button class="btn-primary" @click="save">{{ isCreating ? '创建' : '保存' }}</button>
-            <button v-if="!isCreating" class="btn-secondary" @click="test">测试连接</button>
+            <button class="btn-primary" @click="save">
+              {{ isCreating ? '创建' : '保存' }}
+            </button>
+            <button v-if="!isCreating" class="btn-secondary" @click="test">
+              测试连接
+            </button>
             <span
               v-if="message.text"
               class="text-xs"
@@ -220,17 +224,25 @@ onMounted(refresh)
         </section>
 
         <section v-if="!isCreating" class="section-card">
-          <h3 class="font-semibold">模型列表</h3>
+          <h3 class="font-semibold">
+            模型列表
+          </h3>
           <div class="flex gap-2">
             <input v-model="newModelName" class="input flex-1" placeholder="例如 gpt-4o-mini">
-            <button class="btn-secondary" @click="addNewModel">添加模型</button>
+            <button class="btn-secondary" @click="addNewModel">
+              添加模型
+            </button>
           </div>
           <ul class="flex flex-col gap-1">
             <li v-for="m in models" :key="m.id" class="flex justify-between items-center px-2 py-1 rounded hover:bg-gray-50">
               <span class="text-sm">{{ m.model_name }}</span>
-              <button class="text-xs text-red-500 hover:text-red-700" @click="removeModel(m.id)">删除</button>
+              <button class="text-xs text-red-500 hover:text-red-700" @click="removeModel(m.id)">
+                删除
+              </button>
             </li>
-            <li v-if="models.length === 0" class="text-xs text-gray-400">该供应商下还没有模型</li>
+            <li v-if="models.length === 0" class="text-xs text-gray-400">
+              该供应商下还没有模型
+            </li>
           </ul>
         </section>
       </div>

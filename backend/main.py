@@ -50,6 +50,8 @@ async def lifespan(app: FastAPI):
 
         logger.info("[startup 2/5] init_db() — 初始化 SQLite 数据库")
         init_db()
+        from app.services.task_service import TaskService
+        TaskService().import_legacy(Path(os.getenv("NOTE_OUTPUT_DIR", "note_results")))
 
         logger.info("[startup 3/5] TranscriberConfigManager — 读取转写器配置")
         # 转写器不再在启动时强制初始化，而是在首次生成笔记时按需创建。
@@ -154,6 +156,15 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    reaper = getattr(app.state, "stale_reaper_task", None)
+    if reaper:
+        reaper.cancel()
+        import asyncio
+        try:
+            await reaper
+        except asyncio.CancelledError:
+            pass
+
     # 优雅退出：进行中的 BackgroundTasks 不会被续跑，先标 FAILED 避免前端空转。
     try:
         from app.services.task_interrupt import (
@@ -223,7 +234,7 @@ async def serve_static(file_path: str, request: Request):
 
     from app.db.engine import SessionLocal
     from app.services.auth import auth_enforced, get_optional_user
-    from app.routers.note import _can_access_task
+    from app.services.task_access import can_access_task as _can_access_task
     from app.utils.path_safety import resolve_under_dir
     from app.utils.static_signing import (
         TOKEN_PARAM,

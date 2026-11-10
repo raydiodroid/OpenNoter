@@ -249,7 +249,9 @@ class TestSubtitleCookieUsesByok:
         from app.downloaders import bilibili_subtitle
 
         src = inspect.getsource(bilibili_subtitle)
-        assert "CookieConfigManager().get" not in src, (
+        import ast
+        calls = "\n".join(ast.unparse(n) for n in ast.walk(ast.parse(src)) if isinstance(n, ast.Call))
+        assert "CookieConfigManager().get" not in calls, (
             "BilibiliSubtitleFetcher 不应直接读站点 Cookie——"
             "会让用户自带的 Cookie 在字幕链路上被忽略"
         )

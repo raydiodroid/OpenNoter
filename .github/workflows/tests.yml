@@ -91,11 +91,14 @@ jobs:
       - name: Unit tests
         run: pnpm test
 
-      # e2e（Playwright）暂不进门禁：
-      #   - 需要下载浏览器，单次 1~2 分钟；
-      #   - `e2e/basic.spec.ts` 目前仍是 Vitesse 模板（断言 "Vitesse WebExt"），
-      #     跟产品无关，跑它只会在红灯里制造噪音。
-      # 等 e2e 换成真实的 popup/options 用例后再单独开 nightly job。
+      - name: Build extension
+        run: pnpm build
+
+      - name: Install Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Extension smoke tests
+        run: pnpm test:e2e
 
   frontend:
     name: Frontend (build + lint)

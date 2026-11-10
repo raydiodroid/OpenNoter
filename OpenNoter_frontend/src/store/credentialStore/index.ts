@@ -1,3 +1,4 @@
+import { onSessionChange } from '@/lib/sessionScope'
 import { create } from 'zustand'
 
 import {
@@ -136,3 +137,5 @@ export const useCredentialStore = create<CredentialState>((set, get) => ({
     await get().loadCookies()
   },
 }))
+
+onSessionChange(() => useCredentialStore.setState(useCredentialStore.getInitialState(), true))

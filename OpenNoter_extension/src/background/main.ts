@@ -3,7 +3,7 @@ import type { Runtime } from 'webextension-polyfill'
 import type { Platform, Settings, TaskRecord } from '~/logic/types'
 import { DEFAULT_SETTINGS, MAX_TASKS, SETTINGS_KEY, TASKS_KEY } from '~/logic/constants'
 import { detectPlatform } from '~/logic/platform'
-import { authHeaders } from '~/logic/api'
+import { apiRequest, connectionKey, connectionScope } from '~/logic/client'
 import { fetchBilibiliSubtitle } from '~/logic/bilibili-subtitle'
 import { normalizeVideoTitle } from '~/logic/task-display'
 import { SUPPORTED_COOKIE_PLATFORMS, readBrowserCookies } from '~/logic/cookies'
@@ -49,17 +49,19 @@ async function readTasks(): Promise<TaskRecord[]> {
 }
 
 async function writeTasks(tasks: TaskRecord[]) {
-  await browser.storage.local.set({ [TASKS_KEY]: JSON.stringify(tasks.slice(0, MAX_TASKS)) })
+  await browser.storage.local.set({ [TASKS_KEY]: JSON.stringify(tasks) })
 }
 
 async function upsertTask(record: TaskRecord) {
   const tasks = await readTasks()
-  const idx = tasks.findIndex(t => t.taskId === record.taskId)
+  const idx = tasks.findIndex(t => t.taskId === record.taskId && t.scope === record.scope)
   if (idx >= 0)
     tasks.splice(idx, 1, { ...tasks[idx], ...record })
   else
     tasks.unshift(record)
-  await writeTasks(tasks)
+  const own = tasks.filter(t => t.scope === record.scope).slice(0, MAX_TASKS)
+  const other = tasks.filter(t => t.scope !== record.scope)
+  await writeTasks([...own, ...other].slice(0, 300))
 }
 
 // ---------- 启动任务 ----------
@@ -71,28 +73,22 @@ async function startTask(url: string, title?: string): Promise<{ ok: boolean, ta
     return { ok: false, error: '当前链接不是支持的视频平台' }
 
   const settings = await readSettings()
-  if (!settings.providerId || !settings.modelName)
-    return { ok: false, error: '请先在设置页选择供应商与模型' }
-
-  const backend = settings.backendUrl.replace(/\/$/, '')
 
   // B 站：先在浏览器里抓字幕（带本地登录态 cookie），随提交带过去
   const prefetched = platform === 'bilibili' ? await fetchBilibiliSubtitle(url) : null
 
   const formats = settings.formats || []
   try {
-    const res = await fetch(`${backend}/api/generate_note`, {
+    if (connectionKey(settings) !== connectionKey(await readSettings()))
+      return { ok: false, error: '连接设置已改变，请重新操作' }
+    const data = await apiRequest<{ task_id: string }>(settings, '/api/notes', {
       method: 'POST',
-      // F3：后台 `fetch` 不在 logic/api.ts 的 `request()` 覆盖范围内，
-      // 必须显式复用同一套认证头。否则默认 AUTH_ENFORCE=true 的后端会稳定 401，
-      // 而弹窗（走 request）却正常 —— 表现为「右键菜单时好时坏」。
-      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({
-        video_url: url,
+        url,
         platform,
         quality: settings.quality,
-        provider_id: settings.providerId,
-        model_name: settings.modelName,
+        provider_id: settings.providerId || undefined,
+        model_name: settings.modelName || undefined,
         // backend 同时接受 format 数组与 screenshot/link 单独布尔；从 formats 派生保持单一真相源
         format: [...formats],
         screenshot: formats.includes('screenshot'),
@@ -105,14 +101,11 @@ async function startTask(url: string, title?: string): Promise<{ ok: boolean, ta
         prefetched_transcript: prefetched ?? undefined,
       }),
     })
-    if (!res.ok)
-      return { ok: false, error: `HTTP ${res.status}` }
-    const body = await res.json() as { code: number, msg: string, data: { task_id: string } }
-    if (body.code !== 0)
-      return { ok: false, error: body.msg }
-
+    if (connectionKey(settings) !== connectionKey(await readSettings()))
+      return { ok: false, error: '连接设置已改变，请重新操作' }
     await upsertTask({
-      taskId: body.data.task_id,
+      scope: await connectionScope(settings),
+      taskId: data.task_id,
       videoUrl: url,
       platform,
       status: 'PENDING',
@@ -121,7 +114,7 @@ async function startTask(url: string, title?: string): Promise<{ ok: boolean, ta
       updatedAt: Date.now(),
       title: displayTitle,
     })
-    return { ok: true, taskId: body.data.task_id }
+    return { ok: true, taskId: data.task_id }
   }
   catch (e) {
     return { ok: false, error: (e as Error).message }
@@ -215,6 +208,7 @@ browser.runtime.onMessage.addListener(async (message: unknown, sender: WebExtMes
       mode: 'cors',
       credentials: 'omit',
       redirect: 'error',
+      signal: AbortSignal.timeout(30000),
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         transfer_id: request.transferId,
@@ -242,8 +236,6 @@ browser.runtime.onMessage.addListener(async (message: unknown, sender: WebExtMes
 // ---------- 安装时事件 ----------
 
 browser.runtime.onInstalled.addListener(() => {
-  console.log('OpenNoter extension installed')
-
   // 右键菜单：在视频页或视频链接上"用 OpenNoter 总结"
   try {
     browser.contextMenus.create({

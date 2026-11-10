@@ -78,6 +78,10 @@ def _install_stubs():
     sys.modules["app.utils.path_helper"] = path_helper_mod
 
 
+from tests.module_isolation import isolated_loader
+
+
+@isolated_loader
 def _load_video_reader_module():
     _install_stubs()
     root = pathlib.Path(__file__).resolve().parents[1]

@@ -129,6 +129,20 @@ class _Snapshot:
     label: Optional[str]
 
 
+def resolve_asr(user_id: Optional[int], *, online: bool) -> Optional[Credential]:
+    """Own ASR overrides the site engine. Local engines need no paid credential.
+
+    Online site ASR always passes through resolve(), including required mode.
+    A configured but broken own credential must never fall back to the site.
+    """
+    mode = byok_config.get_mode()
+    own = user_id is not None and mode != MODE_SHARED and _load_credential(user_id, CAP_ASR)
+    if not online and not own:
+        return None
+    from app.transcriber.groq import _resolve_groq_model
+    return resolve(user_id, CAP_ASR, site_provider_id="groq", model_name=None if own else _resolve_groq_model())
+
+
 def _from_site(
     site_provider_id: Optional[str], model_name: Optional[str]
 ) -> Credential:

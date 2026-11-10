@@ -1,4 +1,3 @@
-import hashlib
 import json
 import logging
 import os
@@ -35,7 +34,6 @@ from app.models.transcriber_model import TranscriptResult, TranscriptSegment
 from app.services.constant import get_downloader
 from app.services.provider import ProviderService
 from app.transcriber.base import Transcriber
-from app.transcriber.transcriber_provider import get_transcriber, _transcribers
 from app.utils.note_helper import replace_content_markers, prepend_source_link
 from app.utils.note_paths import UnsafeTaskId, note_file, note_named_file
 from app.utils.screenshot_marker import extract_screenshot_timestamps
@@ -85,24 +83,7 @@ def _sign_static_url(url: str) -> str:
         return url
 
 
-# ------------------ 缓存文件命名（task_id + 链接/质量指纹） ------------------
-
-# 历史 bug：缓存文件只按 task_id 命名。前端「重试」会复用同一个 task_id 提交
-# （`NoteForm.tsx` 传 `task_id: currentTask.id`），如果用户重试时改了链接或质量，
-# 就会命中上一个视频的音频缓存，转写/总结出来的内容与当前链接完全无关。
-# 这里把「链接 + 质量」压成短哈希放进文件名，从根上区分不同输入。
-_CACHE_FINGERPRINT_LEN = 12
-
-
-def cache_fingerprint(video_url: Union[str, HttpUrl], quality) -> str:
-    """把「视频链接 + 音频质量」压成 12 位短哈希，用作缓存文件指纹。
-
-    只取短哈希而不是完整 URL：文件名不能太长，也不能带 `://`、`?` 这些
-    Windows 上非法的字符。
-    """
-    quality_value = getattr(quality, "value", quality)
-    raw = f"{video_url}|{quality_value}"
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:_CACHE_FINGERPRINT_LEN]
+from app.storage.task_files import cache_fingerprint
 
 
 @dataclass(frozen=True)
@@ -152,14 +133,7 @@ def _first_existing(*paths: Path) -> Optional[Path]:
 
 
 def transcript_cache_path(task_id: Optional[str], video_url: Union[str, HttpUrl], quality) -> Path:
-    """转写缓存的**新**路径（带指纹）。
-
-    给 `app/routers/note.py` 的客户端预取字幕落盘用：那边（`_persist_prefetched_transcript`）
-    目前仍写老命名 `{task_id}_transcript.json`，只能靠 `NoteCachePaths.legacy_transcript`
-    兜底读到。这留下一个残余风险——「用视频 A 提交并写入预取字幕 → 重试时换成视频 B」
-    会命中 A 的老 key 字幕。彻底修法就在那边改成写本函数返回的路径，
-    但 `routers/note.py` 不在本次改动范围内，所以这里只提供入口 + 记录风险。
-    """
+    """返回与客户端预取字幕相同的指纹缓存路径。"""
     return NoteCachePaths.build(task_id, video_url, quality).transcript
 
 
@@ -169,13 +143,15 @@ class NoteGenerator:
     以及将任务信息写入状态文件与数据库等功能。
     """
 
-    def __init__(self, user_id: Optional[int] = None):
+    def __init__(self, user_id: Optional[int] = None, attempt_id: Optional[str] = None):
         from app.services.transcriber_config_manager import TranscriberConfigManager
         config_manager = TranscriberConfigManager()
         self.model_size: str = config_manager.get_whisper_model_size()
         self.device: Optional[str] = None
         self.transcriber_type: str = config_manager.get_transcriber_type()
-        self.transcriber: Transcriber = self._init_transcriber()
+        self.transcriber: Optional[Transcriber] = None
+        self.attempt_id = attempt_id
+        self.deadline = time.monotonic() + max(1, int(os.getenv("TASK_TIMEOUT_SECONDS", "1800")))
         self.video_path: Optional[Path] = None
         self.video_img_urls=[]
         # 下载相关上限（体积 / 时长 / 重试次数）。每次实例化现读，改 env 后新任务即生效。
@@ -457,14 +433,12 @@ class NoteGenerator:
         """
         根据环境变量 TRANSCRIBER_TYPE 动态获取并实例化转写器
         """
-        if self.transcriber_type not in _transcribers:
-            logger.error(f"未找到支持的转写器：{self.transcriber_type}")
-            raise Exception(f"不支持的转写器：{self.transcriber_type}")
-
-        logger.info(f"使用转写器：{self.transcriber_type}")
+        from app.transcriber.transcriber_provider import get_transcriber
         return get_transcriber(
             transcriber_type=self.transcriber_type,
             model_size=self.model_size,
+            user_id=getattr(self, "user_id", None),
+            require_ready=True,
         )
 
     def _get_gpt(self, model_name: Optional[str], provider_id: Optional[str]) -> GPT:
@@ -548,120 +522,17 @@ class NoteGenerator:
     def _update_status(self, task_id: Optional[str], status: Union[str, TaskStatus], message: Optional[str] = None,
                        user_id: Optional[int] = None, platform: Optional[str] = None,
                        video_id: Optional[str] = None):
-        """
-        创建或更新 {task_id}.status.json，记录当前任务状态
-
-        :param task_id: 任务唯一 ID
-        :param status: TaskStatus 枚举或自定义状态字符串
-        :param message: 可选消息，用于记录失败原因等
-        :param user_id: 任务归属；**只在首次写入时落盘**，后续更新保留原值
-
-        ## 归属为什么不能覆盖（安全）
-
-        这个文件是 `_task_owner()` 判 ACL 的数据源。如果后来者能用 `user_id`
-        覆盖已有归属，那么「拿别人的 task_id 提交一次任务」就能把别人的任务
-        转到自己名下（配合 `_purge_task` / `get_task_status` 即为越权读删）。
-        因此这里改为 **setdefault 语义**：文件里已有归属就绝不改写。
-
-        全程使用 `note_file()` 拼路径，越界 task_id 会抛 `UnsafeTaskId` 而不是
-        写到目录外（见 `app/utils/note_paths.py`）。
-        """
+        """Compatibility facade; lifecycle persistence belongs to TaskService."""
         if not task_id:
             return
-
-        NOTE_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        try:
-            status_file = note_file(NOTE_OUTPUT_DIR, str(task_id), ".status.json")
-        except UnsafeTaskId as exc:
-            # 状态文件写不进去不该让整个任务流水线崩掉，但也必须留下痕迹：
-            # 这是被利用的信号，用 error 级别记录（不是 debug）。
-            logger.error(f"拒绝写入越界状态文件 (task_id={task_id!r}): {exc}")
-            return
-        logger.debug(f"写入状态文件: {status_file} 当前状态: {status}")
-
-        # 先读旧内容再合并：状态会被多次覆盖写，归属信息不能丢
-        data: dict = {}
-        if status_file.exists():
-            try:
-                data = json.loads(status_file.read_text(encoding="utf-8"))
-                if not isinstance(data, dict):
-                    data = {}
-            except Exception:
-                data = {}
-
-        data["status"] = status.value if isinstance(status, TaskStatus) else status
-        if message:
-            data["message"] = message
-        elif self._is_retry_message(data.get("message")):
-            # 阶段推进时把上一次遗留的「（重试 n/N）」清掉，否则它会一路带到
-            # SUMMARIZING / SUCCESS 上，前端会显示「完成（重试 2/2）」这种鬼话。
-            data.pop("message", None)
-        # setdefault 语义：已有归属绝不改写（见 docstring「归属为什么不能覆盖」）
-        if user_id is not None and data.get("user_id") is None:
-            data["user_id"] = user_id
-
-        # 失败时间戳：不可变语义，重试会刷新 mtime 但这里保留「这一次失败」的时刻。
-        # 监控的 24h 失败统计优先用它，而不是文件 mtime（审计结论 4）。
-        if str(data["status"]).upper() == str(TaskStatus.FAILED.value):
-            data["failed_at"] = datetime.now(timezone.utc).isoformat()
-
-        # 状态同步进 DB：文件会被用户删任务时物理删掉，DB 这份用来保住历史口径。
-        # 失败只记日志，绝不阻断任务流程。
-        try:
-            update_task_status(
-                task_id=task_id,
-                status=data["status"],
-                message=data.get("message"),
-                # 必须走 self./类名：`_parse_iso` 是类里的 @staticmethod，
-                # 方法体内的裸名字解析为 **global**，模块级没有这个符号 →
-                # NameError → 被下面的 except 吞成 logger.debug →
-                # update_task_status 一次都没执行过（DB status 恒 NULL）。
-                failed_at=self._parse_iso(data.get("failed_at")),
-                user_id=user_id,
-                platform=platform,
-                video_id=video_id,
-            )
-        except Exception as exc:  # noqa: BLE001 - 状态落库失败不影响任务
-            # 用 warning + exc_info：这条路径静默过一次（NameError 被吞），
-            # 再静默就没法在日志里发现"DB 同步整体失效"。
-            logger.warning(f"同步任务状态到 DB 失败 (task_id={task_id})：{exc}", exc_info=True)
-
-        try:
-            # First create a temporary file
-            temp_file = status_file.with_suffix('.tmp')
-
-            # Write to temporary file
-            with temp_file.open('w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-
-            # Atomic rename operation
-            temp_file.replace(status_file)
-
-            logger.debug(f"状态文件写入成功: {status_file}")
-        except Exception as e:
-            logger.error(f"写入状态文件失败 (task_id={task_id})：{e}")
-            # 兜底：把错误写进旁路 .err 文件，**绝不**覆写 .status.json。
-            # 旧实现直接把 "Error writing status: ..." 写进状态文件，
-            # 产出一个「合法但非 JSON」的坏文件——监控页会计入 unreadable，
-            # 任务本身也从此读不出状态（前端永远停在 PENDING）。
-            # 保留原状态文件（哪怕旧一拍）比写坏它更安全。
-            try:
-                # 注意：不能用 status_file.with_suffix('.err') ——
-                # "x.status.json" 的 suffix 是 ".json"，会得到 "x.status.err"。
-                err_file = status_file.with_name(f"{task_id}.err")
-                err_file.write_text(
-                    json.dumps(
-                        {
-                            "error": str(e)[:500],
-                            "attempted_status": data.get("status"),
-                            "ts": datetime.now(timezone.utc).isoformat(),
-                        },
-                        ensure_ascii=False,
-                    ),
-                    encoding="utf-8",
-                )
-            except Exception:
-                logger.error(f"写入错误旁路文件也失败 (task_id={task_id})")
+        value = getattr(status, "value", status)
+        if value not in {"FAILED", "SUCCESS"} and time.monotonic() > getattr(self, "deadline", float("inf")):
+            raise TimeoutError("任务超过执行时限，请缩短视频或调整 TASK_TIMEOUT_SECONDS")
+        from app.services.task_service import TaskService
+        TaskService(NOTE_OUTPUT_DIR).update(
+            task_id, status, message, attempt_id=getattr(self, "attempt_id", None),
+            user_id=user_id, platform=platform, video_id=video_id,
+        )
 
     @staticmethod
     def _parse_iso(value) -> Optional[datetime]:
@@ -1287,6 +1158,8 @@ class NoteGenerator:
         # 调用转写器
         try:
             logger.info("开始转写音频")
+            if self.transcriber is None:
+                self.transcriber = self._init_transcriber()
             transcript = self.transcriber.transcript(file_path=audio_file)
             transcript_cache_file.write_text(json.dumps(asdict(transcript), ensure_ascii=False, indent=2), encoding="utf-8")
             logger.info(f"转写并缓存成功 ({transcript_cache_file})")
@@ -1459,32 +1332,10 @@ class NoteGenerator:
         :param platform: 平台标识
         :param task_id: 任务 ID
         """
-        try:
-            insert_video_task(
-                video_id=video_id,
-                platform=platform,
-                task_id=task_id,
-                user_id=self._read_task_owner(task_id),
-            )
-            logger.info(f"已保存任务记录到数据库 (video_id={video_id}, platform={platform}, task_id={task_id})")
-        except Exception as e:
-            logger.error(f"保存任务记录失败：{e}")
-
-    @staticmethod
-    def _read_task_owner(task_id: str) -> Optional[int]:
-        """从状态文件里读出任务归属（路由在首次写 PENDING 时落进去的）。
-
-        之前入库时没带 user_id，导致 video_tasks 的归属一直是 NULL，
-        按用户隔离的历史/删除逻辑只能靠文件名兜底。
-        """
-        try:
-            status_file = NOTE_OUTPUT_DIR / f"{task_id}.status.json"
-            if not status_file.exists():
-                return None
-            payload = json.loads(status_file.read_text(encoding="utf-8"))
-            if isinstance(payload, dict):
-                owner = payload.get("user_id")
-                return int(owner) if owner is not None else None
-        except Exception:
-            return None
-        return None
+        from app.db.engine import SessionLocal
+        from app.db.models.video_tasks import VideoTask
+        with SessionLocal.begin() as db:
+            row = db.query(VideoTask).filter_by(task_id=task_id).first()
+            if row is not None:
+                row.video_id = video_id
+                row.platform = platform

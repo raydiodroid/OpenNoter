@@ -1,11 +1,10 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
-import { getProviders, ping } from '~/logic/api'
+import { onMounted, ref, watch } from 'vue'
+import { connectionKey } from '~/logic/client'
+import { listAvailableModels, ping } from '~/logic/api'
 import { settings, settingsReady } from '~/logic/storage'
-import { getModelsByProvider, listAvailableModels } from '~/logic/api'
 import { ensureHostPermission } from '~/logic/host-permission'
-import { NOTE_FORMATS, NOTE_STYLES, type Model, type NoteFormat, type Provider } from '~/logic/types'
-import { watch } from 'vue'
+import { type Model, NOTE_FORMATS, NOTE_STYLES, type NoteFormat, type Provider } from '~/logic/types'
 
 function toggleFormat(value: NoteFormat, checked: boolean) {
   const cur = settings.value.formats || []
@@ -23,28 +22,13 @@ async function refresh() {
   loading.value = true
   status.value = { kind: 'idle', text: '' }
   try {
-    providers.value = (await getProviders()).filter(p => p.enabled === 1)
-
-    // BYOK：把「用户自己凭据里的模型」也并进供应商下拉。
-    //
-    // 后端 /api/models 会返回 source='own' 的条目，provider_id 形如 own:llm。
-    // 这类条目在站点供应商列表里不存在，不并进来用户就选不到自己的模型。
-    const ownModels = (await listAvailableModels().catch(() => []))
-      .filter(m => m.source === 'own')
-    if (ownModels.length > 0) {
-      // 构造一个「伪供应商」承载用户自己的模型。
-      // 字段补齐到 Provider 接口要求，避免用 as 断言绕过类型检查。
-      if (!providers.value.some(p => p.id === 'own:llm')) {
-        providers.value = [...providers.value, {
-          id: 'own:llm',
-          name: '我的凭据',
-          logo: 'custom',
-          type: 'custom',
-          enabled: 1,
-        }]
-      }
+    const available = await listAvailableModels()
+    const ids = [...new Set(available.map(m => m.provider_id))]
+    providers.value = ids.map(id => ({ id, name: id.startsWith('own:') ? '我的凭据' : id, logo: 'custom', type: 'custom', enabled: 1 }))
+    if (settings.value.providerId && !ids.includes(settings.value.providerId)) {
+      settings.value.providerId = ''
+      settings.value.modelName = ''
     }
-
     if (settings.value.providerId)
       await refreshModels(settings.value.providerId)
     status.value = { kind: 'ok', text: `已加载 ${providers.value.length} 个供应商` }
@@ -65,16 +49,11 @@ async function refreshModels(providerId: string) {
     return
   }
   try {
-    // BYOK 的 own: 前缀不是真实供应商，查 /api/model_enable 会 404；
-    // 改从 /api/models 过滤出该来源的条目。
-    if (providerId.startsWith('own:')) {
-      const all = await listAvailableModels()
-      models.value = all
-        .filter(m => m.provider_id === providerId)
-        .map(m => ({ id: m.id, model_name: m.model_name } as Model))
-      return
-    }
-    models.value = await getModelsByProvider(providerId)
+    const all = await listAvailableModels()
+    models.value = all.filter(m => m.provider_id === providerId)
+      .map(m => ({ id: String(m.id), model_name: m.model_name, provider_id: m.provider_id }))
+    if (!models.value.some(m => m.model_name === settings.value.modelName))
+      settings.value.modelName = ''
   }
   catch {
     models.value = []
@@ -100,8 +79,15 @@ async function testConnection() {
 }
 
 watch(() => settings.value?.providerId, (id) => {
-  if (id)
-    refreshModels(id)
+  if (!id)
+    settings.value.modelName = ''
+  refreshModels(id)
+})
+
+watch(() => connectionKey(settings.value), () => {
+  providers.value = []
+  models.value = []
+  status.value = { kind: 'idle', text: '连接设置已改变，请测试连接并刷新模型' }
 })
 
 onMounted(async () => {
@@ -113,13 +99,19 @@ onMounted(async () => {
 
 <template>
   <div class="p-6 max-w-2xl">
-    <h1 class="text-xl font-bold mb-4">通用</h1>
+    <h1 class="text-xl font-bold mb-4">
+      通用
+    </h1>
 
     <section class="section-card">
-      <h2 class="font-semibold">后端地址</h2>
+      <h2 class="font-semibold">
+        后端地址
+      </h2>
       <div class="flex gap-2">
         <input v-model="settings.backendUrl" class="input flex-1" placeholder="http://localhost:8483">
-        <button class="btn-secondary" @click="testConnection">测试连通</button>
+        <button class="btn-secondary" @click="testConnection">
+          测试连通
+        </button>
         <button class="btn-secondary" :disabled="loading" @click="refresh">
           {{ loading ? '加载中…' : '刷新' }}
         </button>
@@ -141,7 +133,9 @@ onMounted(async () => {
     </section>
 
     <section class="section-card">
-      <h2 class="font-semibold">API Key（后端开启强制认证时必填）</h2>
+      <h2 class="font-semibold">
+        API Key（后端开启强制认证时必填）
+      </h2>
       <div class="flex gap-2">
         <input
           v-model="settings.apiKey"
@@ -164,10 +158,13 @@ onMounted(async () => {
     </section>
 
     <section class="section-card">
-      <h2 class="font-semibold">默认供应商与模型</h2>
+      <h2 class="font-semibold">
+        默认供应商与模型
+      </h2>
       <label class="flex flex-col gap-1 text-sm">
         <span class="text-gray-600">供应商</span>
         <select v-model="settings.providerId" class="input">
+          <option value="">自动选择（使用后端默认模型）</option>
           <option value="">— 选择供应商 —</option>
           <option v-for="p in providers" :key="p.id" :value="p.id">
             {{ p.name }} <span v-if="p.type === 'built-in'">(内置)</span>
@@ -187,7 +184,9 @@ onMounted(async () => {
     </section>
 
     <section class="section-card">
-      <h2 class="font-semibold">默认生成选项</h2>
+      <h2 class="font-semibold">
+        默认生成选项
+      </h2>
       <div class="grid grid-cols-2 gap-3 text-sm">
         <label class="flex flex-col gap-1">
           <span class="text-gray-600">画质</span>
@@ -231,7 +230,9 @@ onMounted(async () => {
     </section>
 
     <section class="section-card">
-      <h2 class="font-semibold">视频理解（多模态）</h2>
+      <h2 class="font-semibold">
+        视频理解（多模态）
+      </h2>
       <p class="text-xs text-gray-500">
         启用后会按抽帧间隔截取视频帧拼成网格图，连同字幕一起喂给视觉模型，提升画面相关问题的回答质量。
         <strong class="text-amber-700">需要选择视觉模型</strong>（GPT-4o / Gemini / Claude 等），文字模型会忽略图片。

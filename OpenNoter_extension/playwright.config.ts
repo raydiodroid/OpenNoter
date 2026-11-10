@@ -1,15 +1,9 @@
-/**
- * @see {@link https://playwright.dev/docs/chrome-extensions Chrome extensions | Playwright}
- */
 import { defineConfig } from '@playwright/test'
 
+// Test the packaged MV3 extension; no live backend or Vite dev server is needed.
 export default defineConfig({
   testDir: './e2e',
-  retries: 2,
-  webServer: {
-    command: 'npm run dev',
-    // start e2e test after the Vite server is fully prepared
-    url: 'http://localhost:3303/popup/main.ts',
-    reuseExistingServer: true,
-  },
+  retries: 0,
+  workers: 1,
+  use: { headless: true },
 })

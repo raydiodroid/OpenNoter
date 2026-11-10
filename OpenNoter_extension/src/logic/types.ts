@@ -71,6 +71,7 @@ export interface TaskStatusResponse {
 }
 
 export interface TaskRecord {
+  scope?: string
   taskId: string
   videoUrl: string
   platform: Platform
@@ -178,6 +179,9 @@ export interface TranscriberOption {
 }
 
 export interface TranscriberConfig {
+  resolved_endpoint?: string
+  resolved_model?: string
+  has_asr_key?: boolean
   transcriber_type: TranscriberType
   whisper_model_size: WhisperModelSize | null
   available_types: TranscriberOption[]
@@ -203,4 +207,3 @@ export interface DeployStatus {
   whisper: { model_size: string, transcriber_type: string }
   ffmpeg: { available: boolean }
 }
-

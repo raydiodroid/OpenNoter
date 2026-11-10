@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import MarkdownIt from 'markdown-it'
-import { askChat, getChatStatus, indexChatTask, type ChatMessage } from '~/logic/api'
+import { type ChatMessage, askChat, getChatStatus, indexChatTask } from '~/logic/api'
 import { settings } from '~/logic/storage'
 
 const props = defineProps<{ taskId: string }>()
@@ -14,37 +14,52 @@ const sending = ref(false)
 const indexState = ref<'idle' | 'indexing' | 'indexed' | 'failed' | 'unknown'>('unknown')
 const error = ref('')
 const scrollEl = ref<HTMLElement | null>(null)
+let generation = 0
 let pollTimer: ReturnType<typeof setTimeout> | null = null
 
 const ready = computed(() => indexState.value === 'indexed')
-const canSend = computed(() => ready.value && draft.value.trim().length > 0 && !sending.value && !!settings.value.providerId && !!settings.value.modelName)
+const canSend = computed(() => ready.value && draft.value.trim().length > 0 && !sending.value)
 
-async function pollIndex() {
+async function pollIndex(token: number) {
+  if (token !== generation)
+    return
   try {
     const res = await getChatStatus(props.taskId)
+    if (token !== generation)
+      return
     indexState.value = res.status
     if (res.status === 'indexing')
-      pollTimer = setTimeout(pollIndex, 2000)
+      pollTimer = setTimeout(() => pollIndex(token), 2000)
   }
   catch (e) {
+    if (token !== generation)
+      return
     error.value = (e as Error).message
     indexState.value = 'failed'
   }
 }
 
 async function ensureIndexed() {
+  const token = ++generation
+  if (pollTimer)
+    clearTimeout(pollTimer)
+  sending.value = false
   error.value = ''
   indexState.value = 'unknown'
   try {
     const status = await getChatStatus(props.taskId)
+    if (token !== generation)
+      return
     indexState.value = status.status
     if (status.indexed)
       return
     indexState.value = 'indexing'
     await indexChatTask(props.taskId)
-    pollIndex()
+    void pollIndex(token)
   }
   catch (e) {
+    if (token !== generation)
+      return
     error.value = (e as Error).message
     indexState.value = 'failed'
   }
@@ -53,19 +68,23 @@ async function ensureIndexed() {
 async function send() {
   if (!canSend.value)
     return
+  const token = generation
+  const taskId = props.taskId
   const question = draft.value.trim()
   draft.value = ''
   messages.value.push({ role: 'user', content: question })
-  await scrollDown()
   sending.value = true
+  void scrollDown()
   try {
     const res = await askChat({
-      task_id: props.taskId,
+      task_id: taskId,
       question,
       history: messages.value.slice(0, -1),
-      provider_id: settings.value.providerId,
-      model_name: settings.value.modelName,
+      provider_id: settings.value.providerId || undefined,
+      model_name: settings.value.modelName || undefined,
     }) as { answer?: string, content?: string, message?: string } | string
+    if (token !== generation || taskId !== props.taskId)
+      return
     const reply = typeof res === 'string'
       ? res
       : (res.answer ?? res.content ?? res.message ?? JSON.stringify(res))
@@ -73,10 +92,13 @@ async function send() {
     await scrollDown()
   }
   catch (e) {
+    if (token !== generation)
+      return
     messages.value.push({ role: 'assistant', content: `❌ 调用失败：${(e as Error).message}` })
   }
   finally {
-    sending.value = false
+    if (token === generation)
+      sending.value = false
   }
 }
 
@@ -88,6 +110,8 @@ async function scrollDown() {
 
 watch(() => props.taskId, () => {
   messages.value = []
+  draft.value = ''
+  sending.value = false
   if (pollTimer) {
     clearTimeout(pollTimer)
     pollTimer = null
@@ -97,6 +121,7 @@ watch(() => props.taskId, () => {
 
 onMounted(ensureIndexed)
 onUnmounted(() => {
+  generation++
   if (pollTimer)
     clearTimeout(pollTimer)
 })
@@ -114,7 +139,9 @@ onUnmounted(() => {
       </button>
     </header>
 
-    <div v-if="error" class="text-xs text-red-600 px-2 py-1">{{ error }}</div>
+    <div v-if="error" class="text-xs text-red-600 px-2 py-1">
+      {{ error }}
+    </div>
 
     <div ref="scrollEl" class="flex-1 overflow-auto px-2 py-2 flex flex-col gap-2">
       <div v-if="messages.length === 0 && ready" class="text-xs text-gray-400 italic">
@@ -131,11 +158,15 @@ onUnmounted(() => {
             ? 'bg-blue-600 text-white ml-auto block'
             : 'bg-gray-100 text-gray-800'"
         >
-          <div v-if="m.role === 'assistant'" v-html="md.render(m.content)" class="prose prose-sm max-w-none" />
-          <div v-else class="whitespace-pre-wrap break-words">{{ m.content }}</div>
+          <div v-if="m.role === 'assistant'" class="prose prose-sm max-w-none" v-html="md.render(m.content)" />
+          <div v-else class="whitespace-pre-wrap break-words">
+            {{ m.content }}
+          </div>
         </div>
       </div>
-      <div v-if="sending" class="text-xs text-gray-500 italic">思考中…</div>
+      <div v-if="sending" class="text-xs text-gray-500 italic">
+        思考中…
+      </div>
     </div>
 
     <footer class="border-t p-2 flex gap-2">

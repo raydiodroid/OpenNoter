@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
-import { getDownloaderCookie, setDownloaderCookie } from '~/logic/api'
+import { getCookieStatus, getDownloaderCookie, setDownloaderCookie } from '~/logic/api'
 import { SUPPORTED_COOKIE_PLATFORMS, syncCookieToBackend } from '~/logic/cookies'
 import { PLATFORM_LABELS } from '~/logic/platform'
 import type { Platform } from '~/logic/types'
@@ -23,7 +23,12 @@ function ensureRow(p: string) {
 async function refreshOne(p: Exclude<Platform, 'local'>) {
   const r = ensureRow(p)
   try {
-    r.cookie = (await getDownloaderCookie(p)) ?? ''
+    const status = await getCookieStatus()
+    const current = status.platforms.find(item => item.platform === p)
+    r.cookie = status.byok_enabled ? '' : (await getDownloaderCookie(p)) ?? ''
+    r.status = { kind: 'idle', text: status.byok_enabled
+      ? (current?.configured ? `我的 Cookie 已配置（${current.entry_count} 条）；留空不会显示原文` : '尚未配置我的 Cookie')
+      : '当前使用站点共享 Cookie，修改需要管理员权限' }
   }
   catch (e) {
     r.status = { kind: 'err', text: `读取失败：${(e as Error).message}` }
@@ -54,7 +59,11 @@ async function saveManual(p: Exclude<Platform, 'local'>) {
   r.busy = true
   r.status = { kind: 'idle', text: '保存中…' }
   try {
-    await setDownloaderCookie(p, r.cookie || '')
+    if (!r.cookie.trim()) {
+      r.status = { kind: 'err', text: '请输入新 Cookie 后保存' }
+      return
+    }
+    await setDownloaderCookie(p, r.cookie)
     r.status = { kind: 'ok', text: '已保存 ✓' }
   }
   catch (e) {
@@ -75,9 +84,11 @@ onMounted(() => {
   <div class="p-6 max-w-3xl">
     <div class="flex items-center justify-between mb-4">
       <div>
-        <h1 class="text-xl font-bold">下载配置</h1>
+        <h1 class="text-xl font-bold">
+          下载配置
+        </h1>
         <p class="text-xs text-gray-500 mt-1">
-          每平台的 cookie 写入后端 (config/downloader.json)；下载时由对应 downloader 读取注入 yt-dlp。
+          开启个人 Cookie 时保存到当前账号；共享模式下修改站点 Cookie 需要管理员权限。个人 Cookie 保存后不回显。
         </p>
       </div>
       <button class="btn-secondary" :disabled="refreshing" @click="refreshAll">
@@ -91,7 +102,9 @@ onMounted(() => {
       class="section-card"
     >
       <div class="flex items-center justify-between">
-        <h2 class="font-semibold">{{ PLATFORM_LABELS[p] }}</h2>
+        <h2 class="font-semibold">
+          {{ PLATFORM_LABELS[p] }}
+        </h2>
         <span
           v-if="rows[p]?.cookie"
           class="tag bg-green-100 text-green-700"

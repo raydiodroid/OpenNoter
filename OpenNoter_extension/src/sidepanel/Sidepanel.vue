@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { createTaskPoller } from '~/logic/task-poller'
+import { activeScope, settingsReady, tasks, tasksReady, upsertTask } from '~/logic/storage'
 import { getTaskStatus, resolveImageUrl } from '~/logic/api'
-import { tasks, tasksReady, settingsReady, upsertTask } from '~/logic/storage'
 import type { TaskRecord } from '~/logic/types'
 import { getTaskDisplayTitle } from '~/logic/task-display'
 
@@ -31,36 +32,16 @@ const STAGE_LABELS: Record<string, string> = {
   FAILED: '失败',
 }
 
-let pollTimer: ReturnType<typeof setTimeout> | null = null
-
-async function poll(taskId: string) {
-  try {
-    const res = await getTaskStatus(taskId)
-    const cur = tasks.value?.find(t => t.taskId === taskId)
-    if (cur) {
-      upsertTask({
-        ...cur,
-        status: res.status,
-        message: res.message,
-        result: res.result ?? cur.result,
-        updatedAt: Date.now(),
-        title: cur.title || getTaskDisplayTitle(cur),
-      })
-    }
-    if (res.status !== 'SUCCESS' && res.status !== 'FAILED')
-      pollTimer = setTimeout(() => poll(taskId), 3000)
+const poller = createTaskPoller(getTaskStatus, (taskId, res) => {
+  const cur = tasks.value.find(t => t.taskId === taskId)
+  if (cur) {
+    upsertTask({ ...cur, status: res.status, message: res.message, result: res.result ?? cur.result, updatedAt: Date.now() })
   }
-  catch (e) {
-    errorMsg.value = (e as Error).message
-    pollTimer = setTimeout(() => poll(taskId), 5000)
-  }
-}
+}, (e) => { errorMsg.value = e.message })
+const poll = poller.start
 
 function selectTask(id: string) {
-  if (pollTimer) {
-    clearTimeout(pollTimer)
-    pollTimer = null
-  }
+  poller.stop()
   activeTaskId.value = id
   showHistory.value = false
   const t = tasks.value?.find(x => x.taskId === id)
@@ -111,7 +92,9 @@ async function copyMindMapImage() {
       new ClipboardItem({ [blob.type]: blob }),
     ])
     successMsg.value = '思维导图图片已复制'
-    setTimeout(() => { successMsg.value = '' }, 2000)
+    setTimeout(() => {
+      successMsg.value = ''
+    }, 2000)
   }
   catch (e) {
     errorMsg.value = (e as Error).message || '复制思维导图图片失败'
@@ -153,8 +136,12 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
-  if (pollTimer)
-    clearTimeout(pollTimer)
+  poller.stop()
+})
+watch(activeScope, () => {
+  poller.stop()
+  activeTaskId.value = ''
+  errorMsg.value = ''
 })
 </script>
 
@@ -162,7 +149,9 @@ onUnmounted(() => {
   <main class="w-full h-full flex flex-col bg-white text-sm text-gray-800">
     <!-- 顶栏：极简 -->
     <header class="flex items-center justify-between px-3 py-2 border-b shrink-0">
-      <div class="font-semibold">OpenNoter</div>
+      <div class="font-semibold">
+        OpenNoter
+      </div>
       <div class="flex items-center gap-1">
         <button
           v-if="(tasks?.length ?? 0) > 0"
@@ -251,42 +240,56 @@ onUnmounted(() => {
           class="px-2 py-1 rounded"
           :class="viewMode === 'markdown' ? 'bg-blue-600 text-white' : 'hover:bg-gray-100 text-gray-700'"
           @click="viewMode = 'markdown'"
-        >Markdown</button>
+        >
+          Markdown
+        </button>
         <button
           class="px-2 py-1 rounded"
           :class="viewMode === 'mindmap' ? 'bg-blue-600 text-white' : 'hover:bg-gray-100 text-gray-700'"
           @click="viewMode = 'mindmap'"
-        >思维导图</button>
+        >
+          思维导图
+        </button>
         <button
           class="px-2 py-1 rounded"
           :class="viewMode === 'chat' ? 'bg-blue-600 text-white' : 'hover:bg-gray-100 text-gray-700'"
           @click="viewMode = 'chat'"
-        >AI 问答</button>
+        >
+          AI 问答
+        </button>
         <div class="flex-1" />
         <button
           v-if="viewMode === 'markdown'"
           class="text-gray-500 hover:text-gray-800 px-1.5 py-1 rounded hover:bg-gray-100"
           title="复制 Markdown"
           @click="copyMarkdown"
-        >复制</button>
+        >
+          复制
+        </button>
         <button
           v-if="viewMode === 'markdown'"
           class="text-gray-500 hover:text-gray-800 px-1.5 py-1 rounded hover:bg-gray-100"
           title="下载 .md"
           @click="downloadMarkdown"
-        >下载</button>
+        >
+          下载
+        </button>
         <button
           v-if="viewMode === 'mindmap'"
           class="text-gray-500 hover:text-gray-800 px-1.5 py-1 rounded hover:bg-gray-100"
           title="复制思维导图图片"
           @click="copyMindMapImage"
-        >复制</button>
+        >
+          复制
+        </button>
         <button
           v-if="viewMode === 'mindmap'"
           class="text-gray-500 hover:text-gray-800 px-1.5 py-1 rounded hover:bg-gray-100"
           title="下载思维导图 PNG"
           @click="downloadMindMapImage"
-        >下载</button>
+        >
+          下载
+        </button>
       </div>
 
       <!-- 内容区：占满剩余空间 -->

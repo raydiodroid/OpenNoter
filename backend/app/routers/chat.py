@@ -76,7 +76,7 @@ def _check_ask_rate(user: Optional[User], task_id: str) -> None:
 
 def _require_task_access(task_id: str, user: User | None) -> None:
     """Chat/Index 与笔记接口共用任务 ACL，防止凭 task_id 对他人笔记做 RAG。"""
-    from app.routers.note import _can_access_task
+    from app.services.task_access import can_access_task as _can_access_task
 
     if not _can_access_task(task_id, user):
         raise HTTPException(status_code=403, detail="无权访问该任务")

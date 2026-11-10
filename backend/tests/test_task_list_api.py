@@ -78,6 +78,8 @@ def note_router(tmp_path, monkeypatch):
         mod = importlib.util.module_from_spec(spec)
         sys.modules["app.routers.note"] = mod
         spec.loader.exec_module(mod)
+        from app.db.init_db import init_db
+        init_db()
         # 关键：模块级 NOTE_OUTPUT_DIR 已经在 import 时求值，这里改成临时目录
         monkeypatch.setattr(mod, "NOTE_OUTPUT_DIR", str(notes), raising=False)
         yield mod, notes
@@ -98,6 +100,15 @@ def _write_status(notes: Path, task_id: str, payload: dict):
     (notes / f"{task_id}.status.json").write_text(
         json.dumps(payload, ensure_ascii=False), encoding="utf-8"
     )
+    from app.db.engine import SessionLocal
+    from app.db.models.users import User
+    from app.services.task_service import TaskService
+    owner = payload.get("user_id")
+    with SessionLocal.begin() as db:
+        if owner is not None and db.get(User, owner) is None:
+            db.add(User(id=owner, email=f"u{owner}@example.com"))
+    TaskService(notes).import_legacy(notes)
+
 
 
 def _call(router_mod, user, **kwargs):

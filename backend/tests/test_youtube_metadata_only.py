@@ -84,6 +84,10 @@ class _AudioDownloadResult:
         self.__dict__.update(kwargs)
 
 
+from tests.module_isolation import isolated_loader
+
+
+@isolated_loader
 def _load_youtube_downloader():
     """Load the module with its app-level dependencies stubbed out."""
     # 只 stub 真正的第三方/平台依赖，让被测模块拿到真实的

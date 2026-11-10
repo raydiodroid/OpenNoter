@@ -65,6 +65,10 @@ _KNOWN_PLATFORM_HOSTS = {
     "douyin.com",
     "v.douyin.com",
     "www.kuaishou.com",
+    "v.kuaishou.com",
+    "m.gifshow.com",
+    "api.deepseek.com",
+    "api.openai.com",
     "kuaishou.com",
 }
 

@@ -2,10 +2,10 @@
 
 ## 为什么必须有
 
-任务执行器是固定线程池（`TASK_MAX_WORKERS`，默认 3）。一个任务通常跑
+任务执行器是固定线程池（`TASK_MAX_WORKERS`，默认 6）。一个任务通常跑
 1~5 分钟（下载 + 转写 + LLM）。没有配额时：
 
-- 一个用户连续提交 10 个任务 → 3 个 worker 全被占满 → 其他人全部排队
+- 一个用户连续提交 10 个任务 → 6 个 worker 全被占满 → 其他人全部排队
 - 一个用户生成上千篇笔记 → 磁盘被吃光
 
 这不是理论风险：`POST /notes` 没有任何限制，登录用户随便刷。
@@ -33,7 +33,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import threading
 import time
@@ -98,99 +97,38 @@ class QuotaExceeded(Exception):
 
 
 def _count_user_running(user_id: int, note_dir: Path) -> int:
-    """统计该用户「进行中」的任务数（扫状态文件）。
-
-    这里必须读全量文件的 user_id —— 与列表接口同样是 O(n)，
-    但提交任务的频率远低于刷新列表，且这是**安全兜底**，可以接受。
-    """
-    running = 0
-    if not note_dir.exists():
-        return 0
-    for path in note_dir.glob("*.status.json"):
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        if not isinstance(payload, dict):
-            continue
-        if payload.get("user_id") != user_id:
-            continue
-        if str(payload.get("status") or "").upper() in _RUNNING_STATES:
-            running += 1
-    return running
+    from app.db.models.video_tasks import VideoTask
+    with SessionLocal() as db:
+        return db.query(VideoTask).filter(VideoTask.user_id == user_id,
+            VideoTask.deleted_at.is_(None), VideoTask.status.in_(_RUNNING_STATES)).count()
 
 
 def _count_user_today(user_id: int, note_dir: Path) -> int:
-    """统计该用户「今天（UTC）」提交的任务数。
-
-    用状态文件的 mtime 近似「提交时间」——任务一旦创建就会写 PENDING，
-    mtime 必然在提交时刻附近。重试会刷新 mtime，会被重复计数，
-    这是**保守方向**（宁可多算，不要放过刷接口的人）。
-    """
-    if not note_dir.exists():
-        return 0
-    cutoff = datetime.now(timezone.utc) - timedelta(days=1)
-    count = 0
-    for path in note_dir.glob("*.status.json"):
-        try:
-            st = path.stat()
-            if datetime.fromtimestamp(st.st_mtime, tz=timezone.utc) < cutoff:
-                continue
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        if isinstance(payload, dict) and payload.get("user_id") == user_id:
-            count += 1
-    return count
+    from app.db.models.task_attempts import TaskAttempt
+    with SessionLocal() as db:
+        return db.query(TaskAttempt).filter(TaskAttempt.user_id == user_id,
+            TaskAttempt.created_at >= datetime.now(timezone.utc) - timedelta(days=1)).count()
 
 
 def _user_storage_mb(user_id: int, note_dir: Path) -> float:
-    """粗算该用户笔记产物的体积（MB）。
-
-    只统计 `{task_id}.json` / `.status.json` / `_transcript.json`，
-    不扫截图与视频缓存（那些走另一套清理策略）。
-    """
-    if not note_dir.exists():
-        return 0.0
+    """Count task artifacts and screenshots by DB ownership, including cleanup residue."""
+    from app.db.models.video_tasks import VideoTask
+    from app.storage.task_files import LocalTaskStorage
+    from app.utils.note_paths import UnsafeTaskId
+    with SessionLocal() as db:
+        task_ids = [row[0] for row in db.query(VideoTask.task_id).filter(VideoTask.user_id == user_id)]
+    storage = LocalTaskStorage(note_dir)
     total = 0
-    for path in note_dir.glob("*.status.json"):
+    for task_id in task_ids:
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
+            total += storage.size(task_id)
+        except UnsafeTaskId:
             continue
-        if not isinstance(payload, dict) or payload.get("user_id") != user_id:
-            continue
-        task_id = path.name[: -len(".status.json")]
-        for suffix in (".json", "_transcript.json"):
-            f = note_dir / f"{task_id}{suffix}"
-            try:
-                total += f.stat().st_size
-            except OSError:
-                pass
-        try:
-            total += path.stat().st_size
-        except OSError:
-            pass
     return total / 1024 / 1024
 
 
 def _count_anon_running(note_dir: Path) -> int:
-    """统计无归属（匿名）进行中任务数。"""
-    running = 0
-    if not note_dir.exists():
-        return 0
-    for path in note_dir.glob("*.status.json"):
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        if not isinstance(payload, dict):
-            continue
-        if payload.get("user_id") is not None:
-            continue
-        if str(payload.get("status") or "").upper() in _RUNNING_STATES:
-            running += 1
-    return running
+    return _count_user_running(None, note_dir)
 
 
 def _check_anon_submit_rpm() -> None:

@@ -303,6 +303,11 @@ def admin_delete_user(
         {VideoTask.user_id: None}, synchronize_session=False
     )
 
+    # Preserve the submission ledger without retaining a dangling user reference.
+    from app.db.models.task_attempts import TaskAttempt
+    db.query(TaskAttempt).filter(TaskAttempt.user_id == user_id).update(
+        {TaskAttempt.user_id: None}, synchronize_session=False
+    )
     db.delete(user)
     db.commit()
     return R.success(msg="用户已删除")

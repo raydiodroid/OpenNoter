@@ -7,9 +7,9 @@
 SQLite 单写者的并发，对自托管单机场景成本偏高。
 
 最小可靠方案：
-1. **优雅退出**（SIGTERM / lifespan shutdown）：扫描 ``*.status.json``，
+1. **优雅退出**（SIGTERM / lifespan shutdown）：查询数据库任务状态，
    把仍处于进行中的状态写成 FAILED，前端轮询会停，不再永远转圈。
-2. **崩溃 / SIGKILL / OOM**：shutdown 钩子跑不到；**下次启动**再扫一次，
+2. **崩溃 / SIGKILL / OOM**：shutdown 钩子跑不到；**下次启动**再检查一次，
    同样标 FAILED（「进程重启，任务已中断」）。
 
 这覆盖「已返回 task_id、进程却没了」的体验问题；**不**保证任务可恢复执行。
@@ -69,52 +69,12 @@ def fail_interrupted_tasks(
     reason: str,
     note_dir: Path | None = None,
 ) -> int:
-    """把进行中的任务标为 FAILED。返回改写数量。
-
-    通过 ``NoteGenerator._update_status`` 落盘 + 同步 DB，与正常失败路径一致。
-    """
-    from app.services import note as note_mod
-    from app.services.note import NoteGenerator
-
+    """Recover DB rows first, including rows whose status files have disappeared."""
+    from app.services.task_service import TaskService
     root = note_dir if note_dir is not None else _note_output_dir()
-    # NoteGenerator._update_status 用模块级 NOTE_OUTPUT_DIR；测试/自定义目录时对齐。
-    prev_dir = note_mod.NOTE_OUTPUT_DIR
-    note_mod.NOTE_OUTPUT_DIR = root
-    try:
-        marked = _fail_interrupted_tasks_locked(reason=reason, root=root)
-    finally:
-        note_mod.NOTE_OUTPUT_DIR = prev_dir
-    return marked
-
-
-def _fail_interrupted_tasks_locked(*, reason: str, root: Path) -> int:
-    from app.services.note import NoteGenerator
-
-    gen = NoteGenerator()
-    marked = 0
-    for path in iter_status_files(root):
-        data = _read_status(path)
-        if not data:
-            continue
-        status = str(data.get("status") or "").upper()
-        if status not in IN_PROGRESS_STATUSES:
-            continue
-        task_id = path.name[: -len(".status.json")]
-        if not task_id:
-            continue
-        try:
-            gen._update_status(task_id, TaskStatus.FAILED, message=reason)
-            marked += 1
-        except Exception:
-            logger.warning(
-                "标记中断任务失败 task_id=%s path=%s",
-                task_id,
-                path,
-                exc_info=True,
-            )
-    if marked:
-        logger.info("已将 %s 个进行中任务标记为 FAILED（%s）", marked, reason[:80])
-    return marked
+    service = TaskService(root)
+    service.import_legacy(root)
+    return service.recover(reason)
 
 
 # ---------------------------------------------------------------------------
@@ -147,7 +107,7 @@ def reap_stale_tasks(
 
     ## 双条件判定（缺一不可）
 
-      1. 状态文件 mtime 距今超过 ``stale_after`` 秒；
+      1. 数据库 updated_at（未导入的历史文件用 mtime）超过 ``stale_after`` 秒；
       2. **该 task_id 不在本进程的线程池里**（`task_serial_executor.is_active`）。
 
     只看 (1) 会误杀正常长任务；只看 (2) 会把「刚重启、任务确实丢了」的
@@ -184,7 +144,38 @@ def reap_stale_tasks(
         logger.warning("线程池不支持活跃任务查询，本次跳过僵尸清理（避免误杀）")
         return stats
 
+    from datetime import datetime, timezone
+    from app.services.task_service import TaskService
+    service = TaskService(root)
+    from app.db.models.video_tasks import VideoTask
+    cutoff = datetime.fromtimestamp(now - stale_after, timezone.utc)
+    with service.sessions() as db:
+        rows = db.query(VideoTask).filter(VideoTask.deleted_at.is_(None)).all()
+        stats["scanned"] += len(rows)
+        for row in rows:
+            updated = row.updated_at or row.created_at
+            if row.status not in IN_PROGRESS_STATUSES or updated is None:
+                continue
+            if updated.replace(tzinfo=timezone.utc) >= cutoff:
+                continue
+            stats["stale"] += 1
+            if row.task_id in active_ids:
+                stats["skipped_active"] += 1
+    if not dry_run:
+        stats["reaped"] += service.recover(
+            f"任务已中断（超过 {int(stale_after / 60)} 分钟无进展）",
+            exclude=active_ids, before=cutoff,
+        )
+
     for path in iter_status_files(root):
+        task_id = path.name[:-len(".status.json")]
+        try:
+            # A stale compatibility mirror must never override durable DB state.
+            if service.snapshot(task_id) is not None:
+                continue
+        except ValueError:
+            stats["errors"] += 1
+            continue
         stats["scanned"] += 1
         data = _read_status(path)
         if not data:
@@ -224,14 +215,8 @@ def reap_stale_tasks(
 
         try:
             # 复用与启动时一致的状态写入路径（文件 + DB 同步）
-            from app.services.note import NoteGenerator
-
-            gen = NoteGenerator.__new__(NoteGenerator)
-            gen._update_status(  # noqa: SLF001 - 与 fail_interrupted_tasks 同一入口
-                task_id,
-                TaskStatus.FAILED,
-                message=f"任务已中断（超过 {int(stale_after / 60)} 分钟无进展，已自动清理）",
-            )
+            service.update(task_id, TaskStatus.FAILED,
+                           message=f"任务已中断（超过 {int(stale_after / 60)} 分钟无进展，已自动清理）")
             stats["reaped"] += 1
             logger.info("已清理僵尸任务 (task_id=%s)", task_id)
         except Exception:  # noqa: BLE001

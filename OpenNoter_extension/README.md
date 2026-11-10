@@ -1,53 +1,53 @@
 # OpenNoter 浏览器插件
 
-把 OpenNoter 的"视频链接 → Markdown 笔记"能力下沉到浏览器插件。当前为 P1 MVP（仅工具栏 popup）。
+在 Bilibili、YouTube、抖音、快手视频页提交笔记任务，连接自己的 OpenNoter 后端。插件使用 Vue 3 和 Manifest V3，包含 popup、side panel、options 和独立的后台 service worker。
 
-## 当前状态（P1 MVP）
+## 已实现的功能
 
-- ✅ 工具栏图标 popup：自动读当前 tab URL，识别支持平台，触发笔记生成
-- ✅ 设置页：后端地址、供应商/模型、画质、截图/跳转/风格默认值
-- ✅ 任务进度可视化、Markdown 渲染、复制 / 下载 .md
-- ✅ chrome.storage.local 持久化设置和最近 30 个任务
-- ⏳ P2：视频页悬浮按钮 + 右键菜单 + 浏览器 cookie 直通
-- ⏳ P3：side panel + 思维导图（markmap）
-- ⏳ P4：RAG 问答
+- 工具栏弹窗、视频页浮动入口、右键菜单提交任务。
+- 侧边栏查看进度、Markdown、思维导图，复制与下载笔记，基于笔记进行 RAG 问答。
+- B 站浏览器字幕预取；支持从当前浏览器同步四个平台的 Cookie。
+- 自定义后端地址与 API Key；通过统一模型列表选择站点模型或个人 BYOK 模型，也可留空使用后端默认选择。
+- 个人默认 / LLM / ASR 凭据设置。Cookie 根据站点策略写入个人接口或管理员共享接口。
+- 管理员可管理站点供应商、转写配置和部署监控；普通用户只显示通用、个人凭据和下载设置。
+- 任务缓存按后端地址与 API Key 的 SHA-256 摘要隔离：每个身份保留最近 30 条，总量最多 300 条。切换连接会停止旧轮询，拒绝旧请求回写。旧版未标注身份的缓存保留在本机，但不会自动显示给新身份。
 
-## 开发
+插件并未整体过时。此前 README 把侧边栏、浮动入口、Cookie 同步、思维导图和问答误标为未来计划；本次已纠正，并更新任务 API、BYOK、权限与会话边界。
 
-依赖：node 20+ / pnpm 9+
+## 开发与加载
+
+依赖：Node 20+、pnpm 9.7.1。
 
 ```bash
 cd OpenNoter_extension
-pnpm install
-pnpm dev      # watch 模式，产物输出到 ./extension/
+pnpm install --frozen-lockfile
+pnpm dev
 ```
 
-加载到 Chrome：
+在 `chrome://extensions/` 开启开发者模式，加载 `OpenNoter_extension/extension/`。启动后端后，进入插件设置填写后端地址及当前账号创建的 API Key，再测试连接、刷新模型。自定义域名需要在「测试连通」时授予浏览器访问权限。
 
-1. `chrome://extensions/` → 打开右上"开发者模式"
-2. 点"加载已解压的扩展程序"，选 `OpenNoter_extension/extension/` 目录
-3. 启动后端：`cd backend && python main.py`（默认 8483）
-4. 浏览器开任意支持的视频页（B 站 / YouTube / 抖音 / 快手），点工具栏 OpenNoter 图标
-5. 首次使用先打开"设置"，填后端地址 → 选供应商 + 模型
+后端默认开启认证。生产 CORS 使用 `OPENNOTER_CORS_EXTENSION_IDS` 配置扩展 ID 白名单；开发版 ID 不固定时可在本地使用 `OPENNOTER_CORS_ALLOW_ANY_EXTENSION=true`。API Key 是登录后端用的凭据，与「我的模型凭据」里的上游模型 Key 不同。
 
-## 后端要求
-
-后端 `backend/main.py` 的 CORS 白名单已通过 regex 兼容 `chrome-extension://`、`moz-extension://` 与本地 web。无需新增任何 backend endpoint。
-
-## 构建发布
+## 验证与构建
 
 ```bash
-pnpm build         # 产物 → ./extension/
-pnpm pack:zip      # 打包 → ./extension.zip （上传 Chrome Web Store）
-pnpm pack:crx      # 打包 → ./extension.crx
-pnpm pack:xpi      # 打包 → ./extension.xpi （Firefox）
+pnpm typecheck
+pnpm test --run
+pnpm build
+pnpm exec playwright install chromium
+pnpm test:e2e             # 先 build；测试加载打包产物并模拟后端响应
+pnpm pack:zip
 ```
 
-## 与桌面端的关系
+E2E 覆盖真实 popup 控件、普通用户的权限入口和修改连接时的焦点保持，已替换 Vitesse 模板断言。测试不调用真实模型、不发送平台 Cookie。Chrome/Chromium 是当前回归目标；存在 Firefox 打包命令并不代表已验证侧边栏等专有 API 的兼容性。
 
-桌面 web 端（`OpenNoter_frontend/`）继续负责：供应商/模型管理、转写器配置、笔记历史。
-插件**不**复刻这些管理界面，仅消费已配置好的供应商。
+## 接口与实现边界
 
-## 致谢
+- 提交与查询使用 `POST /api/notes`、`GET /api/tasks/{id}`，统一消费 `{code, msg, data}`。
+- `src/logic/client.ts` 接收显式连接快照，不依赖 Vue；popup 与后台 worker 共用此客户端。
+- `src/logic/task-poller.ts` 管理单条轮询生命周期；401/403/404/409/410 停止轮询，切换任务使旧响应失效。
+- 个人凭据只读取脱敏状态；修改必须提供完整新 Key。Cookie 同步不回读个人 Cookie 明文。
+- 插件历史是本机最近任务缓存；完整跨设备历史由 Web 客户端和后端数据库提供。
+- 动态自定义站点的网页 Cookie 桥接仍受 content-script 匹配范围限制。直接使用插件的「下载配置」同步 Cookie 不依赖网页桥接。
 
-骨架基于 [vitesse-webext](https://github.com/antfu-collective/vitesse-webext)（Antfu）。
+骨架基于 [vitesse-webext](https://github.com/antfu-collective/vitesse-webext)。

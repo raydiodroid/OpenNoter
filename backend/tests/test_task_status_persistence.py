@@ -126,53 +126,30 @@ def note_mod(tmp_path, monkeypatch):
 
     try:
         mod = _load_note_module()
+        from app.db.init_db import init_db
+        init_db()
+        monkeypatch.setattr(mod, "NOTE_OUTPUT_DIR", notes, raising=False)
+        yield mod, notes
     finally:
         # 清掉本次插入的 app.*，再把原状态整体放回
         for name in [n for n in sys.modules if n == "app" or n.startswith("app.")]:
             sys.modules.pop(name, None)
         sys.modules.update(saved)
 
-    monkeypatch.setattr(mod, "NOTE_OUTPUT_DIR", notes, raising=False)
-    return mod, notes
 
 
 # ---------------------------------------------------------------------------
 # 1. 状态写盘失败：不能污染 .status.json
 # ---------------------------------------------------------------------------
-def test_status_write_failure_writes_sidecar_not_corrupt_status(note_mod, monkeypatch):
-    """写盘失败时保留原状态文件，错误落到 .err 旁路文件。"""
+def test_status_write_failure_preserves_previous_json(note_mod, monkeypatch):
     mod, notes = note_mod
     gen = mod.NoteGenerator.__new__(mod.NoteGenerator)
-
-    task_id = "t-writefail"
-    status_file = notes / f"{task_id}.status.json"
-    # 先落一个正常状态
-    status_file.write_text(json.dumps({"status": "PARSING"}), encoding="utf-8")
-
-    # 只让「写 .tmp」失败，不影响后面写 .err。
-    import pathlib
-
-    real_open = pathlib.Path.open
-
-    def flaky_open(self, *args, **kwargs):
-        if str(self).endswith(".tmp"):
-            raise OSError("simulated disk failure")
-        return real_open(self, *args, **kwargs)
-
-    monkeypatch.setattr(pathlib.Path, "open", flaky_open, raising=False)
-
-    gen._update_status(task_id, "TRANSCRIBING")
-
-    # 原文件必须仍然可解析，且保持旧状态（宁可旧一拍，不可写坏）
-    payload = json.loads(status_file.read_text(encoding="utf-8"))
-    assert payload["status"] == "PARSING"
-
-    # 错误落到旁路文件
-    err_file = notes / f"{task_id}.err"
-    assert err_file.exists(), "应写出 .err 旁路文件"
-    err_payload = json.loads(err_file.read_text(encoding="utf-8"))
-    assert "simulated disk failure" in err_payload["error"]
-    assert err_payload["attempted_status"] == "TRANSCRIBING"
+    gen._update_status("writefail", "PARSING")
+    import app.storage.task_files as files
+    monkeypatch.setattr(files.os, "replace", lambda *a: (_ for _ in ()).throw(OSError("disk full")))
+    with pytest.raises(OSError):
+        gen._update_status("writefail", "TRANSCRIBING")
+    assert json.loads((notes / "writefail.status.json").read_text())["status"] == "PARSING"
 
 
 def test_status_write_success_records_failed_at(note_mod):

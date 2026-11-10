@@ -17,18 +17,6 @@ MODULE_PATH = ROOT / "app" / "transcriber" / "whisper_models.py"
 
 
 def _load_module():
-    if "app" not in sys.modules:
-        app_pkg = types.ModuleType("app")
-        app_pkg.__path__ = []  # 标记为 package
-        sys.modules["app"] = app_pkg
-    if "app.utils" not in sys.modules:
-        utils_pkg = types.ModuleType("app.utils")
-        utils_pkg.__path__ = []
-        sys.modules["app.utils"] = utils_pkg
-    if "app.utils.logger" not in sys.modules:
-        logger_mod = types.ModuleType("app.utils.logger")
-        logger_mod.get_logger = lambda name=None: logging.getLogger(name or "test")
-        sys.modules["app.utils.logger"] = logger_mod
     spec = importlib.util.spec_from_file_location("whisper_models_under_test", MODULE_PATH)
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)

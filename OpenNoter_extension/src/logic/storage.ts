@@ -1,6 +1,8 @@
-import { useWebExtensionStorage } from '~/composables/useWebExtensionStorage'
+import { computed, ref, watch } from 'vue'
+import { connectionKey, connectionScope } from './client'
 import type { Settings, TaskRecord } from './types'
 import { DEFAULT_SETTINGS, MAX_TASKS, SETTINGS_KEY, TASKS_KEY } from './constants'
+import { useWebExtensionStorage } from '~/composables/useWebExtensionStorage'
 
 export { DEFAULT_BACKEND_URL, DEFAULT_SETTINGS, MAX_TASKS } from './constants'
 
@@ -12,22 +14,37 @@ export const { data: settings, dataReady: settingsReady } = useWebExtensionStora
   { mergeDefaults: true },
 )
 
-export const { data: tasks, dataReady: tasksReady } = useWebExtensionStorage<TaskRecord[]>(
+const { data: allTasks, dataReady: allTasksReady } = useWebExtensionStorage<TaskRecord[]>(
   TASKS_KEY,
   [],
 )
 
+export const activeScope = ref<string | null>(null)
+let scopeVersion = 0
+async function selectScope() {
+  const version = ++scopeVersion
+  activeScope.value = null
+  const scope = await connectionScope({ ...settings.value })
+  if (version === scopeVersion)
+    activeScope.value = scope
+}
+export const tasksReady = Promise.all([settingsReady, allTasksReady]).then(selectScope)
+watch(() => connectionKey(settings.value), selectScope, { flush: 'sync' })
+export const tasks = computed(() => (allTasks.value || []).filter(t => activeScope.value && t.scope === activeScope.value))
+
 export function upsertTask(record: TaskRecord) {
-  const list = tasks.value ?? []
+  const scope = activeScope.value
+  if (!scope)
+    return
+  const list = [...tasks.value]
   const idx = list.findIndex(t => t.taskId === record.taskId)
+  const scoped = { ...record, scope }
   if (idx >= 0)
-    list.splice(idx, 1, { ...list[idx], ...record })
-  else
-    list.unshift(record)
-  tasks.value = list.slice(0, MAX_TASKS)
+    list.splice(idx, 1, { ...list[idx], ...scoped })
+  else list.unshift(scoped)
+  allTasks.value = [...list.slice(0, MAX_TASKS), ...(allTasks.value || []).filter(t => t.scope !== scope)].slice(0, 300)
 }
 
 export function removeTask(taskId: string) {
-  const list = tasks.value ?? []
-  tasks.value = list.filter(t => t.taskId !== taskId)
+  allTasks.value = (allTasks.value || []).filter(t => t.scope !== activeScope.value || t.taskId !== taskId)
 }

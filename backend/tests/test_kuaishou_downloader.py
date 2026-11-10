@@ -146,6 +146,10 @@ def _detail_payload(
 def fake_requests(monkeypatch):
     fake = _FakeRequests()
     monkeypatch.setattr(kuaishou_helper.kuaishou, "requests", fake)
+    import requests
+    fake.RequestException = requests.RequestException
+    monkeypatch.setattr(requests, "get", fake.get)
+    monkeypatch.setattr(requests, "head", fake.get)
     monkeypatch.setattr(downloader_module, "requests", fake)
     return fake
 
