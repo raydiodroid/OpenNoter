@@ -11,6 +11,8 @@ OpenNoter_frontend/src-tauri/bin
 
 # 运行时数据
 backend/data
+backend/config
+backend/vector_db
 backend/static
 backend/models
 backend/logs
