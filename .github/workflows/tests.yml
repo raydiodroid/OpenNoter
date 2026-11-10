@@ -98,7 +98,9 @@ jobs:
         run: pnpm exec playwright install --with-deps chromium
 
       - name: Extension smoke tests
-        run: pnpm test:e2e
+        # The locked Chromium version cannot load MV3 extensions in headless mode.
+        # Use a virtual display so CI exercises the packaged extension as a browser does.
+        run: xvfb-run --auto-servernum pnpm test:e2e --headed
 
   frontend:
     name: Frontend (build + lint)
