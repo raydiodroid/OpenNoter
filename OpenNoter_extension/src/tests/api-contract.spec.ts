@@ -11,7 +11,9 @@ beforeEach(() => {
   fetcher.mockReset()
   vi.stubGlobal('fetch', fetcher)
 })
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
 
 it('submits the current note contract with server-selected defaults', async () => {
   fetcher.mockResolvedValue(ok({ task_id: 'task' }))
