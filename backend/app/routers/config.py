@@ -305,6 +305,10 @@ class ByokConfigRequest(BaseModel):
     model_mode: Optional[str] = None
     cookie_mode: Optional[str] = None
     allow_custom_base_url: Optional[bool] = None
+    asr_mode: Optional[str] = None
+    asr_use_default: Optional[bool] = None
+    allow_shared_cookie_fallback: Optional[bool] = None
+    allowed_base_urls: Optional[list[str]] = None
 
 
 @router.get("/byok_config")
@@ -324,19 +328,11 @@ def update_byok_config(data: ByokConfigRequest, admin: User = Depends(require_ad
     """
     from app.services.byok_config import byok_config
 
-    if (
-        data.model_mode is None
-        and data.cookie_mode is None
-        and data.allow_custom_base_url is None
-    ):
+    payload = data.model_dump(exclude_none=True)
+    if not payload:
         return R.error(msg="请至少提供一个字段", code=400)
-
     try:
-        cfg = byok_config.update(
-            model_mode=data.model_mode,
-            cookie_mode=data.cookie_mode,
-            allow_custom_base_url=data.allow_custom_base_url,
-        )
+        cfg = byok_config.update(**payload)
     except ValueError as exc:
         return R.error(msg=str(exc), code=400)
 

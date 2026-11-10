@@ -77,7 +77,7 @@ const CAPABILITY_META: Record<Capability, { label: string; desc: string }> = {
   },
   asr: {
     label: '音频转写',
-    desc: '把视频音频转成文字。未配置时跟随「笔记分析」或站点配置',
+    desc: '把视频音频转成文字。优先专用 ASR 凭据，再按站点策略处理通用凭据或站点转写',
   },
 }
 
@@ -103,10 +103,13 @@ export function MyCredentialsSection() {
     <>
       <Section title="我的模型凭据">
         <Panel>
-          <p className={hint}>配置你自己的模型接口与 API Key。未配置的能力位使用站点共享配置。</p>
+          <p className={hint}>
+            配置个人模型接口与 API Key。各能力按独立策略使用；强制自带时缺少凭据会报错。
+          </p>
           <Divider size="S" />
           {(['llm', 'asr'] as Capability[]).map(cap => {
             const item = status?.capabilities?.find(c => c.capability === cap)
+            if (item?.mode === 'shared') return null
             const own = item?.source === 'own'
             return (
               <div key={cap} className={row}>
@@ -121,7 +124,13 @@ export function MyCredentialsSection() {
                       </>
                     ) : (
                       <>
-                        <span className={badgeShared}>站点共享</span>
+                        <span className={badgeShared}>
+                          {item?.broken
+                            ? '个人凭据不可用'
+                            : item?.mode === 'required'
+                              ? '待配置个人凭据'
+                              : '站点共享'}
+                        </span>
                         {item?.broken ? '（凭据无法解密，请重新填写）' : ''}
                       </>
                     )}
@@ -392,7 +401,11 @@ function CapabilityDialog({ capability }: { capability: Capability }) {
     setBusy(true)
     try {
       const res = await testMyCredential(capability)
-      toast.success(`连接成功（${res.latency_ms}ms，模型 ${res.model}）`)
+      toast.success(
+        capability === 'asr'
+          ? `端点可连接（${res.latency_ms}ms；未测试实际转写）`
+          : `连接成功（${res.latency_ms}ms，模型 ${res.model}）`
+      )
     } catch (error) {
       const detail = (error as { msg?: string })?.msg
       toast.error(detail ? `测试失败：${detail}` : '测试失败，请检查配置')
@@ -408,13 +421,31 @@ function CapabilityDialog({ capability }: { capability: Capability }) {
       <Content>
         <div className={stack}>
           <p className={hint}>{CAPABILITY_META[capability].desc}</p>
-          <TextField
-            label="接口地址"
-            value={baseUrl}
-            onChange={setBaseUrl}
-            placeholder="https://api.deepseek.com/v1"
-            description="OpenAI 兼容端点，通常以 /v1 结尾"
-          />
+          {status?.allow_custom_base_url === false ? (
+            <Picker
+              label="允许的接口地址"
+              selectedKey={baseUrl || null}
+              onSelectionChange={k => setBaseUrl(String(k))}
+              description="由管理员维护允许列表；原地址不在列表时请重新选择。"
+            >
+              {(status.allowed_base_urls || []).map(url => (
+                <PickerItem key={url} id={url}>
+                  {url}
+                </PickerItem>
+              ))}
+              {baseUrl && !(status.allowed_base_urls || []).includes(baseUrl) && (
+                <PickerItem id={baseUrl} isDisabled>{`${baseUrl}（已不允许）`}</PickerItem>
+              )}
+            </Picker>
+          ) : (
+            <TextField
+              label="接口地址"
+              value={baseUrl}
+              onChange={setBaseUrl}
+              placeholder="https://api.deepseek.com/v1"
+              description="OpenAI 兼容端点，通常以 /v1 结尾"
+            />
+          )}
           <TextField
             label="API Key"
             type="password"

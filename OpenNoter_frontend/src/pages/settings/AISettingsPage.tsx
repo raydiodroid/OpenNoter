@@ -3,6 +3,7 @@ import { Tab, TabList, TabPanel, Tabs } from '@react-spectrum/s2'
 import { style } from '@react-spectrum/s2/style' with { type: 'macro' }
 
 import { Page, PageHeader } from '@/components/Page'
+import ModelDefaults from './ModelDefaults'
 import ModelPage from './ModelPage'
 import TranscriberPage from './TranscriberPage'
 import { MyCredentialsSection } from './MyCredentials'
@@ -15,7 +16,7 @@ const panelBody = style({ paddingTop: 16 })
  * 直接并列会**贴着彼此**。这里统一给 24px 间距。 */
 const sectionStack = style({ display: 'flex', flexDirection: 'column', gap: 24 })
 
-type TabKey = 'model' | 'transcriber'
+type TabKey = 'model' | 'transcriber' | 'defaults'
 
 /**
  * AI 模型 + 音频转写合并页。
@@ -47,10 +48,16 @@ export default function AISettingsPage({
         onSelectionChange={key => setTab(String(key) as TabKey)}
       >
         <TabList aria-label="模型与转写">
+          <Tab id="defaults">全局默认</Tab>
           <Tab id="model">AI 模型</Tab>
           <Tab id="transcriber">音频转写</Tab>
         </TabList>
 
+        <TabPanel id="defaults">
+          <div className={panelBody}>
+            <ModelDefaults />
+          </div>
+        </TabPanel>
         <TabPanel id="model">
           <div className={panelBody}>
             {/* 个人凭据区块（未开启 BYOK 时显示「当前站点统一使用管理员配置」）。

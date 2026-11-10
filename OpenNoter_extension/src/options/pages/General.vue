@@ -159,13 +159,13 @@ onMounted(async () => {
 
     <section class="section-card">
       <h2 class="font-semibold">
-        默认供应商与模型
+        此浏览器的模型选择
       </h2>
       <label class="flex flex-col gap-1 text-sm">
         <span class="text-gray-600">供应商</span>
         <select v-model="settings.providerId" class="input">
-          <option value="">自动选择（使用后端默认模型）</option>
-          <option value="">— 选择供应商 —</option>
+          <option value="">自动选择（个人凭据优先，再用全局默认）</option>
+
           <option v-for="p in providers" :key="p.id" :value="p.id">
             {{ p.name }} <span v-if="p.type === 'built-in'">(内置)</span>
           </option>
@@ -183,6 +183,9 @@ onMounted(async () => {
       </label>
     </section>
 
+    <p class="text-xs text-gray-500">
+      AI 模型的明确选择优先于自动模式；音频转写遵循站点全局默认和独立 BYOK 策略。全局配置请到 Web「模型配置 → 全局默认」，BYOK 策略在「站点设置」。
+    </p>
     <section class="section-card">
       <h2 class="font-semibold">
         默认生成选项

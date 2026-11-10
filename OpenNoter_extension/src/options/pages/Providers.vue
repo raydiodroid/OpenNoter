@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import Gateway from '~icons/lucide/network'
 import { computed, onMounted, ref } from 'vue'
 import ModelConnectionFields from '~/components/ModelConnectionFields.vue'
 import {
@@ -164,6 +165,7 @@ onMounted(refresh)
           @click="select(p.id)"
         >
           <div class="flex items-center gap-2 min-w-0">
+            <Gateway class="w-5 h-5 shrink-0" aria-hidden="true" />
             <div class="truncate">
               {{ p.name }}
             </div>

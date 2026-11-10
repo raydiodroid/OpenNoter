@@ -238,16 +238,16 @@ class TestOwnPrefixSelection:
         finally:
             db.close()
 
-        with pytest.raises(ProviderError):
+        from app.services.credential_resolver import CredentialRequired
+        with pytest.raises(CredentialRequired):
             resolve_model_selection("own:llm", "m", user_id=99)
 
-    def test_own_prefix_requires_model_name(self, env):
+    def test_own_prefix_uses_saved_model_when_omitted(self, env):
         from app.exceptions.note import NoteError
         from app.services.model_selection import resolve_model_selection
 
         _add_own_credential(capability="llm")
-        with pytest.raises(NoteError):
-            resolve_model_selection("own:llm", "", user_id=1)
+        assert resolve_model_selection("own:llm", "", user_id=1) == ("own:llm", "my-model-x")
 
     def test_site_model_still_works(self, env):
         """BYOK 不能打破原有的站点模型选择。"""
@@ -338,3 +338,131 @@ class TestRunNoteTaskSignature:
 
         params = inspect.signature(run_note_task).parameters
         assert "user_id" in params
+
+
+class TestSelectionPolicies:
+    def test_site_default_is_used_and_invalid_default_never_falls_back(self, env):
+        from app.services.model_defaults import model_defaults
+        from app.services.model_selection import resolve_model_selection
+        from app.db.engine import SessionLocal
+        from app.db.models.models import Model
+        with SessionLocal.begin() as db:
+            db.add(Model(provider_id='site-p', model_name='second-model'))
+        model_defaults.set('site-p', 'second-model')
+        assert resolve_model_selection(None, None) == ('site-p', 'second-model')
+        with SessionLocal.begin() as db:
+            db.query(Model).filter_by(model_name='second-model').delete()
+        with pytest.raises(Exception):
+            resolve_model_selection(None, None)
+
+    def test_explicit_site_and_own_keep_complete_credential_pairs(self, env):
+        from app.services.credential_resolver import resolve, CredentialRequired
+        from app.services.model_selection import resolve_model_selection
+        from app.services.byok_config import byok_config
+        _add_own_credential(model='my-model')
+        assert resolve_model_selection(None, None, user_id=1) == ('own:llm', 'my-model')
+        assert resolve_model_selection('site-p', 'site-model-a', user_id=1) == ('site-p', 'site-model-a')
+        shared = resolve(1, model_name='site-model-a', site_provider_id='site-p', source='shared')
+        own = resolve(1, model_name='my-model', source='own')
+        assert shared.source == 'shared' and shared.base_url == 'https://site.example/v1'
+        assert own.source == 'own' and own.base_url != shared.base_url
+        byok_config.update(model_mode='required')
+        with pytest.raises(CredentialRequired):
+            resolve_model_selection('site-p', 'site-model-a', user_id=1)
+        with pytest.raises(CredentialRequired):
+            resolve(1, model_name='site-model-a', site_provider_id='site-p', source='shared')
+
+    def test_asr_mode_and_default_fallback_are_independent(self, env):
+        from app.services.byok_config import byok_config
+        from app.services.credential_resolver import resolve_asr, CredentialRequired, build_capability_status
+        _add_own_credential(capability='default', model='common-model')
+        byok_config.update(model_mode='shared', asr_mode='required', asr_use_default=True)
+        assert resolve_asr(1, online=True).model_name == 'common-model'
+        assert build_capability_status(1)['capabilities'][0]['source'] == 'shared'
+        assert build_capability_status(1)['capabilities'][1]['source'] == 'own'
+        byok_config.update(asr_use_default=False)
+        with pytest.raises(CredentialRequired):
+            resolve_asr(1, online=True)
+        assert resolve_asr(1, online=False) is None
+        _add_own_credential(capability='asr', model='speech-model')
+        assert resolve_asr(1, online=True).model_name == 'speech-model'
+
+    def test_url_allowlist_applies_to_existing_credentials(self, env):
+        from app.services.byok_config import byok_config
+        from app.services.credential_resolver import resolve, CredentialBroken
+        _add_own_credential()
+        own = resolve(1, source='own')
+        byok_config.update(allow_custom_base_url=False, allowed_base_urls=['https://different.example/v1'])
+        with pytest.raises(CredentialBroken):
+            resolve(1, source='own')
+        byok_config.update(allowed_base_urls=[own.base_url + '/'])
+        assert resolve(1, source='own').base_url == own.base_url
+
+    def test_cookie_fallback_can_be_disabled(self, env, monkeypatch):
+        from app.services.byok_config import byok_config
+        from app.services import credential_resolver as cr
+        monkeypatch.setattr(cr, '_load_user_cookie', lambda *args: None)
+        monkeypatch.setattr(cr, '_site_cookie', lambda *args: 'site-cookie')
+        byok_config.update(cookie_mode='optional', allow_shared_cookie_fallback=False)
+        assert cr.resolve_cookie(1, 'bilibili') is None
+        byok_config.update(allow_shared_cookie_fallback=True)
+        assert cr.resolve_cookie(1, 'bilibili') == 'site-cookie'
+
+    def test_legacy_policy_keeps_effective_modes_during_partial_update(self, env):
+        from app.services.byok_config import ByokConfigManager
+        import json
+        path = env / 'legacy.json'
+        path.write_text(json.dumps({'model_mode': 'required', 'cookie_mode': 'optional'}))
+        cfg = ByokConfigManager(str(path))
+        assert cfg.get_asr_mode() == 'required'
+        cfg.update(model_mode='shared')
+        assert cfg.get_asr_mode() == 'required'
+        assert cfg.get_mode() == 'shared'
+
+    def test_default_api_permissions_and_no_secret_disclosure(self, env):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from types import SimpleNamespace
+        from app.routers.model import router
+        from app.services.auth import get_current_user, get_optional_user
+        app = FastAPI()
+        app.include_router(router, prefix='/api')
+        client = TestClient(app)
+        normal = SimpleNamespace(id=1, is_superuser=False)
+        app.dependency_overrides[get_optional_user] = lambda: normal
+        app.dependency_overrides[get_current_user] = lambda: normal
+        body = {'provider_id': 'site-p', 'model_name': 'site-model-a'}
+        assert client.patch('/api/model_defaults', json=body).status_code == 403
+        app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=1, is_superuser=True)
+        response = client.patch('/api/model_defaults', json=body)
+        assert response.status_code == 200
+        assert client.get('/api/model_defaults').json()['data']['model_name'] == 'site-model-a'
+        assert client.patch('/api/model_defaults', json={'provider_id': 'own:llm', 'model_name': 'x'}).status_code == 400
+        status = client.get('/api/selection_status')
+        assert status.status_code == 200
+        assert status.json()['data']['llm']['source'] == 'shared'
+        assert 'sk-SITE' not in status.text and 'api_key' not in status.text
+
+    def test_ambiguous_model_name_requires_provider_and_asr_slot_is_not_llm(self, env):
+        from app.db.engine import SessionLocal
+        from app.db.models.providers import Provider
+        from app.db.models.models import Model
+        from app.services.model_selection import resolve_model_selection
+        with SessionLocal.begin() as db:
+            db.add(Provider(id='other-p', name='Other', logo='custom', type='custom', api_key='', base_url='https://other.example/v1', enabled=1))
+            db.add(Model(provider_id='other-p', model_name='site-model-a'))
+        with pytest.raises(Exception, match='多个供应商'):
+            resolve_model_selection(None, 'site-model-a')
+        with pytest.raises(Exception, match='转写凭据'):
+            resolve_model_selection('own:asr', 'speech', user_id=1)
+
+    def test_discovery_obeys_allowlist_before_network_access(self, env, monkeypatch):
+        from app.routers.me_credentials import _validate_base_url
+        from app.services.byok_config import byok_config
+        from fastapi import HTTPException
+        monkeypatch.setenv('OPENNOTER_PROBE_ALLOW_PRIVATE', '1')
+        byok_config.update(allow_custom_base_url=False, allowed_base_urls=['https://allowed.example/v1'])
+        assert _validate_base_url('https://allowed.example/v1/') == 'https://allowed.example/v1'
+        with pytest.raises(HTTPException) as exc:
+            _validate_base_url('https://denied.example/v1')
+        assert exc.value.status_code == 403

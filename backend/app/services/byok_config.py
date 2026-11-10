@@ -1,66 +1,14 @@
-"""BYOK 站点级配置：模型凭据与平台 Cookie **两个独立开关**，支持运行时切换。
+"""Runtime BYOK policy, persisted atomically in config/byok.json.
 
-## 为什么拆成两个
+AI (model_mode), ASR (asr_mode) and cookies have independent policies.
+Legacy files without asr_mode inherit model_mode once; updates persist both.
+Optional mode prefers personal credentials for automatic selection; explicit AI
+source selection is preserved. Required applies to paid online capabilities;
+local/built-in ASR remains usable without a personal online credential.
 
-历史上这里只有**一个** ``mode``，同时管死模型凭据和个人 Cookie。但这两件事
-的性质完全不同：
-
-| | 模型凭据 | 平台 Cookie |
-|---|---|---|
-| 本质 | 花钱的**额度** | 登录的**身份** |
-| 共用后果 | 花站点的钱 | **用管理员的账号**下载，观看历史混在一起 |
-| 缺失影响 | 任务直接失败 | 静默降级（无 Cookie 也能下普通画质） |
-
-所以「要不要让用户自带」这个决定天然是分开的：一个站点可能完全不想承担
-API 成本（模型 ``required``），但乐于分享自己的 Cookie（Cookie ``shared``）；
-反过来也成立。用一个开关绑死两者，管理员无论选哪个都会有半边是错的。
-
-## 两个开关各自的模式
-
-``model_mode`` —— 模型凭据（LLM / 转写）
-
-| 模式 | 行为 | 典型部署者 |
-|---|---|---|
-| ``shared``   | 只用站点 key；用户 BYOK 入口完全隐藏 | 个人自托管（默认）|
-| ``optional`` | 站点 key 是默认档位；用户可配自己的，配了就用 | 公司/社区内部 |
-| ``required`` | 必须配自己的；未配置时提交直接拒绝 | 对外提供服务 |
-
-``cookie_mode`` —— 平台 Cookie
-
-| 模式 | 行为 |
-|---|---|
-| ``shared``   | 只用站点 Cookie；用户的 Cookie 入口隐藏 |
-| ``optional`` | 站点 Cookie 是默认；用户可配自己的，配了就用 |
-
-**Cookie 没有 ``required``**：它不花站点的钱，强制要求用户登自己的账号在语义上
-不成立（没配 Cookie 也能正常下载，只是画质低些）。这个不对称是刻意的，见
-``COOKIE_MODES``。
-
-**默认 ``shared``** 是刻意的：开源项目 clone 下来直接跑，不该因为升级就被要求
-配置任何东西。这也是「零破坏承诺」的落点——``mode == "shared"`` 时，凭据解析
-走的分支与改造前完全相同。
-
-## 为什么用 JSON 文件而不是环境变量
-
-项目里已有两种运行时配置机制（见 ``utils/env_compat`` 与 ``TranscriberConfigManager``）：
-
-- 环境变量：部署期固定，改了要重启容器；
-- JSON 文件：管理员在界面上改，**立即生效**。
-
-「全站切换 BYOK 模式」是运营动作——部署者可能在试运行几天后决定从 ``optional``
-切到 ``required``。为此重启容器是不可接受的，所以走 JSON 文件，与
-``config/transcriber.json`` 同级、同模式。
-
-## 与其他配置的关系
-
-文件不存在时，``mode`` 的初始值可以由环境变量 ``OPENNOTER_BYOK_MODE`` 指定——
-Docker 部署时改 ``.env`` 比往容器里塞一个 JSON 文件方便。文件一旦存在，
-**文件优先**（避免「界面改完被 env 覆盖」这种困惑）。
-
-## 读取缓存
-
-``get()`` 在每次凭据解析时都会被调用（每个任务的每次 LLM 调用），不能每次都打
-IO。这里做 1 秒的进程内缓存：既避免高频读盘，又保证「管理员点击后立即生效」。
+The address allowlist constrains saves, discovery and runtime use. ASR may use
+the common personal slot only when asr_use_default is enabled. Cookie fallback
+can be disabled to avoid using a shared account when no personal cookie exists.
 """
 
 from __future__ import annotations
@@ -103,7 +51,7 @@ class ByokConfigManager:
     def __init__(self, filepath: str = "config/byok.json"):
         self.path = Path(filepath)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._cached: Dict[str, Any] | None = None
         self._cached_at: float = 0.0
 
@@ -187,6 +135,10 @@ class ByokConfigManager:
         return {
             "model_mode": model_mode,
             "cookie_mode": cookie_mode,
+            "asr_mode": raw.get("asr_mode") if raw.get("asr_mode") in ALL_MODES else model_mode,
+            "asr_use_default": raw.get("asr_use_default", True) is not False,
+            "allow_shared_cookie_fallback": raw.get("allow_shared_cookie_fallback", True) is not False,
+            "allowed_base_urls": raw.get("allowed_base_urls", []) if isinstance(raw.get("allowed_base_urls", []), list) else [],
             "allow_custom_base_url": allow_custom,
             "updated_at": raw.get("updated_at"),
         }
@@ -210,11 +162,24 @@ class ByokConfigManager:
         """模型凭据模式。保留这个名字是因为它在解析链里被大量引用。"""
         return self.get()["model_mode"]
 
+    def get_asr_mode(self) -> str:
+        return self.get()["asr_mode"]
+
+    def allows_capability(self, capability: str) -> bool:
+        if capability == "default":
+            return self.is_byok_enabled()
+        return (self.get_asr_mode() if capability == "asr" else self.get_mode()) != MODE_SHARED
+
+    def check_base_url(self, base_url: str) -> None:
+        cfg = self.get()
+        if not cfg["allow_custom_base_url"] and base_url.strip().rstrip("/") not in cfg["allowed_base_urls"]:
+            raise ValueError("该接口地址不在站点允许列表中，请选择管理员允许的地址")
+
     get_model_mode = get_mode
 
     def is_byok_enabled(self) -> bool:
         """**模型**凭据的用户级 BYOK 是否可用（optional 或 required）。"""
-        return self.get_mode() != MODE_SHARED
+        return self.get_mode() != MODE_SHARED or self.get_asr_mode() != MODE_SHARED
 
     def requires_byok(self) -> bool:
         return self.get_mode() == MODE_REQUIRED
@@ -233,13 +198,21 @@ class ByokConfigManager:
         """
         return self.get_cookie_mode() != MODE_SHARED
 
-    def update(
+    def update(self, **kwargs) -> Dict[str, Any]:
+        with self._lock:
+            return self._update(**kwargs)
+
+    def _update(
         self,
         *,
         model_mode: str | None = None,
         cookie_mode: str | None = None,
         allow_custom_base_url: bool | None = None,
         mode: str | None = None,
+        asr_mode: str | None = None,
+        asr_use_default: bool | None = None,
+        allow_shared_cookie_fallback: bool | None = None,
+        allowed_base_urls: list[str] | None = None,
     ) -> Dict[str, Any]:
         """更新配置并立即失效缓存（管理员切换后下一次解析就生效）。
 
@@ -265,6 +238,7 @@ class ByokConfigManager:
         current = self._normalize(raw)
         raw["model_mode"] = current["model_mode"]
         raw["cookie_mode"] = current["cookie_mode"]
+        raw["asr_mode"] = current["asr_mode"]
 
         # 兼容旧参数 `mode`：同时写两个新字段。
         #
@@ -278,6 +252,7 @@ class ByokConfigManager:
                     f"非法的模式: {mode!r}，可选值: {', '.join(ALL_MODES)}"
                 )
             model_mode = model_mode if model_mode is not None else normalized
+            asr_mode = asr_mode if asr_mode is not None else normalized
             if cookie_mode is None:
                 cookie_mode = (
                     MODE_OPTIONAL if normalized == MODE_REQUIRED else normalized
@@ -291,6 +266,24 @@ class ByokConfigManager:
                     f"可选值: {', '.join(ALL_MODES)}"
                 )
             raw["model_mode"] = normalized
+
+        if asr_mode is not None:
+            if asr_mode not in ALL_MODES:
+                raise ValueError("非法的转写凭据模式")
+            raw["asr_mode"] = asr_mode
+        for field, value in (("asr_use_default", asr_use_default), ("allow_shared_cookie_fallback", allow_shared_cookie_fallback)):
+            if value is not None:
+                raw[field] = bool(value)
+        if allowed_base_urls is not None:
+            from urllib.parse import urlsplit
+            urls = []
+            for value in allowed_base_urls:
+                value = value.strip().rstrip("/")
+                url = urlsplit(value)
+                if url.scheme not in ("https", "http") or not url.hostname or url.username or url.password or url.query or url.fragment:
+                    raise ValueError("允许的接口地址必须是完整 HTTP(S) 地址，不可包含账号、查询参数或片段")
+                urls.append(value)
+            raw["allowed_base_urls"] = list(dict.fromkeys(urls))
 
         if cookie_mode is not None:
             normalized = str(cookie_mode).strip().lower()

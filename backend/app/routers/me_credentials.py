@@ -112,6 +112,11 @@ def _validate_base_url(base_url: str) -> str:
     if not url:
         raise HTTPException(status_code=400, detail="接口地址不能为空")
 
+    try:
+        byok_config.check_base_url(url)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
     # 与 probe_endpoint 同一开关：明确允许私网（如自建 Ollama）时才放行
     if not getbool("PROBE_ALLOW_PRIVATE", False):
         try:
@@ -190,14 +195,8 @@ def upsert_my_credential(
     _require_byok_enabled()
     cap = _check_capability(capability)
 
-    if not byok_config.get()["allow_custom_base_url"]:
-        # 站点禁止自定义端点时，拒绝保存（管理员可能只想让用户填 key 用内置端点）。
-        # 当前阶段没有「内置端点白名单」，所以这条开关等价于「禁用 BYOK 写操作」。
-        # 保留开关是为了将来加白名单时不用改 API 契约。
-        raise HTTPException(
-            status_code=403,
-            detail="当前站点不允许自定义接口地址，请联系管理员",
-        )
+    if not byok_config.allows_capability(cap):
+        raise HTTPException(status_code=403, detail="该能力仅允许使用站点配置")
 
     base_url = _validate_base_url(data.base_url)
     model_name = (data.model_name or "").strip()
@@ -351,28 +350,29 @@ def test_my_credential(
     _require_byok_enabled()
     cap = _check_capability(capability)
 
-    row = _get_own(db, user.id, cap)
-    if row is None:
-        # 允许 default 兜底（与 resolve() 的口径一致）
-        row = _get_own(db, user.id, CAP_DEFAULT)
-        if row is None:
-            return R.error(msg="尚未配置该能力位的凭据", code=400)
-
-    plain = credential_crypto.reveal(
-        row.api_key, user_id=user.id, capability=row.capability
-    )
-    if not plain:
-        return R.error(msg="凭据无法解密，请重新填写", code=400)
+    if not byok_config.allows_capability(cap):
+        raise HTTPException(status_code=403, detail="该能力仅允许使用站点配置")
+    try:
+        credential = credential_resolver.resolve(user.id, cap, source="own")
+    except (credential_resolver.CredentialRequired, credential_resolver.CredentialBroken) as exc:
+        return R.error(msg=str(exc), code=400)
+    _validate_base_url(credential.base_url)
 
     started = time.time()
     try:
         from app.gpt.provider.OpenAI_compatible_provider import OpenAICompatibleProvider
 
-        ok = OpenAICompatibleProvider.test_connection(
-            api_key=plain,
-            base_url=row.base_url,
-            model=row.model_name,
-        )
+        if cap == "asr":
+            from openai import OpenAI
+            with OpenAI(api_key=credential.api_key, base_url=credential.base_url, timeout=15, max_retries=0) as client:
+                client.models.list()
+            ok = True
+        else:
+            ok = OpenAICompatibleProvider.test_connection(
+                api_key=credential.api_key,
+                base_url=credential.base_url,
+                model=credential.model_name,
+            )
     except Exception as exc:  # noqa: BLE001
         logger.warning(f"用户凭据连通性测试异常: {exc}")
         return R.error(msg=f"测试失败：{type(exc).__name__}", code=400)
@@ -380,7 +380,7 @@ def test_my_credential(
     latency = int((time.time() - started) * 1000)
     if ok:
         return R.success(
-            data={"ok": True, "latency_ms": latency, "model": row.model_name},
+            data={"ok": True, "latency_ms": latency, "model": credential.model_name},
             msg="连接成功",
         )
     return R.error(msg="测试失败：请检查接口地址、API Key 与模型名称", code=400)

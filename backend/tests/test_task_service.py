@@ -166,7 +166,7 @@ def test_missing_success_artifact_is_terminal_failure(service):
 def test_asr_uses_own_key_endpoint_and_model(service, monkeypatch):
     from app.services import credential_resolver as cr
     from app.db.models.user_credentials import CAP_ASR
-    monkeypatch.setattr(cr.byok_config, 'get_mode', lambda: 'required')
+    monkeypatch.setattr(cr.byok_config, 'get_asr_mode', lambda: 'required')
     monkeypatch.setattr(cr, '_load_credential', lambda uid, cap: SimpleNamespace(
         capability=CAP_ASR, base_url='https://own.example/v1', model_name='own-asr', api_key='encrypted'))
     monkeypatch.setattr(cr.credential_crypto, 'reveal', lambda *args, **kw: 'own-key')
@@ -176,7 +176,7 @@ def test_asr_uses_own_key_endpoint_and_model(service, monkeypatch):
 
 def test_required_asr_never_falls_back_to_site(service, monkeypatch):
     from app.services import credential_resolver as cr
-    monkeypatch.setattr(cr.byok_config, 'get_mode', lambda: 'required')
+    monkeypatch.setattr(cr.byok_config, 'get_asr_mode', lambda: 'required')
     monkeypatch.setattr(cr, '_load_credential', lambda *args: None)
     with pytest.raises(cr.CredentialRequired):
         cr.resolve_asr(1, online=True)

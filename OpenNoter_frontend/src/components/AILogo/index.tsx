@@ -8,23 +8,23 @@
  *
  * 视觉策略：保留品牌色，统一放进同尺寸圆角方框，与 S2 的 20px 线性图标视觉重量对齐。
  */
-import OpenAI from "@lobehub/icons/es/OpenAI/components/Mono"
-import Claude from "@lobehub/icons/es/Claude/components/Mono"
-import Gemini from "@lobehub/icons/es/Gemini/components/Mono"
-import Ollama from "@lobehub/icons/es/Ollama/components/Mono"
-import DeepSeek from "@lobehub/icons/es/DeepSeek/components/Mono"
-import Qwen from "@lobehub/icons/es/Qwen/components/Mono"
-import Zhipu from "@lobehub/icons/es/Zhipu/components/Mono"
-import Moonshot from "@lobehub/icons/es/Moonshot/components/Mono"
-import Groq from "@lobehub/icons/es/Groq/components/Mono"
-import Mistral from "@lobehub/icons/es/Mistral/components/Mono"
-import Meta from "@lobehub/icons/es/Meta/components/Mono"
-import Microsoft from "@lobehub/icons/es/Microsoft/components/Mono"
-import Google from "@lobehub/icons/es/Google/components/Mono"
+import OpenAI from '@lobehub/icons/es/OpenAI/components/Mono'
+import Claude from '@lobehub/icons/es/Claude/components/Mono'
+import Gemini from '@lobehub/icons/es/Gemini/components/Mono'
+import Ollama from '@lobehub/icons/es/Ollama/components/Mono'
+import DeepSeek from '@lobehub/icons/es/DeepSeek/components/Mono'
+import Qwen from '@lobehub/icons/es/Qwen/components/Mono'
+import Zhipu from '@lobehub/icons/es/Zhipu/components/Mono'
+import Moonshot from '@lobehub/icons/es/Moonshot/components/Mono'
+import Groq from '@lobehub/icons/es/Groq/components/Mono'
+import Mistral from '@lobehub/icons/es/Mistral/components/Mono'
+import Meta from '@lobehub/icons/es/Meta/components/Mono'
+import Microsoft from '@lobehub/icons/es/Microsoft/components/Mono'
+import Google from '@lobehub/icons/es/Google/components/Mono'
 
 import { style } from '@react-spectrum/s2/style' with { type: 'macro' }
 
-import CustomLogo from '@/assets/customAI.png'
+import Gateway from '@react-spectrum/s2/icons/GlobeGrid'
 
 /** 供应商 logo 的 key 全部小写，provider.logo 在数据库里也是小写 */
 const ICON_MAP: Record<string, any> = {
@@ -74,16 +74,15 @@ interface AILogoProps {
 const AILogo = ({ name, size = 20, boxed = true, className }: AILogoProps) => {
   const Icon = name ? ICON_MAP[name.toLowerCase()] : undefined
 
-  const inner = Icon ? (
-    <Icon size={size} />
-  ) : (
-    <img src={CustomLogo} alt={name || 'logo'} style={{ width: size, height: size }} />
-  )
+  const inner = Icon ? <Icon size={size} /> : <Gateway aria-label="统一网关" />
 
   if (!boxed) return inner
 
   return (
-    <span className={`${box}${className ? ` ${className}` : ''}`} style={{ width: size + 12, height: size + 12 }}>
+    <span
+      className={`${box}${className ? ` ${className}` : ''}`}
+      style={{ width: size + 12, height: size + 12 }}
+    >
       {inner}
     </span>
   )

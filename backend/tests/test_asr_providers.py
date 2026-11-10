@@ -74,7 +74,7 @@ def test_default_selection_and_disable_do_not_fall_back(registry, monkeypatch):
     from app.routers.config import update_transcriber_config, TranscriberConfigRequest
     from fastapi import HTTPException
     p = create(registry)
-    monkeypatch.setattr(cr.byok_config, 'get_mode', lambda: 'shared')
+    monkeypatch.setattr(cr.byok_config, 'get_asr_mode', lambda: 'shared')
     update_transcriber_config(TranscriberConfigRequest(transcriber_type=p['id']), SimpleNamespace(is_superuser=True))
     credential = cr.resolve_asr(None, online=True)
     assert (credential.api_key, credential.base_url, credential.model_name) == ('complete-secret-key', 'https://asr.example/v1', 'custom-model')
@@ -95,7 +95,7 @@ def test_default_selection_and_disable_do_not_fall_back(registry, monkeypatch):
 def test_own_credentials_override_disabled_site_provider(registry, monkeypatch):
     from app.services import credential_resolver as cr
     p = create(registry, enabled=False)
-    monkeypatch.setattr(cr.byok_config, 'get_mode', lambda: 'optional')
+    monkeypatch.setattr(cr.byok_config, 'get_asr_mode', lambda: 'optional')
     monkeypatch.setattr(cr, '_load_credential', lambda *args: SimpleNamespace(capability='asr', api_key='sealed', base_url='https://own.example/v1', model_name='own-model'))
     monkeypatch.setattr(cr.credential_crypto, 'reveal', lambda *args, **kw: 'own-key')
     result = cr.resolve_asr(1, online=True, provider_id=p['id'])
@@ -113,7 +113,7 @@ def test_disabled_local_engine_is_rejected_before_loading_runtime(registry, monk
 def test_custom_provider_is_forwarded_to_actual_transcriber(registry, monkeypatch):
     from app.transcriber import transcriber_provider as tp
     from app.services import credential_resolver as cr
-    monkeypatch.setattr(cr.byok_config, 'get_mode', lambda: 'shared')
+    monkeypatch.setattr(cr.byok_config, 'get_asr_mode', lambda: 'shared')
     monkeypatch.setattr(tp, 'GroqTranscriber', lambda credential: credential)
     p = create(registry)
     credential = tp.get_transcriber(p['id'], require_ready=True)

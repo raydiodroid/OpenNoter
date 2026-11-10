@@ -90,7 +90,7 @@ class Credential:
 def _load_credential(user_id: int, capability: str) -> Optional[UserCredential]:
     """按优先级取用户凭据：精确匹配 → default。"""
     wanted = [capability]
-    if capability != CAP_DEFAULT:
+    if capability != CAP_DEFAULT and (capability != CAP_ASR or byok_config.get().get("asr_use_default", True)):
         wanted.append(CAP_DEFAULT)
 
     db = SessionLocal()
@@ -132,10 +132,10 @@ class _Snapshot:
 def resolve_asr(user_id: Optional[int], *, online: bool, provider_id: Optional[str] = None) -> Optional[Credential]:
     """Own ASR overrides the site engine. Local engines need no paid credential.
 
-    Online site ASR always passes through resolve(), including required mode.
+    Personal online ASR uses its independent policy; shared ASR uses the registry.
     A configured but broken own credential must never fall back to the site.
     """
-    mode = byok_config.get_mode()
+    mode = byok_config.get_asr_mode()
     own = user_id is not None and mode != MODE_SHARED and _load_credential(user_id, CAP_ASR)
     if not online and not own:
         return None
@@ -181,6 +181,7 @@ def resolve(
     *,
     model_name: Optional[str] = None,
     site_provider_id: Optional[str] = None,
+    source: str = "auto",
 ) -> Credential:
     """解析本次调用用谁的凭据。
 
@@ -191,7 +192,13 @@ def resolve(
     :raises CredentialRequired: ``required`` 模式且用户未配置
     :raises CredentialBroken: 用户配置了但不可用
     """
-    mode = byok_config.get_mode()
+    mode = byok_config.get_asr_mode() if capability == CAP_ASR else byok_config.get_mode()
+    if source == "shared":
+        if mode == "required":
+            raise CredentialRequired("当前策略要求使用个人凭据，不能选择站点模型")
+        return _from_site(site_provider_id, model_name)
+    if source == "own" and (mode == MODE_SHARED or user_id is None):
+        raise CredentialRequired("当前策略不允许使用此个人凭据，请重新选择模型")
 
     # ---- 原则 1：不是 BYOK 模式 → 与改造前完全一致 ----
     if mode == MODE_SHARED or user_id is None:
@@ -201,12 +208,17 @@ def resolve(
 
     # ---- 没配置 ----
     if own is None:
-        if mode == "required":
+        if mode == "required" or source == "own":
             raise CredentialRequired(
                 "当前站点要求使用你自己的模型凭据，但你还没有配置。"
                 "请到「设置 → 模型配置 → 我的凭据」里填写接口地址、API Key 与模型名称。"
             )
         return _from_site(site_provider_id, model_name)
+
+    try:
+        byok_config.check_base_url(own.base_url)
+    except ValueError as exc:
+        raise CredentialBroken(str(exc)) from exc
 
     # ---- 配置了：解密。坏了一律报错（原则 2）----
     api_key = credential_crypto.reveal(
@@ -285,7 +297,9 @@ def build_capability_status(user_id: Optional[int]) -> dict:
     status: dict = {
         "mode": model_mode,
         "allow_custom_base_url": cfg["allow_custom_base_url"],
-        "byok_enabled": model_mode != MODE_SHARED,
+        "allowed_base_urls": cfg["allowed_base_urls"],
+        "asr_mode": cfg["asr_mode"],
+        "byok_enabled": byok_config.is_byok_enabled(),
         "capabilities": [],
     }
 
@@ -293,16 +307,20 @@ def build_capability_status(user_id: Optional[int]) -> dict:
     # `shared` 模式下用户的凭据**不参与解析**（resolve 直接短路段到站点配置）。
     # 所以状态里也不能把它们算成 own——否则界面显示「我的」，实际用的是站点
     # 凭据。与 build_cookie_status 里那条守卫是同构的，两处必须一致。
-    if user_id is not None and model_mode != MODE_SHARED:
+    if user_id is not None and byok_config.is_byok_enabled():
         for item in list_user_credentials(int(user_id)):
             configured[item["capability"]] = item
 
     # 对外只暴露 llm / asr 两个能力位；default 是它们的兜底，不单独展示
     for cap in (CAP_LLM, CAP_ASR):
-        own = configured.get(cap) or configured.get(CAP_DEFAULT)
+        cap_mode = cfg["asr_mode"] if cap == CAP_ASR else model_mode
+        own = configured.get(cap) or (configured.get(CAP_DEFAULT) if cap != CAP_ASR or cfg["asr_use_default"] else None)
+        if cap_mode == MODE_SHARED:
+            own = None
         status["capabilities"].append(
             {
                 "capability": cap,
+                "mode": cap_mode,
                 # own 只有在真正配置了（且能解密）时才是 own
                 "source": "own" if (own and own["configured"]) else "shared",
                 "configured": bool(own and own["configured"]),
@@ -374,7 +392,7 @@ def resolve_cookie(user_id: Optional[int], platform: str) -> Optional[str]:
 
     own = _load_user_cookie(int(user_id), platform)
     if own is None:
-        return _site_cookie(platform)
+        return _site_cookie(platform) if byok_config.get().get("allow_shared_cookie_fallback", True) else None
 
     plain = credential_crypto.reveal(
         own, user_id=int(user_id), capability=_cookie_capability(platform)
@@ -504,7 +522,7 @@ def build_cookie_status(user_id: Optional[int]) -> dict:
     # Cookie 走自己的开关；不要用 cfg["mode"]（那个字段已拆成两个）
     mode = cfg["cookie_mode"]
 
-    site = _site_cookie_platforms()
+    site = _site_cookie_platforms() if mode == MODE_SHARED or cfg.get("allow_shared_cookie_fallback", True) else {}
     items: list[dict] = []
 
     own_by_platform: dict[str, dict] = {}
@@ -523,7 +541,7 @@ def build_cookie_status(user_id: Optional[int]) -> dict:
         items.append(
             {
                 "platform": platform,
-                "source": "own" if has_own else ("shared" if site.get(platform) else "none"),
+                "source": "own" if has_own else ("shared" if site.get(platform) and not own.get("broken") else "none"),
                 "configured": has_own,
                 "broken": bool(own.get("broken")),
                 "entry_count": own.get("entry_count", 0),

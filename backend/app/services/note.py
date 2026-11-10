@@ -474,6 +474,7 @@ class NoteGenerator:
                 capability,
                 model_name=model_name,
                 site_provider_id=site_provider_id,
+                source="own" if provider_id and provider_id.startswith("own:") else "shared",
             )
         except Exception as exc:  # noqa: BLE001
             # BYOK 的 CredentialRequired / CredentialBroken 带着给用户看的文案，

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.db.models.users import User
@@ -40,8 +40,19 @@ def list_models(user: User | None = Depends(get_optional_user)):
         for item in models:
             item.setdefault("source", "shared")
 
+        from app.services.byok_config import byok_config
         if user is not None:
+            if byok_config.get_mode() == "required":
+                models = []
             models.extend(_own_models(user))
+        from app.services.model_selection import resolve_model_selection
+        try:
+            selected = resolve_model_selection(None, None, user_id=getattr(user, "id", None))
+        except Exception:
+            selected = None
+        for item in models:
+            item["is_default"] = (item["provider_id"], item["model_name"]) == selected
+
 
         return R.success(models, msg="获取模型列表成功")
     except Exception as e:
@@ -57,7 +68,7 @@ def _own_models(user: User) -> list[dict]:
     """
     from app.services.byok_config import byok_config
 
-    if not byok_config.is_byok_enabled():
+    if byok_config.get_mode() == "shared":
         return []
 
     from app.db.engine import SessionLocal
@@ -89,21 +100,35 @@ def _own_models(user: User) -> list[dict]:
                     "provider_id": f"own:{row.capability}",
                     "model_name": row.model_name,
                     "source": "own",
+                    "provider_name": "个人 AI 凭据" if row.capability == "llm" else "个人通用凭据",
                     "label": row.label,
                 }
             )
     finally:
         db.close()
 
-    # 同一个模型名只保留一条（default 与 llm 都配了同名模型时）
-    seen: set[str] = set()
-    deduped: list[dict] = []
-    for item in out:
-        if item["model_name"] in seen:
-            continue
-        seen.add(item["model_name"])
-        deduped.append(item)
-    return deduped
+    # Distinct capability slots can point to different gateways even with the same model name.
+    return sorted(out, key=lambda item: item["provider_id"] != "own:llm")
+
+
+@router.get("/model_defaults")
+def get_model_defaults():
+    from app.services.model_defaults import model_defaults
+    return R.success(data={**model_defaults.get(), "models": modelService.get_all_models()})
+
+
+class DefaultModelRequest(BaseModel):
+    provider_id: str | None = None
+    model_name: str | None = None
+
+
+@router.patch("/model_defaults")
+def update_model_defaults(data: DefaultModelRequest, admin: User = Depends(require_admin)):
+    from app.services.model_defaults import model_defaults
+    try:
+        return R.success(data=model_defaults.set(data.provider_id, data.model_name))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/models/{model_id}")
@@ -145,9 +170,9 @@ def delete_model(model_id: int, admin: User = Depends(require_admin)):
 # ---------- 旧路径（保留可用，但不出现在 API 文档里） ----------
 
 @router.get("/model_list", include_in_schema=False)
-def model_list():
+def model_list(user: User | None = Depends(get_optional_user)):
     """旧路径，等价于 GET /api/models。"""
-    return list_models()
+    return list_models(user)
 
 
 @router.get("/model_list/{provider_id}", include_in_schema=False)
@@ -164,3 +189,36 @@ def get_enabled_models_by_provider(provider_id: str):
         return R.success(models, msg="获取启用模型成功")
     except Exception as e:
         return R.error(f"获取启用模型失败: {e}")
+
+
+@router.get('/selection_status')
+def selection_status(user: User | None = Depends(get_optional_user)):
+    """Explain current automatic selection without making any upstream request."""
+    from app.services.model_selection import resolve_model_selection
+    from app.services.credential_resolver import resolve, resolve_asr
+    from app.services.transcriber_config_manager import TranscriberConfigManager
+    from app.services.asr_providers import AsrProviderService
+    uid = getattr(user, 'id', None)
+    result = {}
+    try:
+        provider, model = resolve_model_selection(None, None, user_id=uid)
+        own = provider.startswith('own:')
+        credential = resolve(uid, provider.split(':', 1)[1] if own else 'llm', model_name=model,
+                             site_provider_id=None if own else provider, source='own' if own else 'shared')
+        result['llm'] = {'source': credential.source, 'model_name': credential.model_name, 'provider_id': provider, 'error': None}
+    except Exception as exc:
+        result['llm'] = {'source': 'none', 'error': str(exc)}
+    try:
+        config = TranscriberConfigManager().get_config()
+        provider = config['transcriber_type']
+        credential = resolve_asr(uid, online=provider == 'groq' or provider.startswith('asr_'), provider_id=provider)
+        if credential is None:
+            entry = AsrProviderService.require_enabled(provider)
+            model = config['whisper_model_size'] if 'whisper' in provider else entry['name']
+        else:
+            model = credential.model_name
+        result['asr'] = {'source': credential.source if credential else 'shared', 'model_name': model,
+                         'provider_id': 'own:asr' if credential and credential.source == 'own' else provider, 'error': None}
+    except Exception as exc:
+        result['asr'] = {'source': 'none', 'error': str(exc)}
+    return R.success(data=result)

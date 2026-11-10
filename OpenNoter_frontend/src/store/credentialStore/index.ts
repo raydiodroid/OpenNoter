@@ -97,7 +97,7 @@ export const useCredentialStore = create<CredentialState>((set, get) => ({
         mode: cfg?.model_mode ?? EMPTY_MODE,
         cookieMode: cfg?.cookie_mode ?? 'shared',
         allowCustomBaseUrl: cfg?.allow_custom_base_url ?? true,
-        byokEnabled: Boolean(cfg && cfg.model_mode !== 'shared'),
+        byokEnabled: Boolean(cfg && (cfg.model_mode !== 'shared' || cfg.asr_mode !== 'shared')),
         cookieByokEnabled: Boolean(cfg && cfg.cookie_mode !== 'shared'),
         status: null,
       })

@@ -101,6 +101,8 @@ export interface ModelItem {
    * 下拉里要显示「我的 / 站点」，否则用户不知道这次调用花的是谁的钱。
    */
   source?: 'shared' | 'own'
+  is_default?: boolean
+  provider_name?: string
   /** 用户给凭据起的别名，仅 source=own 时有 */
   label?: string
 }

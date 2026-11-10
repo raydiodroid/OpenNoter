@@ -179,21 +179,9 @@ describe('S2 槽位契约：受限组件里不能放裸 <Text>', () => {
     expect(problems).toEqual([])
   })
 
-  /**
-   * 事故原点的定点回归。
-   *
-   * 上面那条通用规则依赖「组件名匹配 + 子树扫描」；这条直接盯住出事的文件，
-   * 防止通用规则因为重构（比如把 Radio 换成别的写法）而静默失效。
-   */
-  it('ByokSettings 的 BYOK 模式选项不得再用 S2 Text 作为 Radio 子节点', () => {
-    const file = join(SRC, 'pages/settings/ByokSettings.tsx')
-    const src = stripComments(readFileSync(file, 'utf8'))
-    const radioIdx = src.indexOf('<Radio')
-    expect(radioIdx).toBeGreaterThan(-1)
-
-    const block = src.slice(radioIdx, src.indexOf('</RadioGroup>'))
-    expect(block).not.toMatch(/<Text\b/)
-    // 修好之后，标题/描述应该包在同一个容器里（否则网格会把标题挤到右边）
-    expect(block).toMatch(/optionText/)
+  it('检测器能识别 Radio 和 Switch 的非法 Text，并允许纯文字标签', () => {
+    expect(findViolations('<Radio><Text>错误</Text></Radio>')).toHaveLength(1)
+    expect(findViolations('<Switch><Text>错误</Text></Switch>')).toHaveLength(1)
+    expect(findViolations('<Switch>允许个人凭据</Switch>')).toEqual([])
   })
 })

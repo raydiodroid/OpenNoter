@@ -21,24 +21,29 @@ def resolve_model_selection(
     *,
     user_id: Optional[int] = None,
 ) -> Tuple[str, str]:
-    """返回 (provider_id, model_name)。
+    """Explicit source > personal automatic choice > persisted site default.
 
-    缺省规则：provider 缺省时取第一个「已启用且有模型」的供应商；model 缺省时
-    取该供应商下第一个已启用的模型。显式指定但不存在 / 未启用时立即抛错。
-
-    ## BYOK 的 ``own:`` 前缀
-
-    用户选择自己的模型时，``provider_id`` 形如 ``own:llm`` / ``own:default``。
-    这类值**不是** ``providers`` 表里的记录，必须在这里短路掉，否则会被
-    下面的存在性校验判成「供应商不存在」——前端下拉能选到、一提交就报错，
-    错误信息还会误导人去查供应商配置。
-
-    短路后只校验「该用户确实配了这个能力位的凭据」，然后把原值透传给
-    ``credential_resolver`` 解析。
+    Unconfigured legacy sites use their first enabled model in stable ID order.
+    A configured default that becomes unavailable fails instead of changing source.
     """
-    # ---- BYOK：用户自己的模型，不走站点 providers 表 ----
+    from app.services.byok_config import byok_config
+    from app.services.credential_resolver import CredentialRequired, _load_credential
+    from app.services.model_defaults import model_defaults
+
     if provider_id and provider_id.startswith("own:"):
         return _resolve_own_selection(provider_id, model_name, user_id)
+
+    mode = byok_config.get_mode()
+    if user_id is not None and not provider_id and not model_name and mode != "shared":
+        own = _load_credential(user_id, "llm")
+        if own is not None:
+            return _resolve_own_selection("own:" + own.capability, None, user_id)
+    if mode == "required" and user_id is not None:
+        raise CredentialRequired("当前策略要求选择个人 AI 模型，请先配置个人凭据")
+
+    if not provider_id and not model_name:
+        default = model_defaults.get()
+        provider_id, model_name = default["provider_id"], default["model_name"]
 
     # get_all_models 只返回「已启用供应商」名下的模型，正好是可用集合
     models = get_all_models()
@@ -60,6 +65,11 @@ def resolve_model_selection(
                     NoteErrorEnum.MODEL_NOT_FOUND.message, NoteErrorEnum.MODEL_NOT_FOUND
                 )
             return provider_id, model_name
+        default = model_defaults.get()
+        if default["provider_id"] == provider_id:
+            if not any(m["model_name"] == default["model_name"] for m in available):
+                raise NoteError("默认模型已不可用，请重新选择", NoteErrorEnum.MODEL_NOT_FOUND)
+            return provider_id, default["model_name"]
         return provider_id, available[0]["model_name"]
 
     if not models:
@@ -68,7 +78,10 @@ def resolve_model_selection(
         )
 
     if model_name:
-        hit = next((m for m in models if m["model_name"] == model_name), None)
+        hits = [m for m in models if m["model_name"] == model_name]
+        if len({m["provider_id"] for m in hits}) > 1:
+            raise NoteError("多个供应商提供同名模型，请同时选择供应商", NoteErrorEnum.MODEL_NOT_FOUND)
+        hit = hits[0] if hits else None
         if hit is None:
             raise NoteError(
                 NoteErrorEnum.MODEL_NOT_FOUND.message, NoteErrorEnum.MODEL_NOT_FOUND
@@ -90,50 +103,11 @@ def _resolve_own_selection(
 
     真正的凭据解密与端点选择交给 ``credential_resolver``，这里不重复。
     """
-    from app.db.engine import SessionLocal
-    from app.db.models.user_credentials import CAP_DEFAULT, UserCredential
-    from app.services.byok_config import byok_config
-
-    capability = provider_id.split(":", 1)[1].strip() or CAP_DEFAULT
-
-    if user_id is None:
-        raise ProviderError(
-            "请先登录后再使用自有模型凭据", ProviderErrorEnum.NOT_FOUND
-        )
-
-    if not byok_config.is_byok_enabled():
-        raise ProviderError(
-            "当前站点未启用自带凭据功能", ProviderErrorEnum.NOT_FOUND
-        )
-
-    db = SessionLocal()
-    try:
-        wanted = [capability]
-        if capability != CAP_DEFAULT:
-            wanted.append(CAP_DEFAULT)
-        found = (
-            db.query(UserCredential)
-            .filter(
-                UserCredential.user_id == user_id,
-                UserCredential.capability.in_(wanted),
-                UserCredential.enabled.is_(True),
-            )
-            .count()
-        )
-    finally:
-        db.close()
-
-    if not found:
-        raise ProviderError(
-            "你的凭据不存在或已删除，请到「设置 → 模型配置 → 我的凭据」重新配置",
-            ProviderErrorEnum.NOT_FOUND,
-        )
-
-    name = (model_name or "").strip()
-    if not name:
-        raise NoteError(
-            "请指定模型名称（自有端点无法自动推断）",
-            NoteErrorEnum.MODEL_NOT_FOUND,
-        )
-
-    return provider_id, name
+    from app.services.credential_resolver import resolve
+    capability = provider_id.split(":", 1)[1]
+    if capability not in ("llm", "default"):
+        raise ProviderError("请选择笔记与问答凭据，转写凭据不能用作 AI 模型", ProviderErrorEnum.NOT_FOUND)
+    credential = resolve(user_id, capability, model_name=model_name, source="own")
+    if not credential.model_name:
+        raise NoteError("请先配置个人模型名称", NoteErrorEnum.MODEL_NOT_FOUND)
+    return provider_id, credential.model_name

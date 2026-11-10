@@ -98,6 +98,9 @@ export async function getDownloaderCookie(platform: string): Promise<string | nu
 }
 
 export interface CredentialStatus {
+  allow_custom_base_url?: boolean
+  allowed_base_urls?: string[]
+  asr_mode?: string
   mode: string
   credentials: Array<{ capability: string, base_url: string, model_name: string, masked_key: string }>
 }

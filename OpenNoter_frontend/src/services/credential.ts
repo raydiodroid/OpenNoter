@@ -43,6 +43,10 @@ export type CookieMode = 'shared' | 'optional'
 export interface ByokConfig {
   /** 模型凭据模式（LLM / 转写） */
   model_mode: ByokMode
+  asr_mode: ByokMode
+  asr_use_default: boolean
+  allow_shared_cookie_fallback: boolean
+  allowed_base_urls: string[]
   /** 平台 Cookie 模式（只有 shared / optional） */
   cookie_mode: CookieMode
   allow_custom_base_url: boolean
@@ -63,6 +67,7 @@ export interface CredentialItem {
 
 export interface CapabilityStatus {
   capability: 'llm' | 'asr'
+  mode: ByokMode
   source: 'own' | 'shared'
   configured: boolean
   masked_key: string
@@ -72,7 +77,9 @@ export interface CapabilityStatus {
 }
 
 export interface ByokStatus {
+  allowed_base_urls: string[]
   mode: ByokMode
+  asr_mode: ByokMode
   allow_custom_base_url: boolean
   byok_enabled: boolean
   capabilities: CapabilityStatus[]
@@ -93,14 +100,8 @@ export interface CredentialPayload {
 export const getByokConfig = (opts?: CallOpts) =>
   request.get<never, ByokConfig>('/byok_config', cfg(opts))
 
-export const updateByokConfig = (
-  data: {
-    model_mode?: ByokMode
-    cookie_mode?: CookieMode
-    allow_custom_base_url?: boolean
-  },
-  opts?: CallOpts
-) => request.patch<never, ByokConfig>('/byok_config', data, cfg(opts))
+export const updateByokConfig = (data: Partial<ByokConfig>, opts?: CallOpts) =>
+  request.patch<never, ByokConfig>('/byok_config', data, cfg(opts))
 
 // ---------------------------------------------------------------------------
 // 我的凭据
@@ -124,15 +125,8 @@ export const deleteMyCredential = (capability: Capability, opts?: CallOpts) =>
  * 不是所有 OpenAI 兼容网关都实现 `/models`（自建 vLLM / 部分中转服务），
  * 所以失败时后端会如实报错，前端应保留手动填写模型名的能力。
  */
-export const discoverModels = (
-  data: { base_url: string; api_key: string },
-  opts?: CallOpts
-) =>
-  request.post<never, { models: string[] }>(
-    '/me/credentials/discover-models',
-    data,
-    cfg(opts)
-  )
+export const discoverModels = (data: { base_url: string; api_key: string }, opts?: CallOpts) =>
+  request.post<never, { models: string[] }>('/me/credentials/discover-models', data, cfg(opts))
 
 export const testMyCredential = (capability: Capability, opts?: CallOpts) =>
   request.post<never, { ok: boolean; latency_ms: number; model: string }>(

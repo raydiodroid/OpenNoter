@@ -62,10 +62,10 @@ def get_all_models():
     db = next(get_db())
     try:
         # 只查询启用状态供应商的模型
-        models = db.query(Model).join(Provider, Model.provider_id == Provider.id).filter(Provider.enabled == 1).all()
+        models = db.query(Model, Provider.name).join(Provider, Model.provider_id == Provider.id).filter(Provider.enabled == 1).order_by(Model.id).all()
         return [
-            {"id": m.id, "provider_id": m.provider_id, "model_name": m.model_name}
-            for m in models
+            {"id": m.id, "provider_id": m.provider_id, "provider_name": name, "model_name": m.model_name}
+            for m, name in models
         ]
     finally:
         db.close()

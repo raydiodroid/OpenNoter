@@ -40,3 +40,21 @@ test('editing connection settings preserves focus across scope changes', async (
   await expect(url).toHaveValue('http://localhost:8483/test')
   await expect(url).toBeFocused()
 })
+
+test('ASR-only BYOK exposes speech settings and the allowed endpoint list', async ({ context, page, extensionId }) => {
+  await context.route('http://localhost:8483/api/me/credentials', route => route.fulfill({ json: { code: 0, data: {
+    mode: 'shared',
+    asr_mode: 'optional',
+    allow_custom_base_url: false,
+    allowed_base_urls: ['https://speech.example/v1'],
+    credentials: [],
+  } } }))
+  await page.goto(`chrome-extension://${extensionId}/dist/options/index.html`)
+  await page.getByRole('button', { name: '我的凭据', exact: true }).click()
+  await expect(page.getByRole('heading', { name: '笔记与问答', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: '音频转写', exact: true })).toBeVisible()
+  const speech = page.locator('section').filter({ has: page.getByRole('heading', { name: '音频转写', exact: true }) })
+  await speech.getByRole('combobox').selectOption('https://speech.example/v1')
+  await expect(speech.getByRole('combobox')).toHaveValue('https://speech.example/v1')
+  await expect(speech.getByPlaceholder('https://provider.example/v1')).toHaveCount(0)
+})

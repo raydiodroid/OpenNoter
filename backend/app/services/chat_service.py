@@ -164,24 +164,15 @@ def chat(
     # ``provider_id`` 形如 ``own:llm`` 时表示用当前用户自带凭据。
     from app.services.credential_resolver import resolve as resolve_credential
 
-    capability = "llm"
-    site_provider_id = provider_id
-    if provider_id and provider_id.startswith("own:"):
-        capability = provider_id.split(":", 1)[1] or "default"
-        site_provider_id = None
-
-    # provider_id 可能为空（换设备后从服务端同步回来的任务没有 formData）。
-    # 此时按站点默认供应商/模型补齐，而不是直接失败——用户点开一条历史笔记
-    # 问问题，不应该因为「这条记录没保存模型名」就用不了。
-    if not site_provider_id:
-        site_provider_id, resolved_model = _default_site_selection()
-        model_name = model_name or resolved_model
-
+    from app.services.model_selection import resolve_model_selection
+    provider_id, model_name = resolve_model_selection(provider_id, model_name, user_id=user_id)
+    own = provider_id.startswith("own:")
     cred = resolve_credential(
         user_id,
-        capability,
+        provider_id.split(":", 1)[1] if own else "llm",
         model_name=model_name,
-        site_provider_id=site_provider_id,
+        site_provider_id=None if own else provider_id,
+        source="own" if own else "shared",
     )
 
     config = ModelConfig(

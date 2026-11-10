@@ -70,6 +70,7 @@ class ModelService:
             formatted.append({
                 "id": model.get("id"),
                 "provider_id": model.get("provider_id"),
+                "provider_name": model.get("provider_name", model.get("provider_id")),
                 "model_name": model.get("model_name"),
                 "created_at": model.get("created_at", None),  # 如果有created_at字段
             })

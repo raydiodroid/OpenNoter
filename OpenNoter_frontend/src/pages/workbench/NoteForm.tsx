@@ -45,7 +45,7 @@ interface FormValues {
 const DEFAULT_VALUES: FormValues = {
   platform: 'bilibili',
   video_url: '',
-  model_id: '',
+  model_id: 'auto',
   style: 'minimal',
   format: [],
   extras: '',
@@ -165,7 +165,10 @@ export default function NoteForm() {
     setValues({
       platform: data.platform || 'bilibili',
       video_url: data.video_url || '',
-      model_id: models.find(m => m.model_name === data.model_name)?.id?.toString() ?? '',
+      model_id:
+        models
+          .find(m => m.model_name === data.model_name && m.provider_id === data.provider_id)
+          ?.id?.toString() ?? 'auto',
       style: data.style || 'minimal',
       format: Array.isArray(data.format) ? data.format : [],
       extras: data.extras || '',
@@ -178,25 +181,13 @@ export default function NoteForm() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentTask?.id])
 
-  // 模型列表异步到达后：决定默认选中项。
-  //
-  // 优先级：
-  //   1. 任务里记录过的模型（切回历史任务时保持一致）
-  //   2. 用户自己的 BYOK 模型（配置了就是想用，别默认去花站点额度）
-  //   3. 站点模型（原有行为）
-  //
-  // 注意：站点模型列表的后端查询**没有 order_by**（见 db/model_dao.py），
-  // 所以 models[0] 的顺序本身是不确定的——这也是要显式定义优先级的原因。
+  // A single automatic choice delegates policy/default resolution to the backend.
   useEffect(() => {
-    if (models.length === 0) return
     setValues(prev => {
-      if (prev.model_id && models.some(model => String(model.id) === prev.model_id)) return prev
-      const preferred = currentTask?.formData.model_name
-      const match = preferred ? models.find(model => model.model_name === preferred) : undefined
-      const ownDefault = models.find(model => model.source === 'own')
-      return { ...prev, model_id: String((match ?? ownDefault ?? models[0]).id) }
+      if (prev.model_id === 'auto' || models.some(m => String(m.id) === prev.model_id)) return prev
+      return { ...prev, model_id: 'auto' }
     })
-  }, [models, currentTask?.formData.model_name])
+  }, [models])
 
   const patch = (next: Partial<FormValues>) => {
     setValues(prev => ({ ...prev, ...next }))
@@ -240,7 +231,7 @@ export default function NoteForm() {
     if (!validate()) return
 
     const model = models.find(m => String(m.id) === values.model_id)
-    if (!model) {
+    if (!model && values.model_id !== 'auto') {
       setErrors({ model_id: '所选模型已不可用，请重新选择' })
       return
     }
@@ -249,8 +240,8 @@ export default function NoteForm() {
       video_url: isLocal ? values.video_url.trim() : withScheme(values.video_url),
       platform: values.platform,
       quality: 'medium',
-      model_name: model.model_name,
-      provider_id: model.provider_id,
+      model_name: model?.model_name ?? '',
+      provider_id: model?.provider_id ?? '',
       style: values.style,
       format: values.format,
       extras: values.extras.trim() || undefined,
@@ -379,6 +370,7 @@ export default function NoteForm() {
               isInvalid={Boolean(errors.model_id)}
               errorMessage={errors.model_id}
             >
+              <PickerItem id="auto">{`自动 · ${models.find(m => m.is_default)?.model_name || '按站点策略选择'}`}</PickerItem>
               {models.map(model => (
                 <PickerItem
                   key={String(model.id)}
@@ -386,7 +378,7 @@ export default function NoteForm() {
                   textValue={model.model_name}
                 >
                   {/* BYOK：必须标出来源，否则用户不知道这次调用花的是谁的钱 */}
-                  {model.source === 'own' ? `${model.model_name}（我的）` : model.model_name}
+                  {`${model.model_name} · ${model.provider_name || (model.source === 'own' ? '我的' : model.provider_id)}`}
                 </PickerItem>
               ))}
             </Picker>
