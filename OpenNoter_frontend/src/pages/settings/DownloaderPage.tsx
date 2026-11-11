@@ -319,48 +319,44 @@ function CookieEditor({
             <h2 className={detailTitle}>{platform?.label || platformId} 下载器</h2>
           </div>
 
-          {(loading ? (
-                <Text styles={muted}>加载 Cookie…</Text>
-              ) : (
-                <div className={formStack}>
-                  <Notice variant="neutral">
-                    <Text>{PLATFORM_HINTS[platformId] || COOKIE_HINT}</Text>
-                  </Notice>
+          {loading ? (
+            <Text styles={muted}>加载 Cookie…</Text>
+          ) : (
+            <div className={formStack}>
+              <Notice variant="neutral">
+                <Text>{PLATFORM_HINTS[platformId] || COOKIE_HINT}</Text>
+              </Notice>
 
-                  <TextArea
-                    label="Cookie"
-                    value={cookie}
-                    onChange={value => {
-                      setCookie(value)
-                      setDirty(true)
-                    }}
-                    placeholder="粘贴浏览器开发者工具里复制的 Cookie"
-                    description="保存时只保留该平台下载器需要的登录项，其余统计与偏好 Cookie 会被丢弃。"
-                    UNSAFE_className="cookie-textarea"
-                  />
-                  <div className={actions}>
-                    {platformId === 'bilibili' ? (
-                      <Button
-                        variant="secondary"
-                        onPress={openQr}
-                        isDisabled={saving || acquiring}
-                      >
-                        B 站扫码登录
-                      </Button>
-                    ) : null}
-                    <Button
-                      variant="secondary"
-                      onPress={acquireFromBrowser}
-                      isDisabled={saving || acquiring}
-                    >
-                      {acquiring ? '正在获取…' : '从当前浏览器获取'}
-                    </Button>
-                    <Button variant="accent" onPress={save} isDisabled={saving || acquiring || !dirty}>
-                      {saving ? '保存中…' : '保存 Cookie'}
-                    </Button>
-                  </div>
-                </div>
-              ))}
+              <TextArea
+                label="Cookie"
+                value={cookie}
+                onChange={value => {
+                  setCookie(value)
+                  setDirty(true)
+                }}
+                placeholder="粘贴浏览器开发者工具里复制的 Cookie"
+                description="保存时只保留该平台下载器需要的登录项，其余统计与偏好 Cookie 会被丢弃。"
+                UNSAFE_className="cookie-textarea"
+              />
+              <div className={actions}>
+                {platformId === 'bilibili' ? (
+                  <Button variant="secondary" onPress={openQr} isDisabled={saving || acquiring}>
+                    B 站扫码登录
+                  </Button>
+                ) : null}
+                <Button
+                  variant="secondary"
+                  onPress={acquireFromBrowser}
+                  isDisabled={saving || acquiring}
+                >
+                  {acquiring ? '正在获取…' : '从当前浏览器获取'}
+                </Button>
+                <Button variant="accent" onPress={save} isDisabled={saving || acquiring || !dirty}>
+                  {saving ? '保存中…' : '保存 Cookie'}
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
       </Panel>
 
@@ -400,15 +396,15 @@ export default function DownloaderPage() {
           else params.set('tab', next)
           return params
         },
-        { replace: true },
+        { replace: true }
       )
     },
-    [setSearchParams],
+    [setSearchParams]
   )
 
   const handleCookieChange = useCallback((platformId: string, hasCookie: boolean) => {
     setCookieStatus(prev =>
-      prev[platformId] === hasCookie ? prev : { ...prev, [platformId]: hasCookie },
+      prev[platformId] === hasCookie ? prev : { ...prev, [platformId]: hasCookie }
     )
   }, [])
 
@@ -417,16 +413,14 @@ export default function DownloaderPage() {
     let cancelled = false
     const load = async () => {
       const entries = await Promise.all(
-        DOWNLOAD_PLATFORMS.map(
-          async item => {
-            try {
-              const res = await getDownloaderCookie(item.value, { suppressToast: true })
-              return [item.value, Boolean(res?.cookie)] as const
-            } catch {
-              return [item.value, false] as const
-            }
-          },
-        ),
+        DOWNLOAD_PLATFORMS.map(async item => {
+          try {
+            const res = await getDownloaderCookie(item.value, { suppressToast: true })
+            return [item.value, Boolean(res?.cookie)] as const
+          } catch {
+            return [item.value, false] as const
+          }
+        })
       )
       if (cancelled) return
       setCookieStatus(Object.fromEntries(entries))
@@ -487,7 +481,7 @@ export default function DownloaderPage() {
       >
         <TabList aria-label="下载配置">
           <Tab id="cookie">Cookie</Tab>
-          <Tab id="network">网络</Tab>
+          {isAdmin ? <Tab id="network">网络</Tab> : null}
         </TabList>
 
         <TabPanel id="cookie">
@@ -514,13 +508,15 @@ export default function DownloaderPage() {
           </div>
         </TabPanel>
 
-        <TabPanel id="network">
-          <div className={panelBody}>
-            <div className={maxForm}>
-              <ProxyConfigPanel />
+        {isAdmin ? (
+          <TabPanel id="network">
+            <div className={panelBody}>
+              <div className={maxForm}>
+                <ProxyConfigPanel />
+              </div>
             </div>
-          </div>
-        </TabPanel>
+          </TabPanel>
+        ) : null}
       </Tabs>
     </Page>
   )

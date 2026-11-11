@@ -27,11 +27,11 @@ from app.services.task_serial_executor import task_serial_executor
 from app.services.vector_store import VectorStoreManager
 from app.utils.response import ResponseWrapper as R
 from app.utils.url_parser import detect_platform, normalize_video_url
-from app.utils.url_safety import UnsafeUrlError, assert_safe_url
+from app.utils.url_safety import UnsafeUrlError, safe_get
 from app.validators.video_url_validator import is_supported_video_url
 from fastapi import APIRouter, Request, HTTPException
-from fastapi.responses import StreamingResponse
-import httpx
+from fastapi.responses import Response
+from starlette.concurrency import run_in_threadpool
 from app.utils.note_paths import (
     UnsafeTaskId,
     is_safe_task_id,
@@ -490,19 +490,17 @@ async def upload(file: UploadFile = File(...), user: User | None = Depends(get_o
                         detail=f"文件过大，上限 {limit // (1024 * 1024)}MB",
                     )
                 f.write(chunk)
+        set_upload_owner(dest, user.id if user else None)
     except HTTPException:
         raise
     except Exception as e:
         try:
             dest.unlink(missing_ok=True)
+            dest.with_name(dest.name + ".owner").unlink(missing_ok=True)
         except OSError:
             pass
         logger.warning(f"上传失败: {e}")
         raise HTTPException(status_code=500, detail="上传失败")
-
-    # 记录上传者：供 /uploads 下载时做归属校验（防止横向越权读取他人上传）。
-    # 匿名（未设 AUTH_ENFORCE 时 user=None）不写侧车，保持历史行为。
-    set_upload_owner(dest, user.id if user else None)
 
     return R.success({"url": f"/uploads/{store_name}", "filename": store_name, "size": written})
 
@@ -827,40 +825,34 @@ async def image_proxy(request: Request, url: str):
         "User-Agent": request.headers.get("User-Agent", ""),
     }
 
-    current = url
+    def fetch_image():
+        allowed = {"image/jpeg", "image/png", "image/gif", "image/webp", "image/avif"}
+        limit = 10 * 1024 * 1024
+        with safe_get(url, timeout=(5, 10), stream=True, headers=headers,
+                      max_redirects=MAX_IMAGE_REDIRECTS) as response:
+            if response.status_code != 200:
+                raise HTTPException(status_code=502, detail="图片获取失败")
+            content_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+            if content_type not in allowed:
+                raise HTTPException(status_code=415, detail="只允许常用位图图片格式")
+            content = bytearray()
+            for chunk in response.iter_content(65536):
+                if len(content) + len(chunk) > limit:
+                    raise HTTPException(status_code=413, detail="图片超过 10MB 限制")
+                content.extend(chunk)
+            return bytes(content), content_type
+
     try:
-        async with httpx.AsyncClient(timeout=10.0, follow_redirects=False) as client:
-            for _ in range(MAX_IMAGE_REDIRECTS + 1):
-                assert_safe_url(current)
-                resp = await client.get(current, headers=headers)
-
-                if resp.is_redirect:
-                    location = resp.headers.get("Location")
-                    if not location:
-                        raise HTTPException(status_code=502, detail="重定向缺少 Location")
-                    # 必须转回 str：下一轮会把它交给 urlparse()/assert_safe_url()，
-                    # 而 httpx.URL 不是 str 子类，直接传会抛 AttributeError →
-                    # 500，把「跳转到不安全地址被拒」的真实原因掩盖成服务端错误。
-                    current = str(httpx.URL(current).join(location))
-                    continue
-
-                if resp.status_code != 200:
-                    raise HTTPException(status_code=resp.status_code, detail="图片获取失败")
-
-                content_type = resp.headers.get("Content-Type", "image/jpeg")
-                return StreamingResponse(
-                    resp.aiter_bytes(),
-                    media_type=content_type,
-                    headers={
-                        "Cache-Control": "public, max-age=86400",  #  缓存一天
-                        "Content-Type": content_type,
-                    }
-                )
-        raise HTTPException(status_code=502, detail="重定向次数过多")
-    except UnsafeUrlError as e:
-        logger.warning(f"image_proxy 拒绝请求: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
+        content, content_type = await run_in_threadpool(fetch_image)
+        return Response(content, media_type=content_type, headers={
+            "Cache-Control": "private, max-age=86400",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'; sandbox",
+        })
+    except UnsafeUrlError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as exc:
+        logger.warning("图片代理请求失败: %s", type(exc).__name__)
+        raise HTTPException(status_code=502, detail="图片获取失败") from exc

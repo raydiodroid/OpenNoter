@@ -351,7 +351,7 @@ class ProxyConfigRequest(BaseModel):
 
 
 @router.get("/proxy_config")
-def get_proxy_config():
+def get_proxy_config(admin: User = Depends(require_admin)):
     from app.services.proxy_config_manager import ProxyConfigManager
     mgr = ProxyConfigManager()
     cfg = mgr.get_config()
@@ -465,7 +465,7 @@ def _do_download_whisper(model_size: str):
         # 让 UI 配的代理对 HuggingFace 下载也生效（issue #417：容器里代理没生效）
         proxy = ProxyConfigManager().apply_to_env()
         if proxy:
-            logger.info(f"whisper 下载走代理: {proxy}")
+            logger.info("whisper 下载使用已配置代理")
         model_dir = get_model_dir("whisper")
 
         # 已经下好就不重复下
@@ -519,7 +519,7 @@ def _do_download_mlx_whisper(model_size: str):
         # 让 UI 配的代理对 HuggingFace 下载也生效（issue #417）
         proxy = ProxyConfigManager().apply_to_env()
         if proxy:
-            logger.info(f"mlx-whisper 下载走代理: {proxy}")
+            logger.info("mlx-whisper 下载使用已配置代理")
 
         try:
             repo_id = resolve_mlx_repo_id(model_size)

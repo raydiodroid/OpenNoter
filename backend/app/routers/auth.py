@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.db.engine import get_db
@@ -34,8 +34,13 @@ from app.utils.response import ResponseWrapper as R
 router = APIRouter()
 
 # OIDC state 暂存（单进程内存足够；多副本部署需换 Redis）
-_OIDC_STATES: dict[str, float] = {}
+_OIDC_STATES: dict[str, tuple[float, str, str]] = {}
 _STATE_TTL = 600
+_STATE_COOKIE = "opennoter_oidc_state"
+
+from app.services.api_key_runtime import FixedWindowRateLimiter
+
+_LOGIN_LIMITER = FixedWindowRateLimiter()
 
 
 def _cookie_secure() -> bool:
@@ -69,12 +74,17 @@ def _user_payload(user: User) -> dict:
 # ---------------- 本地登录 ----------------
 
 class LoginRequest(BaseModel):
-    email: str
-    password: str
+    email: str = Field(max_length=320)
+    password: str = Field(max_length=1024)
 
 
 @router.post("/login")
-def login(data: LoginRequest, db: Session = Depends(get_db)):
+def login(data: LoginRequest, request: Request, db: Session = Depends(get_db)):
+    # 只信任直连对端，不能相信用户可伪造的 X-Forwarded-For。
+    peer = request.client.host if request.client else "unknown"
+    for key, limit in (("peer:" + peer, 60), ("email:" + data.email.strip().lower(), 10)):
+        if not _LOGIN_LIMITER.check(key, limit)[0]:
+            raise HTTPException(status_code=429, detail="登录尝试过于频繁，请稍后重试", headers={"Retry-After": "60"})
     user = db.query(User).filter(User.email == data.email.strip().lower()).first()
     if not user or not verify_password(data.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="邮箱或密码不正确")
@@ -149,39 +159,55 @@ def oidc_login():
         raise HTTPException(status_code=400, detail="未配置 OIDC")
 
     state = secrets.token_urlsafe(24)
+    nonce = secrets.token_urlsafe(24)
+    verifier = secrets.token_urlsafe(48)
     now = time.time()
-    for key, ts in list(_OIDC_STATES.items()):
+    for key, (ts, _, _) in list(_OIDC_STATES.items()):
         if ts < now - _STATE_TTL:
             _OIDC_STATES.pop(key, None)
-    _OIDC_STATES[state] = now
+    if len(_OIDC_STATES) >= 10000:
+        raise HTTPException(status_code=429, detail="登录请求过多，请稍后重试")
+    _OIDC_STATES[state] = (now, nonce, verifier)
 
-    return RedirectResponse(oidc.build_authorize_url(state), status_code=302)
+    response = RedirectResponse(oidc.build_authorize_url(state, nonce, verifier), status_code=302)
+    response.set_cookie(_STATE_COOKIE, state, max_age=_STATE_TTL, httponly=True,
+                        secure=_cookie_secure(), samesite="lax", path="/api/auth")
+    return response
 
 
 @router.get("/oidc/callback")
 @router.get("/callback")  # 兼容 authentik 里登记的短路径
-def oidc_callback(code: str = "", state: str = "", db: Session = Depends(get_db)):
+def oidc_callback(request: Request, code: str = "", state: str = "", db: Session = Depends(get_db)):
     """回调：code 换 id_token → 建/找本地用户 → 发本系统 JWT。"""
     if not code or not state:
         raise HTTPException(status_code=400, detail="回调参数缺失")
-    if _OIDC_STATES.pop(state, None) is None:
+    browser_state = request.cookies.get(_STATE_COOKIE, "")
+    if not browser_state or not secrets.compare_digest(state, browser_state):
+        raise HTTPException(status_code=400, detail="登录会话不匹配，请重新登录")
+    pending = _OIDC_STATES.pop(state, None)
+    if pending is None or time.time() - pending[0] > _STATE_TTL:
         raise HTTPException(status_code=400, detail="state 校验失败或已过期")
 
     try:
-        claims = oidc.exchange_code(code)
+        claims = oidc.exchange_code(code, nonce=pending[1], verifier=pending[2])
     except Exception as exc:  # 网络/验签/解析都可能失败
-        raise HTTPException(status_code=400, detail=f"OIDC 校验失败：{exc}") from exc
+        raise HTTPException(status_code=400, detail="OIDC 校验失败，请重新登录") from exc
 
     sub = claims.get("sub")
     email = (claims.get("email") or "").strip().lower()
     if not sub or not email:
         raise HTTPException(status_code=400, detail="OIDC 返回的身份信息不完整")
 
-    user = db.query(User).filter(User.oidc_sub == sub).first()
+    issuer = os.getenv("OIDC_ISSUER", "").strip().rstrip("/")
+    user = db.query(User).filter(User.oidc_sub == sub, User.oidc_issuer.in_([issuer, issuer + "/"])).first()
     if not user:
+        if claims.get("email_verified") is not True:
+            raise HTTPException(status_code=403, detail="请先在身份服务中验证邮箱")
         # 同邮箱已存在则绑定，避免重复建号
         user = db.query(User).filter(User.email == email).first()
         if user:
+            if user.oidc_sub:
+                raise HTTPException(status_code=403, detail="该邮箱已绑定其他身份，请联系管理员")
             user.oidc_sub = sub
             user.oidc_issuer = os.getenv("OIDC_ISSUER", "")
         else:
@@ -224,6 +250,7 @@ def oidc_callback(code: str = "", state: str = "", db: Session = Depends(get_db)
 
     target = getenv("POST_LOGIN_REDIRECT", "/")
     response = RedirectResponse(target, status_code=302)
+    response.delete_cookie(_STATE_COOKIE, path="/api/auth")
     _set_auth_cookie(response, token)
     return response
 

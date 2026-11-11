@@ -98,7 +98,7 @@ def test_probe_allows_public_https(probe_mod):
     fake = MagicMock()
     fake.status_code = 200
     fake.json.return_value = {"data": [{"id": "gpt"}, {"id": "o1"}]}
-    with patch("requests.get", return_value=fake):
+    with patch("app.utils.url_safety._request_pinned", return_value=fake):
         resp = _call(probe_mod, "https://api.openai.com/v1")
     payload = json.loads(resp.body.decode())
     assert payload["data"]["ok"] is True

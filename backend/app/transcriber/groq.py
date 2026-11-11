@@ -36,6 +36,7 @@ class GroqTranscriber(Transcriber, ABC):
         client = build_openai_client(
             api_key=credential.api_key, base_url=credential.base_url,
             key_label="音频转写 API Key", timeout=180.0, max_retries=1,
+            public_only=credential.source == "own",
         )
         compressed = None
         try:

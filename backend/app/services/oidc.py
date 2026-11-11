@@ -6,6 +6,9 @@
 
 import os
 import time
+import hashlib
+import base64
+import secrets
 from typing import Optional
 from urllib.parse import urlencode
 
@@ -15,6 +18,7 @@ from jwt import PyJWKClient
 
 _DISCOVERY_CACHE: dict = {"data": None, "exp": 0}
 _JWKS_CLIENT: Optional[PyJWKClient] = None
+_JWKS_URI: str = ""
 
 
 def oidc_enabled() -> bool:
@@ -36,19 +40,22 @@ def redirect_uri() -> str:
 def discovery() -> dict:
     """带 10 分钟缓存的 discovery 文档。"""
     now = time.time()
-    if _DISCOVERY_CACHE["data"] and _DISCOVERY_CACHE["exp"] > now:
+    if _DISCOVERY_CACHE.get("issuer") == _issuer() and _DISCOVERY_CACHE["data"] and _DISCOVERY_CACHE["exp"] > now:
         return _DISCOVERY_CACHE["data"]
 
     url = f"{_issuer()}/.well-known/openid-configuration"
     resp = httpx.get(url, timeout=10)
     resp.raise_for_status()
     data = resp.json()
+    if data.get("issuer", "").rstrip("/") != _issuer():
+        raise ValueError("OIDC discovery issuer 不匹配")
+    _DISCOVERY_CACHE["issuer"] = _issuer()
     _DISCOVERY_CACHE["data"] = data
     _DISCOVERY_CACHE["exp"] = now + 600
     return data
 
 
-def build_authorize_url(state: str) -> str:
+def build_authorize_url(state: str, nonce: str, verifier: str) -> str:
     conf = discovery()
     params = {
         "client_id": os.getenv("OIDC_CLIENT_ID", "").strip(),
@@ -56,11 +63,14 @@ def build_authorize_url(state: str) -> str:
         "scope": "openid email profile",
         "redirect_uri": redirect_uri(),
         "state": state,
+        "nonce": nonce,
+        "code_challenge": base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest()).decode("ascii").rstrip("="),
+        "code_challenge_method": "S256",
     }
     return f"{conf['authorization_endpoint']}?{urlencode(params)}"
 
 
-def exchange_code(code: str) -> dict:
+def exchange_code(code: str, *, nonce: str, verifier: str) -> dict:
     """用 code 换 token，校验 id_token 签名，返回 claims。
 
     issuer 一律取 discovery 文档里的权威值，而不是环境变量里手写的字符串——
@@ -72,6 +82,7 @@ def exchange_code(code: str) -> dict:
         data={
             "grant_type": "authorization_code",
             "code": code,
+            "code_verifier": verifier,
             "redirect_uri": redirect_uri(),
             "client_id": os.getenv("OIDC_CLIENT_ID", "").strip(),
             "client_secret": os.getenv("OIDC_CLIENT_SECRET", "").strip(),
@@ -85,9 +96,10 @@ def exchange_code(code: str) -> dict:
     if not id_token:
         raise ValueError("OIDC 响应缺少 id_token")
 
-    global _JWKS_CLIENT
-    if _JWKS_CLIENT is None:
+    global _JWKS_CLIENT, _JWKS_URI
+    if _JWKS_CLIENT is None or _JWKS_URI != conf["jwks_uri"]:
         _JWKS_CLIENT = PyJWKClient(conf["jwks_uri"])
+        _JWKS_URI = conf["jwks_uri"]
 
     signing_key = _JWKS_CLIENT.get_signing_key_from_jwt(id_token)
 
@@ -98,7 +110,8 @@ def exchange_code(code: str) -> dict:
         signing_key.key,
         algorithms=["RS256", "ES256"],
         audience=os.getenv("OIDC_CLIENT_ID", "").strip(),
-        options={"verify_iss": False},
+        issuer=conf["issuer"],
+        options={"require": ["exp", "iat", "iss", "sub", "aud", "nonce"]},
     )
 
     token_issuer = claims.get("iss", "")
@@ -106,4 +119,9 @@ def exchange_code(code: str) -> dict:
     if token_issuer.rstrip("/") != expected.rstrip("/"):
         raise ValueError(f"issuer 不匹配：token={token_issuer} 期望={expected}")
 
+    if not isinstance(claims.get("nonce"), str) or not secrets.compare_digest(claims["nonce"], nonce):
+        raise ValueError("OIDC nonce 不匹配")
+    client_id = os.getenv("OIDC_CLIENT_ID", "").strip()
+    if (isinstance(claims["aud"], list) and len(claims["aud"]) > 1 or "azp" in claims) and claims.get("azp") != client_id:
+        raise ValueError("OIDC authorized party 不匹配")
     return claims

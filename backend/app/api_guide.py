@@ -116,11 +116,11 @@ def _collect_endpoints(app: FastAPI) -> list[dict]:
     include_in_schema=False 的是旧 RPC 风格路径，保留兼容但不出现在文档里，
     这里也不列 —— 展示的是推荐用法。
     """
-    from fastapi.routing import APIRoute
+    from fastapi.routing import APIRoute, iter_route_contexts
 
     entries = []
-    for route in app.routes:
-        if not isinstance(route, APIRoute):
+    for route in iter_route_contexts(app.routes):
+        if not isinstance(route.original_route, APIRoute):
             continue
         if not route.path.startswith("/api"):
             continue

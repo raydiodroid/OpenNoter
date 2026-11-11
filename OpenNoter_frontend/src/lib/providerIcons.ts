@@ -13,11 +13,20 @@ export const PROVIDER_ICONS = [
   { id: 'mistral', label: 'Mistral' },
   { id: 'meta', label: 'Meta' },
   { id: 'microsoft', label: 'Microsoft' },
-  { id: 'anthropic', label: 'Anthropic' },
-  { id: 'tongyi', label: '通义' },
-  { id: 'dashscope', label: 'DashScope' },
-  { id: 'glm', label: 'GLM' },
-  { id: 'kimi', label: 'Kimi' },
-  { id: 'llama', label: 'Llama' },
-  { id: 'azure', label: 'Azure' },
 ] as const
+
+const aliases: Record<string, string> = {
+  anthropic: 'claude',
+  tongyi: 'qwen',
+  dashscope: 'qwen',
+  glm: 'zhipu',
+  kimi: 'moonshot',
+  llama: 'meta',
+  azure: 'microsoft',
+}
+
+/** Keep older saved icon IDs usable without duplicating their artwork in the picker. */
+export function canonicalProviderIcon(value: string): string {
+  const normalized = value.toLowerCase()
+  return aliases[normalized] || normalized
+}

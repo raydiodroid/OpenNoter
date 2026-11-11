@@ -24,5 +24,6 @@ class GPTFactory:
             base_url=config.base_url,
             timeout=timeout,
             max_retries=max_retries,
+            public_only=config.public_only,
         ).get_client
         return UniversalGPT(client=client, model=config.model_name)

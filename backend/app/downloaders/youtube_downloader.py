@@ -74,7 +74,7 @@ VIDEO_FORMAT_SELECTOR = (
 # 出现后换一组更保守的客户端重试一次；**不要**把它写死成默认值 ——
 # yt-dlp 自己的默认 client 列表随版本演进，而且带 Cookie 时本来就会把
 # web_embedded 列入候选，硬编码反而可能更差。
-_403_FALLBACK_PLAYER_CLIENTS = ["web_embedded", "tv_samsung", "web"]
+_403_FALLBACK_PLAYER_CLIENTS = ["web_embedded", "web_safari"]
 
 _FORBIDDEN_MARKERS = ("http error 403", "403: forbidden")
 
@@ -84,7 +84,7 @@ def _apply_proxy(ydl_opts: dict) -> dict:
     proxy = ProxyConfigManager().get_proxy_url()
     if proxy:
         ydl_opts["proxy"] = proxy
-        logger.info(f"yt-dlp 走代理: {proxy}")
+        logger.info("yt-dlp 使用已配置代理")
     return ydl_opts
 
 
@@ -448,8 +448,8 @@ class YoutubeDownloader(Downloader, ABC):
                 raise RetryableDownloadError(
                     "YouTube 拒绝了媒体流（HTTP 403），已用 web_embedded 等兼容客户端"
                     "重试一次仍然失败。403 的主因通常是 PO Token / 出口 IP 风控，"
-                    "不一定是 Cookie；建议依次排查：更新 yt-dlp、检查 Cookie 是否"
-                    "为登录态导出、更换出口 IP。"
+                    "不一定是 Cookie；请检查 Deno/EJS 运行环境与出口 IP，必要时"
+                    "为 mweb 配置可信的 PO Token 服务。只有需登录的视频才需要登录 Cookie。"
                     f"原始错误：{str(retry_exc).splitlines()[0][:300]}"
                 ) from retry_exc
 

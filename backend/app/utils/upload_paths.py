@@ -127,13 +127,13 @@ def set_upload_owner(file_path: Path, user_id: int | None) -> None:
     """写入上传者。user_id 为 None（匿名）时不写侧车。"""
     if user_id is None:
         return
-    try:
-        _owner_sidecar(file_path).write_text(str(int(user_id)), encoding="utf-8")
-    except OSError as exc:
-        # 写失败不该让上传失败；读取时会因缺侧车而按「无归属」处理
-        import logging
-
-        logging.getLogger(__name__).warning(f"写入上传归属失败 {file_path}: {exc}")
+    # 归属写入是上传事务的一部分；失败必须交给调用方撤销上传。
+    sidecar = _owner_sidecar(file_path)
+    with open(sidecar, "x", encoding="utf-8") as stream:
+        os.chmod(sidecar, 0o600)
+        stream.write(str(int(user_id)))
+        stream.flush()
+        os.fsync(stream.fileno())
 
 
 def get_upload_owner(file_path: Path) -> int | None:
@@ -146,35 +146,7 @@ def get_upload_owner(file_path: Path) -> int | None:
 
 
 def can_read_upload(file_path: Path, user, *, auth_enforced: bool) -> bool:
-    """当前身份能否读取该上传文件。
-
-    规则（按宽松度递减）：
-      1. 有归属且匹配当前用户 → 允许
-      2. 有归属且当前是管理员 → 允许（排查问题）
-      3. 未强制认证（单人自托管）→ 允许
-      4. 无归属（历史文件 / 匿名上传）→ **仅在强制认证时要求已登录**
-      5. 其余 → 拒绝
-
-    ## 第 4 条为什么这样定（F17）
-
-    旧实现是「无归属 → 无条件允许」。在 `AUTH_ENFORCE=1` 的多租户部署下，
-    这等于**任何登录用户只要知道文件名就能读别人的历史上传**。
-
-    文件名是 uuid4 hex（不可枚举），但 UUID 会经日志、代理、分享链接、
-    前端 URL 泄露 —— 它不是可靠的访问控制（这正是本项目引入 sidecar 的原因，
-    见 `set_upload_owner` 上方注释）。
-
-    但也不能直接改成「拒绝」：升级前的历史上传没有侧车，一刀切会让老部署里
-    **所有**既有上传瞬间 404，连文件主人自己都打不开。
-
-    折中：无归属时**要求已登录**（`user is not None`）。
-      - 未开启鉴权的单人部署：仍是放行（`auth_enforced=False` 先命中第 3 条）；
-      - 开启鉴权：匿名拿不到（401 已在路由层拦），登录用户可以读，
-        与改动前相比不再额外放宽，但至少排除了「匿名凭 UUID 直取」。
-
-    要彻底消除历史无主文件的暴露面，应跑一次归属回填（把历史文件按
-    现有 DB 里的 task→user 关系补侧车），而不是在读取侧猜。
-    """
+    """强制认证时，只允许上传者或管理员；无归属历史文件仅管理员可读。"""
     owner = get_upload_owner(file_path)
 
     if owner is not None:
@@ -186,7 +158,7 @@ def can_read_upload(file_path: Path, user, *, auth_enforced: bool) -> bool:
             return True
         return False
 
-    # 无归属：强制认证时至少要求已登录；未强制认证则放行
+    # 无归属时无法证明普通用户有访问权，必须关闭访问。
     if not auth_enforced:
         return True
-    return user is not None
+    return user is not None and bool(getattr(user, "is_superuser", False))

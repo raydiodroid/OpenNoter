@@ -42,7 +42,7 @@ import { ProviderListPanel } from '@/components/ProviderListPanel'
 import { AsrMark } from '@/components/AsrMark'
 import { ASR_ICONS } from '@/lib/asrIcons'
 import { hostOf } from '@/lib/format'
-import { asrProviderIcon, hasFixedAsrIcon, sortAsrProviders } from '@/lib/providerPresentation'
+import { sortAsrProviders } from '@/lib/providerPresentation'
 import { StatusIndicator } from '@/components/StatusIndicator'
 import {
   addWhisperModel,
@@ -218,9 +218,6 @@ export default function TranscriberPage({ embedded = false }: { embedded?: boole
     setAsrApiKey('')
   }
   const selectedProvider = config?.providers.find(p => p.id === selectedType)
-  const fixedIcon = hasFixedAsrIcon(selectedProvider)
-  const displayedIcon =
-    fixedIcon && selectedProvider ? asrProviderIcon(selectedProvider, asrBaseUrl) : providerLogo
   const isCreate = selectedType === 'new'
   const isOnline = isCreate || selectedProvider?.engine === 'groq'
 
@@ -253,7 +250,7 @@ export default function TranscriberPage({ embedded = false }: { embedded?: boole
     }
     setSaving(true)
     try {
-      const details = { name: providerName.trim(), logo: displayedIcon }
+      const details = { name: providerName.trim(), logo: providerLogo }
       const connection = {
         base_url: asrBaseUrl.trim(),
         model_name: asrModel.trim(),
@@ -441,7 +438,7 @@ export default function TranscriberPage({ embedded = false }: { embedded?: boole
   const dirty =
     isCreate ||
     providerName.trim() !== selectedProvider?.name ||
-    (!fixedIcon && providerLogo !== selectedProvider?.logo) ||
+    providerLogo !== selectedProvider?.logo ||
     (isWhisperType(selectedType) && selectedSize !== config.whisper_model_size) ||
     (isOnline &&
       (asrBaseUrl.trim() !== selectedProvider?.base_url ||
@@ -457,7 +454,7 @@ export default function TranscriberPage({ embedded = false }: { embedded?: boole
             onClick={() => selectProvider(provider)}
             disabled={saving}
           >
-            <AsrMark name={asrProviderIcon(provider)} />
+            <AsrMark name={provider.logo} />
             <ListRowBody>
               <ListRowTitle>{provider.name}</ListRowTitle>
               <ListRowMeta>
@@ -546,7 +543,7 @@ export default function TranscriberPage({ embedded = false }: { embedded?: boole
             <div className={maxForm}>
               <Panel>
                 <div className={detailHead}>
-                  <AsrMark name={displayedIcon} />
+                  <AsrMark name={providerLogo} />
                   <h2 className={detailTitle}>
                     {isCreate ? '添加供应商' : selectedProvider?.name || '转写供应商'}
                   </h2>
@@ -560,15 +557,13 @@ export default function TranscriberPage({ embedded = false }: { embedded?: boole
                     isDisabled={saving}
                     styles={maxForm}
                   />
-                  {!fixedIcon && (
-                    <ProviderIconPicker
-                      value={providerLogo}
-                      onChange={setProviderLogo}
-                      isDisabled={saving}
-                      options={ASR_ICONS}
-                      renderIcon={name => <AsrMark name={name} boxed={false} />}
-                    />
-                  )}
+                  <ProviderIconPicker
+                    value={providerLogo}
+                    onChange={setProviderLogo}
+                    isDisabled={saving}
+                    options={ASR_ICONS}
+                    renderIcon={name => <AsrMark name={name} boxed={false} />}
+                  />
                   {selectedProvider && !selectedProvider.enabled && (
                     <Notice variant="notice">
                       <Text>此供应商已停用。启用后才能设为默认或用于转写。</Text>

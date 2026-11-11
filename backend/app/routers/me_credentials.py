@@ -105,7 +105,6 @@ def _validate_base_url(base_url: str) -> str:
     复用现成的 ``assert_safe_url``（``routers/provider.py`` 的 probe_endpoint 已用它），
     拦截私网 / 保留地址 / 非 http(s) scheme。
     """
-    from app.utils.env_compat import getbool
     from app.utils.url_safety import UnsafeUrlError, assert_safe_url
 
     url = (base_url or "").strip().rstrip("/")
@@ -117,12 +116,11 @@ def _validate_base_url(base_url: str) -> str:
     except ValueError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
-    # 与 probe_endpoint 同一开关：明确允许私网（如自建 Ollama）时才放行
-    if not getbool("PROBE_ALLOW_PRIVATE", False):
-        try:
-            assert_safe_url(url, suffixes=())
-        except UnsafeUrlError as exc:
-            raise HTTPException(status_code=400, detail=f"接口地址不安全：{exc}") from exc
+    # 管理员的内网探测开关不能放宽普通用户自填地址的边界。
+    try:
+        assert_safe_url(url, suffixes=())
+    except UnsafeUrlError as exc:
+        raise HTTPException(status_code=400, detail=f"接口地址不安全：{exc}") from exc
     return url
 
 
@@ -299,6 +297,7 @@ def discover_models(
     try:
         config = ModelConfig(
             name="discover",
+            public_only=True,
             provider="custom",
             api_key=data.api_key.strip(),
             base_url=base_url,
@@ -363,8 +362,8 @@ def test_my_credential(
         from app.gpt.provider.OpenAI_compatible_provider import OpenAICompatibleProvider
 
         if cap == "asr":
-            from openai import OpenAI
-            with OpenAI(api_key=credential.api_key, base_url=credential.base_url, timeout=15, max_retries=0) as client:
+            from app.utils.openai_client import build_openai_client
+            with build_openai_client(api_key=credential.api_key, base_url=credential.base_url, timeout=15, max_retries=0, public_only=True) as client:
                 client.models.list()
             ok = True
         else:
@@ -372,6 +371,7 @@ def test_my_credential(
                 api_key=credential.api_key,
                 base_url=credential.base_url,
                 model=credential.model_name,
+                public_only=True,
             )
     except Exception as exc:  # noqa: BLE001
         logger.warning(f"用户凭据连通性测试异常: {exc}")

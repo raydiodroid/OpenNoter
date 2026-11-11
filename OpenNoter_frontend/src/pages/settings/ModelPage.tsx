@@ -25,7 +25,7 @@ import {
 } from '@/components/ListRow'
 import { ProviderIconPicker } from '@/components/ProviderIconPicker'
 import { ProviderListPanel } from '@/components/ProviderListPanel'
-import { PROVIDER_ICONS } from '@/lib/providerIcons'
+import { canonicalProviderIcon, PROVIDER_ICONS } from '@/lib/providerIcons'
 import { ProviderMark } from '@/components/Brand'
 import { useProviderStore } from '@/store/providerStore'
 import { useModelStore } from '@/store/modelStore'
@@ -295,7 +295,7 @@ function ProviderDetail({ id, isCreate }: { id?: string; isCreate?: boolean }) {
             isRequired
           />
           <ProviderIconPicker
-            value={logo}
+            value={canonicalProviderIcon(logo)}
             onChange={value => {
               setLogo(value)
               setDirty(true)

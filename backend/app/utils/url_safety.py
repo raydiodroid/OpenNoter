@@ -142,6 +142,8 @@ def assert_url_shape_safe(url: str) -> str:
         raise UnsafeUrlError(f"只允许 http/https 协议，当前为 {scheme or '空'}")
 
     host = parsed.hostname
+    if parsed.username is not None or parsed.password is not None:
+        raise UnsafeUrlError("URL 不允许包含用户名或密码")
     if not host:
         raise UnsafeUrlError("URL 缺少主机名")
 
@@ -209,140 +211,88 @@ class TooManyRedirects(UnsafeUrlError):
     """跳转次数超过上限。继承 UnsafeUrlError，调用方可一并按「不安全」处理。"""
 
 
-def pin_url_to_ip(url: str) -> tuple[str, str]:
-    """把 URL 的 hostname 换成它**此刻解析出的 IP**，返回 (新 URL, Host 头)。
-
-    ## 为什么需要（F50 · DNS rebinding TOCTOU）
-
-    `assert_safe_url(url)` 的流程是「解析域名 → 检查解析出的 IP 是否内网」。
-    但检查完之后，请求库会**再解析一次**。这两次解析之间如果 DNS 记录变了
-    （攻击者控制的权威 DNS 把 TTL 设为 0，第一次返回公网 IP 骗过校验、
-    第二次返回 `127.0.0.1`），请求就打到了内网 —— 这就是 DNS rebinding。
-
-    修法不是"再多校验几次"，而是**让第二次解析不可能发生**：把 URL 里的
-    域名直接替换成刚校验过的那个 IP，再手工设置 `Host` 头（否则虚拟主机
-    路由和 TLS SNI 会错）。
-
-    ## 不会做 pin 的情况
-
-    - 本来就是 IP 字面量（没有 rebinding 面）；
-    - `resolve_host` 返回空列表（解析失败，交给调用方报错）；
-    - **https**：改成 IP 后证书校验会按 IP 而非域名匹配，基本必然失败。
-      所以 https 只 pin 到「不改变 TLS 行为」的程度 —— 见 `safe_get` 里的
-      说明：对 https 我们退而保留原 URL，但**重启一次校验**缩小窗口。
-
-    :return: (可直接请求的 URL, 应设置的 Host 头值)
-    """
+def pin_url_to_ip(url: str, *, suffixes=()) -> tuple[str, str]:
+    """一次解析、校验所有地址，再固定连接目标；TLS 仍验证原始域名。"""
+    assert_url_shape_safe(url)
     parsed = urlparse(url)
     host = parsed.hostname
-    if not host:
-        return url, ""
-
-    # 已经是 IP 字面量：无需 pin
-    if _parse_ip(host) is not None:
-        return url, ""
-
-    ips = resolve_host(host)
+    allowed = allowed_host_suffixes() if suffixes is None else suffixes
+    if not _host_allowed(host, allowed):
+        raise UnsafeUrlError(f"来源域名不在白名单内: {host}")
+    ips = [host] if _parse_ip(host) is not None else resolve_host(host)
     if not ips:
-        return url, ""
-
-    # 证书是按域名签的，把 host 换成 IP 会让 https 直接失败。
-    # 对 https 不做替换（保持原行为），只返回 Host 头供调用方参考。
-    if (parsed.scheme or "").lower() == "https":
-        return url, ""
-
-    # http：可以安全地把 host 换成 IP
-    netloc = ips[0]
+        raise UnsafeUrlError(f"域名解析失败: {host}")
+    for value in ips:
+        ip = _parse_ip(value)
+        if ip is None or _is_blocked_ip(ip):
+            raise UnsafeUrlError(f"域名 {host} 解析到不安全地址")
+    address = f"[{ips[0]}]" if ":" in ips[0] else ips[0]
     if parsed.port:
-        netloc = f"{netloc}:{parsed.port}"
-    # 保留 userinfo（极少见，但不要丢）
-    if parsed.username:
-        auth = parsed.username
-        if parsed.password:
-            auth += f":{parsed.password}"
-        netloc = f"{auth}@{netloc}"
-
-    pinned = urlunparse(
-        (
-            parsed.scheme,
-            netloc,
-            parsed.path,
-            parsed.params,
-            parsed.query,
-            parsed.fragment,
-        )
-    )
-    host_header = host
-    if parsed.port:
-        host_header = f"{host}:{parsed.port}"
-    return pinned, host_header
+        address += f":{parsed.port}"
+    return urlunparse(parsed._replace(netloc=address)), parsed.netloc
 
 
-def safe_get(
-    url: str,
-    *,
-    suffixes=None,
-    max_redirects: int = DEFAULT_MAX_REDIRECTS,
-    method: str = "GET",
-    **kwargs,
-):
-    """发送一次出站请求，**每一跳**都过 `assert_safe_url`。
-
-    - 用 `allow_redirects=False` 自管跳转，绝不让 requests 自动跟；
-    - 每一跳（含最终 URL）都重新校验，因此 302 跳到内网/元数据端点会被拦；
-    - 超过 `max_redirects` 抛 :class:`TooManyRedirects`。
-
-    :param suffixes: 传给 `assert_safe_url` 的域名白名单；None 表示用默认图片
-        CDN 白名单。只想做 IP 层校验时传 `()`。
-    :param method: "GET" 或 "HEAD"（短链解析常用 HEAD 省流量）。
-    :raises UnsafeUrlError: 任一跳不安全、或缺少 Location、或跳转过多。
-    """
+def _request_pinned(method, url, *, hostname, **kwargs):
+    """requests 兼容响应；HTTPS 的 SNI 与证书检查均使用原始主机名。"""
     import requests
+    from requests.adapters import HTTPAdapter
 
+    class HostnameAdapter(HTTPAdapter):
+        def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
+            super().init_poolmanager(connections, maxsize, block=block,
+                                     server_hostname=hostname, assert_hostname=hostname,
+                                     **pool_kwargs)
+
+    session = requests.Session()
+    # 禁用环境代理和 netrc；否则它们可绕开 IP 固定或注入未请求的凭据。
+    session.trust_env = False
+    session.mount("https://", HostnameAdapter())
+    kwargs.pop("proxies", None)
+    try:
+        response = session.request(method, url, allow_redirects=False, **kwargs)
+    except BaseException:
+        session.close()
+        raise
+    close = response.close
+    def close_response():
+        try:
+            close()
+        finally:
+            session.close()
+    response.close = close_response
+    return response
+
+
+def safe_get(url: str, *, suffixes=None, max_redirects: int = DEFAULT_MAX_REDIRECTS,
+             method: str = "GET", **kwargs):
+    """每一跳只连接经过校验的 IP；跨来源跳转不携带认证头或 Cookie。"""
+    from urllib.parse import urljoin
     current = url
-    verb = method.upper()
+    kwargs = dict(kwargs)
+    kwargs.pop("allow_redirects", None)
+    headers = dict(kwargs.pop("headers", {}) or {})
     for _ in range(max_redirects + 1):
-        # 每一跳都校验（这是整个函数存在的理由）
-        assert_safe_url(current, suffixes=suffixes)
-
-        # F50：校验完就把域名钉到刚校验过的 IP 上，消灭「校验用一次 DNS、
-        # 连接又用一次 DNS」之间的 rebinding 窗口（详见 pin_url_to_ip）。
-        #
-        # https 不做替换（证书按域名签，换 IP 会直接失败），
-        # 那种情况 pin_url_to_ip 原样返回 URL、Host 头为空，行为与改动前一致。
-        request_url, host_header = pin_url_to_ip(current)
-
-        call_kwargs = dict(kwargs)
-        if host_header:
-            headers = dict(call_kwargs.get("headers") or {})
-            # 只在调用方没显式设 Host 时补，避免覆盖调用方的意图
-            headers.setdefault("Host", host_header)
-            call_kwargs["headers"] = headers
-
-        # 用 `requests.get` / `requests.head` 而不是 `requests.request(method=...)`：
-        # 前者是模块级函数，测试里 `patch("requests.get")` 能直接替换；
-        # 后者要走 Session 路径，桩不生效，会让「逐跳校验」难以写单测。
-        if verb == "GET":
-            resp = requests.get(request_url, allow_redirects=False, **call_kwargs)
-        elif verb == "HEAD":
-            resp = requests.head(request_url, allow_redirects=False, **call_kwargs)
-        else:
-            resp = requests.request(
-                verb, request_url, allow_redirects=False, **call_kwargs
-            )
-
-        # 只处理标准 3xx；其余交给调用方判断状态码
-        if 300 <= resp.status_code < 400:
-            location = resp.headers.get("Location")
-            if not location:
-                raise UnsafeUrlError("重定向缺少 Location 头")
-            # 用 urljoin 语义解析相对 Location（requests 的 PreparedRequest 已展开，
-            # 这里用 urllib 的 urljoin 保证与浏览器一致）
-            from urllib.parse import urljoin
-
-            current = urljoin(current, location)
-            continue
-
-        return resp
-
+        pinned, host_header = pin_url_to_ip(current, suffixes=suffixes)
+        request_headers = {k: v for k, v in headers.items() if k.lower() != "host"}
+        request_headers["Host"] = host_header
+        response = _request_pinned(method.upper(), pinned, hostname=urlparse(current).hostname,
+                                   headers=request_headers, **kwargs)
+        # 业务层仍看到原始 URL，不能把固定的 IP 当作重定向或视频来源。
+        response.url = current
+        if not 300 <= response.status_code < 400:
+            return response
+        location = response.headers.get("Location")
+        response.close()
+        if not location:
+            raise UnsafeUrlError("重定向缺少 Location 头")
+        target = urljoin(current, location)
+        def origin(value):
+            p = urlparse(value)
+            return p.scheme, p.hostname, p.port or (443 if p.scheme == "https" else 80)
+        if origin(current) != origin(target):
+            headers = {k: v for k, v in headers.items()
+                       if k.lower() not in {"authorization", "cookie", "proxy-authorization", "x-api-key"}}
+            kwargs.pop("auth", None)
+            kwargs.pop("cookies", None)
+        current = target
     raise TooManyRedirects(f"跳转次数超过上限（{max_redirects}）")

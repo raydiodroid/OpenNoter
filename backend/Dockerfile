@@ -2,6 +2,7 @@
 #   docker-compose build --build-arg BASE_REGISTRY=docker.m.daocloud.io
 # 或写到 docker-compose.yml 的 build.args / 环境变量里
 ARG BASE_REGISTRY=docker.io
+FROM ${BASE_REGISTRY}/denoland/deno:bin-2.9.8 AS deno
 FROM ${BASE_REGISTRY}/library/python:3.11-slim
 
 ARG APT_MIRROR=mirrors.tuna.tsinghua.edu.cn
@@ -18,6 +19,8 @@ RUN rm -f /etc/apt/sources.list && \
 
 ENV PATH="/usr/bin:${PATH}"
 ENV HF_ENDPOINT=https://hf-mirror.com
+
+COPY --from=deno /deno /usr/local/bin/deno
 
 WORKDIR /app
 

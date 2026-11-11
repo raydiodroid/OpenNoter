@@ -457,6 +457,8 @@ class TestSelectionPolicies:
             resolve_model_selection('own:asr', 'speech', user_id=1)
 
     def test_discovery_obeys_allowlist_before_network_access(self, env, monkeypatch):
+        import importlib
+        monkeypatch.setattr(importlib.import_module("app.utils.url_safety"), "resolve_host", lambda host: ["93.184.216.34"])
         from app.routers.me_credentials import _validate_base_url
         from app.services.byok_config import byok_config
         from fastapi import HTTPException

@@ -9,8 +9,7 @@ UUID 文件名不构成访问控制。
 R2：`/uploads` 虽然加了登录校验，但登录只解决「你是谁」，不解决
 「这个文件是不是你的」——任意登录用户知道 UUID 就能下载他人上传。
 
-修复策略是「渐进式」：老数据没有归属信息，一律放行（否则全 404）；
-新数据带归属，按 owner 校验。
+新数据按 owner 校验；开启认证时，无归属历史文件只允许管理员读取。
 """
 
 import sys
@@ -146,7 +145,8 @@ def test_upload_without_owner_is_readable_when_logged_in(utils):
     f.write_text("data")
     assert utils["get_upload_owner"](f) is None
     # 登录用户可以读（不锁死老部署）
-    assert utils["can_read_upload"](f, U(1), auth_enforced=True) is True
+    assert utils["can_read_upload"](f, U(1), auth_enforced=True) is False
+    assert utils["can_read_upload"](f, U(99, admin=True), auth_enforced=True) is True
     # 匿名用户不能读（F17 修复点）
     assert utils["can_read_upload"](f, None, auth_enforced=True) is False
 

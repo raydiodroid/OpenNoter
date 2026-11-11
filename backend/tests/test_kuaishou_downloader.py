@@ -54,8 +54,9 @@ SHARE_TEXT = f"某段分享文案 {VIDEO_URL} 更多文字"
 class _FakeResponse:
     def __init__(self, *, status_code: int = 200, url: str = "", json_data=None,
                  cookies: Optional[Dict[str, str]] = None, content: bytes = b"",
-                 chunks: Optional[List[bytes]] = None, text: str = ""):
+                 chunks: Optional[List[bytes]] = None, text: str = "", headers=None):
         self.status_code = status_code
+        self.headers = headers or {}
         self.url = url
         self._json = json_data
         self.cookies = _FakeCookies(cookies or {})
@@ -67,6 +68,9 @@ class _FakeResponse:
         if self._json is None:
             raise ValueError("not json")
         return self._json
+
+    def close(self):
+        pass
 
     def iter_content(self, chunk_size=1):
         for chunk in self._chunks:
@@ -150,6 +154,14 @@ def fake_requests(monkeypatch):
     fake.RequestException = requests.RequestException
     monkeypatch.setattr(requests, "get", fake.get)
     monkeypatch.setattr(requests, "head", fake.get)
+    import importlib
+    url_safety = importlib.import_module("app.utils.url_safety")
+    def pinned(method, url, *, hostname, headers, **kwargs):
+        from urllib.parse import urlsplit, urlunsplit
+        parts = urlsplit(url)
+        original = urlunsplit(parts._replace(netloc=headers["Host"]))
+        return fake.get(original, headers=headers, allow_redirects=False, **kwargs)
+    monkeypatch.setattr(url_safety, "_request_pinned", pinned)
     monkeypatch.setattr(downloader_module, "requests", fake)
     return fake
 
@@ -342,7 +354,8 @@ class TestPhotoIdParsing:
 
     def test_redirect_to_mobile_page_is_recognized(self, fake_requests, stored_cookie):
         fake_requests.get_responses = [
-            _FakeResponse(url=f"https://m.gifshow.com/fw/photo/{VIDEO_ID}")
+            _FakeResponse(status_code=302, headers={"Location": f"https://m.gifshow.com/fw/photo/{VIDEO_ID}"}),
+            _FakeResponse(url=f"https://m.gifshow.com/fw/photo/{VIDEO_ID}"),
         ]
         fake_requests.post_responses = [_FakeResponse(json_data={"data": _detail_payload()})]
         KuaiShou().run("https://v.kuaishou.com/abc")

@@ -499,6 +499,7 @@ class NoteGenerator:
             base_url=cred.base_url,
             # BYOK 时模型名以凭据/调用方为准
             model_name=cred.model_name or model_name,
+            public_only=cred.source == "own",
             provider=cred.source,
             name=cred.source,
         )

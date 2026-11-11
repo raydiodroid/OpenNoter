@@ -179,6 +179,7 @@ def chat(
         api_key=cred.api_key,
         base_url=cred.base_url,
         model_name=cred.model_name or model_name,
+        public_only=cred.source == "own",
         provider=cred.source,
         name=cred.source,
     )

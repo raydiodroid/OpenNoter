@@ -2,6 +2,10 @@
 services:
   backend:
     container_name: opennoter-backend
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     build:
       context: .
       dockerfile: backend/Dockerfile

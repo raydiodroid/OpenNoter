@@ -24,6 +24,7 @@ def build_openai_client(
     key_label: str = "API Key",
     timeout: Optional[float] = None,
     max_retries: Optional[int] = None,
+    public_only: bool = False,
 ) -> OpenAI:
     """构造 OpenAI 客户端。api_key 为空直接抛清晰错误；代理已配置则注入。
 
@@ -52,12 +53,20 @@ def build_openai_client(
         kwargs["max_retries"] = max_retries
 
     proxy_url = ProxyConfigManager().get_proxy_url()
-    if proxy_url:
+    if public_only:
+        import httpx
+        from app.utils.public_http import PublicEndpointTransport
+        kwargs["http_client"] = httpx.Client(
+            transport=PublicEndpointTransport(base_url or "https://api.openai.com/v1"),
+            trust_env=False, follow_redirects=False,
+            timeout=timeout if timeout is not None else 600.0,
+        )
+    elif proxy_url:
         # 延迟 import httpx：仅在确实要走代理时才需要
         import httpx
         # 与 kwargs 中的 timeout 保持一致；未指定时回落到 600s（SDK 默认）
         client_timeout = timeout if timeout is not None else 600.0
         kwargs["http_client"] = httpx.Client(proxy=proxy_url, timeout=client_timeout)
-        logger.info(f"OpenAI 客户端走代理: {proxy_url}")
+        logger.info("OpenAI 客户端使用已配置代理")
 
     return OpenAI(**kwargs)

@@ -14,3 +14,4 @@ class ModelConfig:
     base_url: str               # 模型 API 接口地址（OpenAI SDK兼容）
     model_name: str             # 实际请求用的模型名称，如 "gpt-4-turbo"
     created_at: Optional[datetime] = None  # 可选：创建时间（从 SQLite 自动生成）
+    public_only: bool = False    # 个人 BYOK 地址必须走公网出站边界

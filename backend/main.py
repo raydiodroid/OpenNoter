@@ -70,7 +70,7 @@ async def lifespan(app: FastAPI):
         from app.services.proxy_config_manager import ProxyConfigManager
         _proxy = ProxyConfigManager().apply_to_env()
         if _proxy:
-            logger.info(f"           已应用全局代理到环境变量: {_proxy}")
+            logger.info("           已应用全局代理到环境变量")
 
         # 静默把历史明文 Cookie 转成密文（幂等）。
         # 放在这里而不是首次读写时：避免「读一次写一次」的隐式落盘，
@@ -337,6 +337,8 @@ async def serve_static(file_path: str, request: Request):
     if auth_enforced():
         if path_task_id is not None and not _can_access_task(path_task_id, user):
             raise HTTPException(status_code=403, detail="无权访问该图片")
+        if path_task_id is None and not getattr(user, "is_superuser", False):
+            raise HTTPException(status_code=403, detail="该历史资源缺少归属信息")
 
     return FileResponse(target)
 
@@ -350,7 +352,7 @@ async def serve_upload(file_path: str, request: Request):
 
     from app.db.engine import SessionLocal
     from app.services.auth import get_optional_user
-    from app.utils.upload_paths import resolve_under_uploads
+    from app.utils.upload_paths import ALLOWED_EXTENSIONS, resolve_under_uploads
 
     from app.services.auth import auth_enforced
     from app.utils.upload_paths import can_read_upload
@@ -366,11 +368,11 @@ async def serve_upload(file_path: str, request: Request):
         target = resolve_under_uploads(f"/uploads/{file_path}")
     except ValueError:
         raise HTTPException(status_code=404, detail="文件不存在")
-    if not target.is_file():
+    if not target.is_file() or target.suffix.lower() not in ALLOWED_EXTENSIONS:
         raise HTTPException(status_code=404, detail="文件不存在")
 
     # 归属校验（R2）：登录只解决「你是谁」，不解决「这个文件是不是你的」。
-    # 历史文件没有侧车，按无归属放行，避免老部署全部 404。
+    # 无归属历史文件仅管理员可读；不得把「已登录」当成归属证明。
     if not can_read_upload(target, user, auth_enforced=auth_enforced()):
         raise HTTPException(status_code=403, detail="无权访问该文件")
 
