@@ -232,7 +232,7 @@ def pin_url_to_ip(url: str, *, suffixes=()) -> tuple[str, str]:
     return urlunparse(parsed._replace(netloc=address)), parsed.netloc
 
 
-def _request_pinned(method, url, *, hostname, **kwargs):
+def _request_pinned(method, url, *, hostname, proxy_url=None, **kwargs):
     """requests 兼容响应；HTTPS 的 SNI 与证书检查均使用原始主机名。"""
     import requests
     from requests.adapters import HTTPAdapter
@@ -243,9 +243,15 @@ def _request_pinned(method, url, *, hostname, **kwargs):
                                      server_hostname=hostname, assert_hostname=hostname,
                                      **pool_kwargs)
 
+        def proxy_manager_for(self, proxy, **proxy_kwargs):
+            return super().proxy_manager_for(proxy, server_hostname=hostname,
+                                             assert_hostname=hostname, **proxy_kwargs)
+
     session = requests.Session()
-    # 禁用环境代理和 netrc；否则它们可绕开 IP 固定或注入未请求的凭据。
+    # 不隐式使用环境/netrc；仅通过管理员配置的代理连接已经固定的 IP。
     session.trust_env = False
+    if proxy_url:
+        session.proxies = {"http": proxy_url, "https": proxy_url}
     session.mount("https://", HostnameAdapter())
     kwargs.pop("proxies", None)
     try:
@@ -267,6 +273,8 @@ def safe_get(url: str, *, suffixes=None, max_redirects: int = DEFAULT_MAX_REDIRE
              method: str = "GET", **kwargs):
     """每一跳只连接经过校验的 IP；跨来源跳转不携带认证头或 Cookie。"""
     from urllib.parse import urljoin
+    from app.services.proxy_config_manager import ProxyConfigManager
+    proxy_url = ProxyConfigManager().get_proxy_url()
     current = url
     kwargs = dict(kwargs)
     kwargs.pop("allow_redirects", None)
@@ -276,7 +284,7 @@ def safe_get(url: str, *, suffixes=None, max_redirects: int = DEFAULT_MAX_REDIRE
         request_headers = {k: v for k, v in headers.items() if k.lower() != "host"}
         request_headers["Host"] = host_header
         response = _request_pinned(method.upper(), pinned, hostname=urlparse(current).hostname,
-                                   headers=request_headers, **kwargs)
+                                   proxy_url=proxy_url, headers=request_headers, **kwargs)
         # 业务层仍看到原始 URL，不能把固定的 IP 当作重定向或视频来源。
         response.url = current
         if not 300 <= response.status_code < 400:

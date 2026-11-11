@@ -26,7 +26,8 @@ WORKDIR /app
 
 # 先复制 requirements.txt 利用层缓存
 COPY ./backend/requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -i ${PIP_INDEX} -r requirements.txt
+RUN python -m pip install --no-cache-dir -i ${PIP_INDEX} --upgrade pip==26.3 setuptools==84.2.1 && \
+    python -m pip install --no-cache-dir -i ${PIP_INDEX} -r requirements.txt
 
 # 再复制应用代码（频繁变动不影响 pip 缓存层）
 COPY ./backend /app

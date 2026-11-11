@@ -2,12 +2,29 @@
 
 import httpx
 
-from app.utils.url_safety import UnsafeUrlError, pin_url_to_ip
+from app.utils.url_safety import UnsafeUrlError, pin_url_to_ip, _request_pinned
+
+
+class ProxyResponseStream(httpx.SyncByteStream):
+    def __init__(self, response):
+        self.response = response
+
+    def __iter__(self):
+        from urllib3.exceptions import HTTPError
+        try:
+            # HTTPX 自己负责解压，不能在 requests 层重复解压。
+            yield from self.response.raw.stream(65536, decode_content=False)
+        except HTTPError as exc:
+            raise httpx.ReadError("代理响应读取失败") from exc
+
+    def close(self):
+        self.response.close()
 
 
 class PublicEndpointTransport(httpx.BaseTransport):
-    def __init__(self, base_url: str):
+    def __init__(self, base_url: str, *, proxy_url=None):
         self.base_url = base_url
+        self.proxy_url = proxy_url
         self.origin = self._origin(httpx.URL(base_url))
         self.transport = httpx.HTTPTransport(trust_env=False)
 
@@ -23,6 +40,21 @@ class PublicEndpointTransport(httpx.BaseTransport):
         pinned, host = pin_url_to_ip(str(request.url), suffixes=())
         headers = request.headers.copy()
         headers["Host"] = host
+        if self.proxy_url:
+            # httpcore 1.0 的 CONNECT 隧道忽略 sni_hostname 扩展；复用支持
+            # 原始域名证书校验的 requests 适配器，代理仍只连接验证后的 IP。
+            import requests
+            timeouts = request.extensions.get("timeout", {})
+            try:
+                response = _request_pinned(
+                    request.method, pinned, hostname=request.url.raw_host.decode("ascii"),
+                    proxy_url=self.proxy_url, headers=dict(headers), data=request.read(),
+                    stream=True, timeout=(timeouts.get("connect", 30), timeouts.get("read", 600)),
+                )
+            except requests.RequestException as exc:
+                raise httpx.ConnectError("无法连接代理目标", request=request) from exc
+            return httpx.Response(response.status_code, headers=list(response.raw.headers.items()),
+                                  stream=ProxyResponseStream(response))
         forwarded = httpx.Request(
             request.method, pinned, headers=headers, stream=request.stream,
             extensions={**request.extensions, "sni_hostname": request.url.host},

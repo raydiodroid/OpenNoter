@@ -57,7 +57,7 @@ def build_openai_client(
         import httpx
         from app.utils.public_http import PublicEndpointTransport
         kwargs["http_client"] = httpx.Client(
-            transport=PublicEndpointTransport(base_url or "https://api.openai.com/v1"),
+            transport=PublicEndpointTransport(base_url or "https://api.openai.com/v1", proxy_url=proxy_url),
             trust_env=False, follow_redirects=False,
             timeout=timeout if timeout is not None else 600.0,
         )

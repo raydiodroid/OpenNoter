@@ -27,7 +27,8 @@ WORKDIR /tmp/backend
 
 # 先复制 requirements.txt 利用层缓存
 COPY ./backend/requirements.txt /tmp/backend/requirements.txt
-RUN pip install --no-cache-dir -i ${PIP_INDEX} -r requirements.txt
+RUN python -m pip install --no-cache-dir -i ${PIP_INDEX} --upgrade pip==26.3 setuptools==84.2.1 && \
+    python -m pip install --no-cache-dir -i ${PIP_INDEX} -r requirements.txt
 
 COPY ./backend /tmp/backend
 

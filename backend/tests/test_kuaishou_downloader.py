@@ -156,7 +156,7 @@ def fake_requests(monkeypatch):
     monkeypatch.setattr(requests, "head", fake.get)
     import importlib
     url_safety = importlib.import_module("app.utils.url_safety")
-    def pinned(method, url, *, hostname, headers, **kwargs):
+    def pinned(method, url, *, hostname, headers, proxy_url=None, **kwargs):
         from urllib.parse import urlsplit, urlunsplit
         parts = urlsplit(url)
         original = urlunsplit(parts._replace(netloc=headers["Host"]))

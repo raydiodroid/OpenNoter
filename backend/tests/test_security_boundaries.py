@@ -190,3 +190,35 @@ def test_oidc_token_claims_are_required_and_bound(isolated,monkeypatch,change):
     response=Mock(); response.json.return_value={'id_token':token}
     monkeypatch.setattr(oidc.httpx,'post',lambda *a,**kw:response)
     with pytest.raises((ValueError,jwt.PyJWTError)): oidc.exchange_code('code',nonce='nonce',verifier='verifier')
+
+def test_proxy_connection_uses_pinned_ip_and_original_tls_host(isolated,monkeypatch):
+    from app.utils import url_safety as s
+    import requests
+    def send(session,prepared,**kwargs):
+        assert prepared.url=='https://93.184.216.34/test'
+        assert prepared.headers['Host']=='public.example'
+        assert session.proxies['https']=='http://proxy.example:8080'
+        adapter=session.get_adapter(prepared.url)
+        pool=adapter.proxy_manager_for(session.proxies['https']).connection_pool_kw
+        assert pool['server_hostname']==pool['assert_hostname']=='public.example'
+        assert kwargs['allow_redirects'] is False
+        return Mock()
+    monkeypatch.setattr(requests.Session,'send',send)
+    s._request_pinned('GET','https://93.184.216.34/test',hostname='public.example',proxy_url='http://proxy.example:8080',headers={'Host':'public.example'}).close()
+
+def test_byok_proxy_preserves_body_and_does_not_double_decompress(isolated,monkeypatch):
+    import gzip
+    from app.utils import public_http, url_safety
+    monkeypatch.setattr(url_safety,'resolve_host',lambda h:['93.184.216.34'])
+    raw=Mock(); raw.headers={'Content-Type':'application/json','Content-Encoding':'gzip'}
+    raw.stream.return_value=iter([gzip.compress(b'{"ok":true}')])
+    response=Mock(status_code=200,raw=raw)
+    send=Mock(return_value=response); monkeypatch.setattr(public_http,'_request_pinned',send)
+    with httpx.Client(transport=public_http.PublicEndpointTransport('https://model.example/v1',proxy_url='http://proxy.example:8080')) as client:
+        result=client.post('https://model.example/v1/models',json={'model':'test'},headers={'Authorization':'Bearer private-key'})
+        assert result.json()=={'ok':True}
+    assert send.call_args.args[1]=='https://93.184.216.34/v1/models'
+    assert send.call_args.kwargs['hostname']=='model.example'
+    assert b'"model":"test"' in send.call_args.kwargs['data']
+    raw.stream.assert_called_once_with(65536,decode_content=False)
+    response.close.assert_called_once()
