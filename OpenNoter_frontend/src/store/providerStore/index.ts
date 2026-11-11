@@ -2,6 +2,7 @@ import { onSessionChange } from '@/lib/sessionScope'
 import { create } from 'zustand'
 import {
   addProvider as apiAddProvider,
+  deleteProvider as apiDeleteProvider,
   getProviderById as apiGetProvider,
   getProviderList,
   updateProvider as apiUpdateProvider,
@@ -21,6 +22,8 @@ const mapProvider = (item: ProviderPayload): Provider => ({
 
 interface ProviderState {
   providers: Provider[]
+  catalogRevision: number
+  remove: (id: string) => Promise<void>
   loading: boolean
   fetchAll: () => Promise<void>
   fetchOne: (id: string) => Promise<Provider | null>
@@ -31,6 +34,14 @@ interface ProviderState {
 export const useProviderStore = create<ProviderState>((set, get) => ({
   providers: [],
   loading: false,
+  catalogRevision: 0,
+  remove: async id => {
+    await apiDeleteProvider(id)
+    set(state => ({
+      providers: state.providers.filter(p => p.id !== id),
+      catalogRevision: state.catalogRevision + 1,
+    }))
+  },
 
   fetchAll: async () => {
     set({ loading: true })

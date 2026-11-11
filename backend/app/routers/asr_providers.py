@@ -35,6 +35,19 @@ def invoke(fn, *args):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+class DiscoverAsrModels(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    base_url: str = Field(min_length=1, max_length=2000)
+    api_key: str = Field(default='', max_length=4096)
+    provider_id: str | None = None
+
+
+@router.post('/discover-models')
+def discover_models(data: DiscoverAsrModels):
+    from app.services.asr_discovery import discover_asr_models
+    return invoke(discover_asr_models, data.base_url, data.api_key, data.provider_id)
+
+
 @router.get('')
 def list_providers():
     return invoke(AsrProviderService.list)

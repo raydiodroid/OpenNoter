@@ -113,3 +113,9 @@ export interface AsrChoice {
   source: 'own' | 'shared'
 }
 export const getAsrChoices = () => request.get<never, AsrChoice[]>('/asr_choices')
+
+export const discoverAsrModels = (data: {
+  base_url: string
+  api_key: string
+  provider_id?: string
+}) => request.post<never, { models: string[] }>('/asr/providers/discover-models', data)

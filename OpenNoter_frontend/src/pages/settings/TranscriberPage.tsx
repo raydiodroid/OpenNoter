@@ -3,6 +3,8 @@ import {
   ActionButton,
   AlertDialog,
   Button,
+  ComboBox,
+  ComboBoxItem,
   Cell,
   Column,
   Content,
@@ -47,6 +49,7 @@ import {
   downloadModel,
   getModelsStatus,
   getTranscriberConfig,
+  discoverAsrModels,
   createAsrProvider,
   updateAsrProvider,
   deleteAsrProvider,
@@ -121,6 +124,16 @@ export default function TranscriberPage({ embedded = false }: { embedded?: boole
   const [asrBaseUrl, setAsrBaseUrl] = useState('')
   const [asrApiKey, setAsrApiKey] = useState('')
   const [asrModel, setAsrModel] = useState('')
+  const [remoteModels, setRemoteModels] = useState<string[]>([])
+  const [discovering, setDiscovering] = useState(false)
+  const [discoveryHint, setDiscoveryHint] = useState('')
+  const discoveryVersion = useRef(0)
+  useEffect(() => {
+    discoveryVersion.current++
+    setRemoteModels([])
+    setDiscovering(false)
+    setDiscoveryHint('')
+  }, [selectedType, asrBaseUrl, asrApiKey])
 
   const [newName, setNewName] = useState('')
   const [newTarget, setNewTarget] = useState('')
@@ -278,6 +291,32 @@ export default function TranscriberPage({ embedded = false }: { embedded?: boole
     }
   }
 
+  const discover = async () => {
+    const version = ++discoveryVersion.current
+    setDiscovering(true)
+    try {
+      const result = await discoverAsrModels({
+        base_url: asrBaseUrl.trim(),
+        api_key: asrApiKey.trim(),
+        provider_id: isCreate ? undefined : selectedType,
+      })
+      if (version !== discoveryVersion.current) return
+      setRemoteModels(result.models)
+      setDiscoveryHint(
+        result.models.length
+          ? '请选择支持音频转写的模型；列表可能包含其他类型。'
+          : '未返回模型，可手动填写模型名称。'
+      )
+    } catch {
+      if (version === discoveryVersion.current) {
+        setRemoteModels([])
+        setDiscoveryHint('拉取失败，仍可手动填写模型名称。')
+      }
+    } finally {
+      if (version === discoveryVersion.current) setDiscovering(false)
+    }
+  }
+
   const toggle = async (provider: AsrProvider, enabled: boolean) => {
     setSaving(true)
     try {
@@ -424,8 +463,6 @@ export default function TranscriberPage({ embedded = false }: { embedded?: boole
                   : isWhisperType(provider.id)
                     ? '本地模型'
                     : '内置在线服务'}
-                {config.transcriber_type === provider.id ? ' · 默认' : ''}
-                {!provider.enabled ? ' · 已停用' : ''}
               </ListRowMeta>
             </ListRowBody>
           </ListRowButton>
@@ -457,7 +494,7 @@ export default function TranscriberPage({ embedded = false }: { embedded?: boole
                 textValue={provider.name}
                 isDisabled={!provider.enabled || (provider.id === 'mlx-whisper' && !mlxAvailable)}
               >
-                <Text slot="label">{`${provider.name}${provider.model_name ? ` · ${provider.model_name}` : ''}${!provider.enabled ? '（已停用）' : ''}`}</Text>
+                <Text slot="label">{`${provider.name}${provider.model_name ? ` · ${provider.model_name}` : ''}`}</Text>
               </PickerItem>
             ))}
           </Picker>
@@ -550,11 +587,31 @@ export default function TranscriberPage({ embedded = false }: { embedded?: boole
                         baseUrl={asrBaseUrl}
                         onBaseUrlChange={setAsrBaseUrl}
                         addressPlaceholder="https://api.groq.com/openai/v1"
-                        modelName={asrModel}
-                        onModelNameChange={setAsrModel}
-                        modelPlaceholder="whisper-large-v3"
                         isDisabled={saving}
                       />
+                      <ComboBox
+                        label="模型名称"
+                        inputValue={asrModel}
+                        onInputChange={setAsrModel}
+                        allowsCustomValue
+                        isDisabled={saving}
+                        placeholder="选择或输入模型名称"
+                        styles={maxForm}
+                      >
+                        {remoteModels.map(model => (
+                          <ComboBoxItem key={model} id={model} textValue={model}>
+                            <Text slot="label">{model}</Text>
+                          </ComboBoxItem>
+                        ))}
+                      </ComboBox>
+                      <Button
+                        variant="secondary"
+                        onPress={() => void discover()}
+                        isDisabled={saving || discovering || !asrBaseUrl.trim()}
+                      >
+                        {discovering ? '拉取中…' : '拉取模型列表'}
+                      </Button>
+                      {discoveryHint && <Text styles={muted}>{discoveryHint}</Text>}
                     </>
                   )}
 

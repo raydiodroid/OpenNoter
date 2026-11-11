@@ -45,7 +45,7 @@ export const NOTE_STYLES: Choice[] = [
 ]
 
 export const NOTE_FORMATS: Choice[] = [
-  { value: 'toc', label: '目录' },
+  { value: 'toc', label: '内容目录' },
   { value: 'link', label: '原片跳转' },
   { value: 'summary', label: 'AI 总结' },
   { value: 'screenshot', label: '原片截图' },

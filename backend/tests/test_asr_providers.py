@@ -149,3 +149,84 @@ def test_admin_only_api_and_secret_free_responses(registry):
     assert client.delete('/api/asr/providers/groq').status_code == 400
     assert client.delete('/api/asr/providers/'+p['id']).status_code == 200
     assert client.patch('/api/asr/providers/missing', json={'name': 'x'}).status_code == 400
+
+
+def test_discovery_uses_saved_key_only_for_same_endpoint(registry, monkeypatch):
+    from app.services import asr_discovery as discovery
+    p = create(registry, enabled=False)
+    calls = []
+    def get(url, **kwargs):
+        calls.append((url, kwargs))
+        return SimpleNamespace(status_code=200, json=lambda: {'data': [{'id': 'speech'}, {'id': 'speech'}, {'id': ['invalid']}, {'id': 'chat'}, {}]}, close=lambda: None)
+    monkeypatch.setattr(discovery, 'safe_get', get)
+    monkeypatch.setattr(discovery, 'getbool', lambda *a: False)
+    assert discovery.discover_asr_models('https://asr.example/v1/', '', p['id']) == {'models': ['chat', 'speech']}
+    assert calls[0][1]['headers']['Authorization'] == 'Bearer complete-secret-key'
+    assert calls[0][1]['max_redirects'] == 0
+    with pytest.raises(ValueError, match='地址已改变'):
+        discovery.discover_asr_models('https://other.example/v1', '', p['id'])
+    assert len(calls) == 1
+    discovery.discover_asr_models('https://other.example/v1', 'new-secret', p['id'])
+    assert calls[1][1]['headers']['Authorization'] == 'Bearer new-secret'
+    assert registry.get(p['id'])['base_url'] == 'https://asr.example/v1'
+    with pytest.raises(ValueError, match='内置引擎'):
+        discovery.discover_asr_models('https://asr.example/v1', '', 'bcut')
+
+
+@pytest.mark.parametrize('status', [302, 401, 404, 500])
+def test_discovery_reports_errors_without_upstream_secrets(registry, monkeypatch, status):
+    from app.services import asr_discovery as discovery
+    monkeypatch.setattr(discovery, 'getbool', lambda *a: True)
+    def get(*a, **kw):
+        assert kw['allow_redirects'] is False
+        return SimpleNamespace(status_code=status, text='secret echoed by upstream', close=lambda: None)
+    monkeypatch.setattr(discovery.requests, 'get', get)
+    with pytest.raises(ValueError) as exc:
+        discovery.discover_asr_models('https://asr.example/v1', 'secret')
+    assert 'secret' not in str(exc.value)
+
+
+def test_discovery_requires_admin(registry, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.routers.asr_providers import router
+    from app.services.auth import get_current_user
+    from app.services import asr_discovery
+    app = FastAPI(); app.include_router(router, prefix='/api')
+    client = TestClient(app)
+    body = {'base_url': 'https://asr.example/v1'}
+    assert client.post('/api/asr/providers/discover-models', json=body).status_code == 401
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=1, is_superuser=False)
+    assert client.post('/api/asr/providers/discover-models', json=body).status_code == 403
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=1, is_superuser=True)
+    monkeypatch.setattr(asr_discovery, 'discover_asr_models', lambda *a: {'models': ['speech']})
+    assert client.post('/api/asr/providers/discover-models', json=body).json()['data'] == {'models': ['speech']}
+
+
+def test_llm_delete_blocks_builtin_default_and_removes_only_owned_models(registry):
+    from app.services.provider import ProviderService
+    from app.db.provider_dao import get_provider_by_id
+    from app.db.engine import SessionLocal
+    from app.db.models.models import Model
+    from app.db.models.providers import Provider
+    from app.services.model_defaults import model_defaults
+    with SessionLocal.begin() as db:
+        db.add(Provider(id='builtin', name='Built-in', logo='custom', type='built-in',
+                        api_key='', base_url='https://builtin.example/v1', enabled=1))
+    builtin = get_provider_by_id('builtin')
+    with pytest.raises(ValueError, match='内置'):
+        ProviderService.delete_provider(builtin.id)
+    pid = ProviderService.add_provider('Deletable', 'key', 'https://llm.example/v1', 'custom', 'custom')
+    with SessionLocal.begin() as db:
+        db.add(Model(provider_id=pid, model_name='keep'))
+        db.add(Model(provider_id=builtin.id, model_name='other'))
+    model_defaults.set(pid, 'keep')
+    with pytest.raises(ValueError, match='默认'):
+        ProviderService.delete_provider(pid)
+    assert get_provider_by_id(pid) is not None
+    model_defaults.set(None, None)
+    assert ProviderService.delete_provider(pid)
+    assert get_provider_by_id(pid) is None
+    with SessionLocal() as db:
+        assert not db.query(Model).filter_by(provider_id=pid).all()
+        assert db.query(Model).filter_by(provider_id=builtin.id, model_name='other').first()

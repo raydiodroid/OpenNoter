@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   Button,
+  AlertDialog,
+  DialogTrigger,
   Checkbox,
   LabeledValue,
   SearchField,
@@ -106,6 +108,7 @@ function ProviderDetail({ id, isCreate }: { id?: string; isCreate?: boolean }) {
   const fetchOne = useProviderStore(s => s.fetchOne)
   const create = useProviderStore(s => s.create)
   const update = useProviderStore(s => s.update)
+  const remove = useProviderStore(s => s.remove)
 
   const enabledModels = useModelStore(s => s.providerModels)
   const remoteModels = useModelStore(s => s.remote)
@@ -201,6 +204,19 @@ function ProviderDetail({ id, isCreate }: { id?: string; isCreate?: boolean }) {
       }
     } catch {
       // 拦截器已提示
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const deleteCurrent = async () => {
+    if (!id) return
+    setSaving(true)
+    try {
+      await remove(id)
+      await useModelStore.getState().loadEnabled()
+      toast.success('供应商已删除')
+      navigate('/settings/ai', { replace: true })
     } finally {
       setSaving(false)
     }
@@ -306,6 +322,25 @@ function ProviderDetail({ id, isCreate }: { id?: string; isCreate?: boolean }) {
           />
 
           <div className={actions}>
+            {!isCreate && id && !isBuiltIn && (
+              <DialogTrigger>
+                <Button variant="negative" isDisabled={saving}>
+                  删除供应商
+                </Button>
+                <AlertDialog
+                  title="删除供应商"
+                  variant="destructive"
+                  primaryActionLabel="删除"
+                  cancelLabel="取消"
+                  onPrimaryAction={() => {
+                    void deleteCurrent().catch(() => {})
+                  }}
+                >
+                  删除 {name}
+                  、连接凭据及该供应商的模型配置？历史笔记会保留。若其为站点默认，请先切换默认模型。
+                </AlertDialog>
+              </DialogTrigger>
+            )}
             {!isCreate ? (
               <Button variant="secondary" onPress={test} isDisabled={testing || !id}>
                 {testing ? '测试中…' : '测试连通'}

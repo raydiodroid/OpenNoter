@@ -110,6 +110,8 @@ def remove_provider(id: str, admin: User = Depends(require_admin)):
         if not ProviderService.delete_provider(id):
             return R.error(msg="供应商不存在", code=404, status_code=404)
         return R.success(msg="供应商已删除")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         return R.error(msg=str(e))
 

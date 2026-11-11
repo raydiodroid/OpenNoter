@@ -65,3 +65,5 @@ export const addModel = (data: { provider_id: string; model_name: string }, opts
 
 export const deleteModel = (modelId: number | string) =>
   request.delete<never, unknown>(`/models/${modelId}`)
+
+export const deleteProvider = (id: string) => request.delete(`/providers/${encodeURIComponent(id)}`)

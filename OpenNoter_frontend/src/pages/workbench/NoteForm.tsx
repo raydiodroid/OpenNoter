@@ -500,11 +500,11 @@ export default function NoteForm() {
         </div>
       </section>
 
-      {/* ── 增强输出 ── */}
+      {/* ── 额外输出 ── */}
       <section className={section}>
-        <h2 className={sectionTitle}>增强输出</h2>
+        <h2 className={sectionTitle}>额外输出</h2>
         <CheckboxGroup
-          label="笔记里要包含哪些元素"
+          aria-label="额外输出"
           value={values.format}
           onChange={format => patch({ format })}
         >

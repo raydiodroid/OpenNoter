@@ -5,6 +5,7 @@ import { Panel } from '@/components/Page'
 import { useAuthStore } from '@/store/authStore'
 import request from '@/lib/api'
 import { toast } from '@/lib/toast'
+import { useProviderStore } from '@/store/providerStore'
 import { useModelStore } from '@/store/modelStore'
 import type { ModelItem } from '@/types'
 
@@ -15,6 +16,7 @@ interface Defaults {
   models: ModelItem[]
 }
 export default function ModelDefaults() {
+  const catalogRevision = useProviderStore(s => s.catalogRevision)
   const admin = useAuthStore(s => s.user?.is_superuser)
   const [defaults, setDefaults] = useState<Defaults | null>(null)
   const [modelId, setModelId] = useState('auto')
@@ -33,7 +35,7 @@ export default function ModelDefaults() {
   }
   useEffect(() => {
     load().catch(() => toast.error('获取默认 AI 模型失败'))
-  }, [])
+  }, [catalogRevision])
   if (!defaults) return <Text>加载默认 AI 模型…</Text>
   const save = async () => {
     setBusy(true)

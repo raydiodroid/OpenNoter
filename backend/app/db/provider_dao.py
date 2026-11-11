@@ -170,12 +170,19 @@ def delete_provider(id: str) -> bool:
         provider = db.query(Provider).filter_by(id=id).first()
         if not provider:
             return False
+        from app.db.models.models import Model
+        from app.services.model_defaults import model_defaults
+        if provider.type == 'built-in':
+            raise ValueError('内置供应商不能删除，可使用开关停用')
+        if model_defaults.get()['provider_id'] == id:
+            raise ValueError('请先选择其他默认模型，再删除当前供应商')
+        db.query(Model).filter(Model.provider_id == id).delete(synchronize_session=False)
         db.delete(provider)
         db.commit()
         logger.info(f"Provider deleted successfully. id: {id}")
         return True
-    except Exception as e:
-        logger.error(f"Failed to delete provider: {e}")
-        return False
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()
