@@ -129,13 +129,22 @@ class _Snapshot:
     label: Optional[str]
 
 
-def resolve_asr(user_id: Optional[int], *, online: bool, provider_id: Optional[str] = None) -> Optional[Credential]:
+def resolve_asr(user_id: Optional[int], *, online: bool, provider_id: Optional[str] = None, source: str = "auto") -> Optional[Credential]:
     """Own ASR overrides the site engine. Local engines need no paid credential.
 
     Personal online ASR uses its independent policy; shared ASR uses the registry.
     A configured but broken own credential must never fall back to the site.
     """
     mode = byok_config.get_asr_mode()
+    if source == "own":
+        return resolve(user_id, CAP_ASR, source="own")
+    if source == "shared":
+        if not online:
+            return None
+        if mode == "required":
+            raise CredentialRequired("当前策略要求个人转写凭据，不能选择站点在线转写")
+        from app.services.asr_providers import AsrProviderService
+        return AsrProviderService.credential(provider_id)
     own = user_id is not None and mode != MODE_SHARED and _load_credential(user_id, CAP_ASR)
     if not online and not own:
         return None
@@ -349,63 +358,40 @@ __all__ = [
 # 平台 Cookie 解析（BYOK 的 Cookie 部分）
 # ============================================================================
 #
-# Cookie 与 API Key 的解析共享同一套模式（用户 → 站点），但有三处关键差异：
-#
-#   1. **粒度是平台**而不是能力位：bilibili / douyin / kuaishou / youtube；
-#   2. **缺失时降级而不是报错**：无 Cookie 也能下 360P–1080P 普通画质，
-#      强制报错会让「没配 Cookie」变成阻断性问题；
-#   3. **required 模式下不强制**：Cookie 是画质/字幕增强，不是必需凭据。
+# Cookie 按平台选择个人身份；optional 可配置回退，required 缺失或损坏即报错。
+# 本地上传没有平台 Cookie，提交与执行前的检查均排除此类任务。
 
 
 def resolve_cookie(user_id: Optional[int], platform: str) -> Optional[str]:
-    """解析某平台该用哪份 Cookie。
-
-    返回 ``None`` 表示没有可用 Cookie——调用方应当**继续执行**
-    （降级到无 Cookie 下载），而不是报错。
-
-    ## 优先级
-
-    1. 用户自己的 Cookie（``user_cookies``）
-    2. 站点共享 Cookie（``config/downloader.json``）
-    3. ``None``
-
-    ## 为什么不回退到站点 Cookie（当用户配了但解不开时）
-
-    用户配了自己的 Cookie，说明他不想用站点身份。此时若因解密失败而静默
-    回退到站点 Cookie，**等于用管理员的账号去下载用户要的视频**——这正是
-    我们要消除的问题。所以「配了但坏了」→ 返回 None（降级到无 Cookie），
-    并在日志里记明，绝不冒用站点身份。
-
-    ## shared 模式
-
-    ``cookie_mode=shared`` 时直接读站点 Cookie，与改造前逐行等价。
-
-    **注意用 ``get_cookie_mode()`` 而不是 ``get_mode()``**：Cookie 与模型是
-    两个独立开关，混用会让「关掉模型 BYOK」意外关掉用户 Cookie。
-    """
-    from app.services.byok_config import MODE_SHARED, byok_config
-
-    cookie_mode = byok_config.get_cookie_mode()
-
-    if cookie_mode == MODE_SHARED or user_id is None:
+    """Required cookies never fall back to a shared identity or anonymous access."""
+    mode = byok_config.get_cookie_mode()
+    if mode == "shared":
         return _site_cookie(platform)
-
+    if user_id is None:
+        if mode == "required":
+            raise CredentialRequired(f"{platform} 要求个人 Cookie，请先登录并配置")
+        return _site_cookie(platform) if byok_config.get().get("allow_shared_cookie_fallback", True) else None
     own = _load_user_cookie(int(user_id), platform)
     if own is None:
+        if mode == "required":
+            raise CredentialRequired(f"请先在「下载配置 → 我的平台 Cookie」配置 {platform} 的个人 Cookie")
         return _site_cookie(platform) if byok_config.get().get("allow_shared_cookie_fallback", True) else None
-
-    plain = credential_crypto.reveal(
-        own, user_id=int(user_id), capability=_cookie_capability(platform)
-    )
+    plain = credential_crypto.reveal(own, user_id=int(user_id), capability=_cookie_capability(platform))
     if not plain:
-        # 配了但解不开：降级到「无 Cookie」，绝不冒用站点身份
-        logger.error(
-            f"用户 {user_id} 的 {platform} Cookie 无法解密，"
-            "本次任务按无 Cookie 处理（不使用站点 Cookie，避免串号）"
-        )
+        if mode == "required":
+            raise CredentialBroken(f"{platform} 个人 Cookie 无法解密，请重新填写")
         return None
-
+    if mode == "required":
+        from app.services.cookie_expiry import describe_expiry
+        if describe_expiry(platform=platform, cookie_text=plain, saved_at=None)["expired"]:
+            raise CredentialBroken(f"{platform} 个人 Cookie 已过期，请重新填写")
     return plain
+
+
+def require_personal_cookie(user_id: Optional[int], platform: str) -> None:
+    from app.db.models.user_cookies import SUPPORTED_COOKIE_PLATFORMS
+    if byok_config.get_cookie_mode() == "required" and platform in SUPPORTED_COOKIE_PLATFORMS:
+        resolve_cookie(user_id, platform)
 
 
 def _cookie_capability(platform: str) -> str:
@@ -522,7 +508,7 @@ def build_cookie_status(user_id: Optional[int]) -> dict:
     # Cookie 走自己的开关；不要用 cfg["mode"]（那个字段已拆成两个）
     mode = cfg["cookie_mode"]
 
-    site = _site_cookie_platforms() if mode == MODE_SHARED or cfg.get("allow_shared_cookie_fallback", True) else {}
+    site = _site_cookie_platforms() if mode == MODE_SHARED or (mode == "optional" and cfg.get("allow_shared_cookie_fallback", True)) else {}
     items: list[dict] = []
 
     own_by_platform: dict[str, dict] = {}
@@ -543,6 +529,7 @@ def build_cookie_status(user_id: Optional[int]) -> dict:
                 "platform": platform,
                 "source": "own" if has_own else ("shared" if site.get(platform) and not own.get("broken") else "none"),
                 "configured": has_own,
+                "required": mode == "required",
                 "broken": bool(own.get("broken")),
                 "entry_count": own.get("entry_count", 0),
                 # 站点是否提供该平台 Cookie（用户据此判断「不配也能用」）

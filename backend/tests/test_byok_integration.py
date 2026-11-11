@@ -466,3 +466,86 @@ class TestSelectionPolicies:
         with pytest.raises(HTTPException) as exc:
             _validate_base_url('https://denied.example/v1')
         assert exc.value.status_code == 403
+
+
+class TestTaskAsrAndRequiredCookies:
+    def test_explicit_asr_keeps_site_source_and_own_is_policy_gated(self, env):
+        from app.services.byok_config import byok_config
+        from app.services.asr_providers import AsrProviderService
+        from app.services.asr_selection import validate_asr_selection, list_asr_choices
+        from app.services.credential_resolver import resolve_asr, CredentialRequired
+        p = AsrProviderService.create({'name': 'Speech', 'logo': 'cloud', 'base_url': 'https://speech.example/v1', 'api_key': 'site-speech', 'model_name': 'site-model'})
+        _add_own_credential(capability='asr', model='own-speech')
+        assert resolve_asr(1, online=True, provider_id=p['id'], source='shared').model_name == 'site-model'
+        assert resolve_asr(1, online=True, provider_id=p['id']).model_name == 'own-speech'
+        assert validate_asr_selection('own:asr', 1) == 'own:asr'
+        byok_config.update(asr_mode='required')
+        with pytest.raises(CredentialRequired):
+            validate_asr_selection(p['id'], 1)
+        assert p['id'] not in {x['id'] for x in list_asr_choices(1)}
+        assert validate_asr_selection('bcut', 1) == 'bcut'
+        byok_config.update(asr_mode='shared')
+        with pytest.raises(CredentialRequired):
+            validate_asr_selection('own:asr', 1)
+
+    def test_cookie_required_never_uses_site_or_anonymous_access(self, env, monkeypatch):
+        from app.services.byok_config import byok_config
+        from app.services import credential_resolver as cr
+        byok_config.update(cookie_mode='required')
+        monkeypatch.setattr(cr, '_site_cookie', lambda *args: pytest.fail('shared cookie leaked'))
+        monkeypatch.setattr(cr, '_load_user_cookie', lambda *args: None)
+        with pytest.raises(cr.CredentialRequired): cr.resolve_cookie(None, 'bilibili')
+        with pytest.raises(cr.CredentialRequired): cr.require_personal_cookie(1, 'bilibili')
+        cr.require_personal_cookie(1, 'local')
+        monkeypatch.setattr(cr, '_load_user_cookie', lambda *args: 'encrypted')
+        monkeypatch.setattr(cr.credential_crypto, 'reveal', lambda *args, **kw: None)
+        with pytest.raises(cr.CredentialBroken): cr.resolve_cookie(1, 'bilibili')
+        monkeypatch.setattr(cr.credential_crypto, 'reveal', lambda *args, **kw: 'SESSDATA=own-session')
+        assert cr.resolve_cookie(1, 'bilibili') == 'SESSDATA=own-session'
+        monkeypatch.setattr(cr.credential_crypto, 'reveal', lambda *args, **kw: '.youtube.com\tTRUE\t/\tTRUE\t1\tSID\texpired')
+        with pytest.raises(cr.CredentialBroken, match='过期'): cr.resolve_cookie(1, 'youtube')
+
+    def test_submit_checks_cookies_and_persists_asr_choice(self, env, monkeypatch):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from types import SimpleNamespace
+        from app.routers import note
+        from app.services.auth import get_optional_user
+        from app.services.byok_config import byok_config
+        from app.services.task_service import TaskService
+        app = FastAPI(); app.include_router(note.router, prefix='/api')
+        app.dependency_overrides[get_optional_user] = lambda: SimpleNamespace(id=1, is_superuser=False)
+        captured = []
+        monkeypatch.setattr(note, 'run_note_task', lambda *args: captured.append(args))
+        client = TestClient(app)
+        body = {'url': 'https://www.bilibili.com/video/BV1xx411c7mD', 'provider_id': 'site-p', 'model_name': 'site-model-a', 'asr_provider_id': 'bcut'}
+        byok_config.update(cookie_mode='required')
+        response = client.post('/api/notes', json=body)
+        assert response.status_code == 400 and 'Cookie' in response.text
+        assert captured == []
+        byok_config.update(cookie_mode='optional')
+        response = client.post('/api/notes', json=body)
+        assert response.status_code == 200, response.text
+        tid = response.json()['data']['task_id']
+        assert TaskService(note.NOTE_OUTPUT_DIR).snapshot(tid)['request']['asr_provider_id'] == 'bcut'
+        assert captured[-1][-1] == 'bcut'
+        service = TaskService(note.NOTE_OUTPUT_DIR)
+        service.update(tid, 'FAILED', attempt_id=service.snapshot(tid)['attempt_id'])
+
+    def test_cache_rejects_other_asr_but_reuses_subtitles(self, env):
+        import json
+        from types import SimpleNamespace
+        from app.services.note import NoteGenerator
+        gen = NoteGenerator.__new__(NoteGenerator)
+        gen.asr_provider_id = 'bcut'
+        path = env / 'transcript.json'
+        cache = SimpleNamespace(transcript=path, legacy_transcript=env / 'missing.json')
+        base = {'language': 'zh', 'full_text': 'cached text', 'segments': []}
+        path.write_text(json.dumps({**base, '_transcript_source': 'asr', '_asr_selection': 'groq'}))
+        assert gen._load_transcript_cache(cache, 'task') is None
+        path.write_text(json.dumps(base))
+        assert gen._load_transcript_cache(cache, 'task') is None
+        path.write_text(json.dumps({**base, '_transcript_source': 'subtitles'}))
+        assert gen._load_transcript_cache(cache, 'task').full_text == 'cached text'
+        path.write_text(json.dumps({**base, '_transcript_source': 'asr', '_asr_selection': 'bcut'}))
+        assert gen._load_transcript_cache(cache, 'task').full_text == 'cached text'

@@ -162,13 +162,12 @@ class TestByokConfig:
         assert mgr.get_mode() == "required", "改 Cookie 不应影响模型模式"
         assert mgr.get_cookie_mode() == "optional"
 
-    def test_cookie_mode_has_no_required(self, byok_env):
-        """Cookie 不消耗站点额度，强制用户登自己的账号在语义上不成立。"""
+    def test_cookie_mode_supports_required(self, byok_env):
+        """明确指定 required 时强制个人 Cookie；旧 mode 迁移仍保留 optional。"""
         from app.services.byok_config import ByokConfigManager
 
         mgr = ByokConfigManager(str(byok_env / "config" / "byok.json"))
-        with pytest.raises(ValueError):
-            mgr.update(cookie_mode="required")
+        assert mgr.update(cookie_mode="required")["cookie_mode"] == "required"
 
     def test_legacy_single_mode_migrates_to_both(self, byok_env):
         """升级零破坏：老文件只有单个 mode，升级后行为必须与升级前一致。"""

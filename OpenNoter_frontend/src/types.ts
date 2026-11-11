@@ -42,6 +42,7 @@ export interface MarkdownVersion {
 }
 
 export interface TaskFormData {
+  asr_provider_id?: string
   video_url: string
   platform: string
   quality: string

@@ -31,10 +31,8 @@ MODE_REQUIRED = "required"
 #: 模型凭据支持的三种模式
 ALL_MODES = (MODE_SHARED, MODE_OPTIONAL, MODE_REQUIRED)
 
-#: 平台 Cookie 只支持两种——**没有 required**。
-#: 原因：Cookie 不消耗站点额度，没配也能正常下载（只是画质低），
-#: 强制用户登自己的账号在语义上不成立。
-COOKIE_MODES = (MODE_SHARED, MODE_OPTIONAL)
+#: Cookie 独立支持 required：只允许个人身份访问对应平台。
+COOKIE_MODES = ALL_MODES
 
 # 默认值。文件不存在 / 读失败 / 值非法时一律回退到这里，
 # 保证任何异常都不会把部署切到一个「用户配不了 key 又用不了站点 key」的死状态。
@@ -108,19 +106,10 @@ class ByokConfigManager:
         def pick(field: str, allowed: tuple[str, ...], default: str) -> str:
             value = str(raw.get(field) or "").strip().lower()
             if not value:
-                value = legacy  # 回落到旧字段
+                # Legacy required applied to model keys only, never force cookies on upgrade.
+                value = MODE_OPTIONAL if field == "cookie_mode" and legacy == MODE_REQUIRED else legacy
             if value not in allowed:
                 if value:
-                    # 旧 mode=required 落到这里：Cookie 没有 required，
-                    # 但升级前 required 下用户 Cookie 是**可用**的。若回退到
-                    # shared，升级会悄悄关掉本来能用的功能，所以收敛到 optional
-                    # （语义上最接近：仍然允许用户自带，只是不强制）。
-                    if value == MODE_REQUIRED and MODE_OPTIONAL in allowed:
-                        logger.info(
-                            f"{field}: 旧配置 required 无对应值，收敛为 optional"
-                            "（升级前用户 Cookie 可用，不能因拆分而关掉）"
-                        )
-                        return MODE_OPTIONAL
                     logger.warning(f"非法的 {field}={value!r}，回退 {default}")
                 value = default
             return value
@@ -187,7 +176,7 @@ class ByokConfigManager:
     # ---- 平台 Cookie ----
 
     def get_cookie_mode(self) -> str:
-        """平台 Cookie 模式（只会是 shared / optional）。"""
+        """平台 Cookie 模式（shared / optional / required）。"""
         return self.get()["cookie_mode"]
 
     def is_cookie_byok_enabled(self) -> bool:
@@ -217,7 +206,7 @@ class ByokConfigManager:
         """更新配置并立即失效缓存（管理员切换后下一次解析就生效）。
 
         :param model_mode: 模型凭据模式
-        :param cookie_mode: 平台 Cookie 模式（仅 shared / optional）
+        :param cookie_mode: 平台 Cookie 模式（shared / optional / required）
         :param allow_custom_base_url: 是否允许用户自定义模型接口地址
         :param mode: **已废弃**，仅为兼容旧调用方；等价于同时设置两者
             （Cookie 会被收敛到 shared/optional）
@@ -242,9 +231,7 @@ class ByokConfigManager:
 
         # 兼容旧参数 `mode`：同时写两个新字段。
         #
-        # 注意不能把 `mode` 原样塞给 cookie_mode —— Cookie 没有 required，
-        # 传 required 会被下面的 COOKIE_MODES 校验拒绝。按读路径同一条规则
-        # 收敛：required → optional，其余原样。
+        # 旧 mode=required 从未强制 Cookie，迁移时仍保持 optional。
         if mode is not None:
             normalized = str(mode).strip().lower()
             if normalized not in ALL_MODES:
@@ -291,7 +278,7 @@ class ByokConfigManager:
                 raise ValueError(
                     f"非法的 Cookie 模式: {cookie_mode!r}，"
                     f"可选值: {', '.join(COOKIE_MODES)}"
-                    "（Cookie 不消耗站点额度，没有 required）"
+                    "（shared / optional / required）"
                 )
             raw["cookie_mode"] = normalized
 

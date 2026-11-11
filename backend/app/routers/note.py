@@ -65,6 +65,7 @@ class VideoRequest(BaseModel):
     screenshot: Optional[bool] = False
     link: Optional[bool] = False
     # provider_id / model_name 留空时自动挑选「已启用供应商 + 其下已启用模型」
+    asr_provider_id: Optional[str] = None
     model_name: Optional[str] = None
     provider_id: Optional[str] = None
     task_id: Optional[str] = None
@@ -139,6 +140,7 @@ class CreateNoteRequest(BaseModel):
     platform: Optional[str] = None
     quality: DownloadQuality = DownloadQuality.fast
     provider_id: Optional[str] = None
+    asr_provider_id: Optional[str] = None
     model_name: Optional[str] = None
     style: Optional[str] = None
     format: Optional[list] = []
@@ -289,6 +291,7 @@ def _persist_prefetched_transcript(task_id: str, video_url: str, quality, transc
 
     full_text = transcript.get("full_text") or " ".join(s["text"] for s in cleaned_segments)
     payload = {
+        "_transcript_source": "subtitles",
         "language": transcript.get("language") or "zh",
         "full_text": full_text,
         "segments": cleaned_segments,
@@ -302,7 +305,7 @@ def _persist_prefetched_transcript(task_id: str, video_url: str, quality, transc
 def run_note_task(task_id: str, video_url: str, platform: str, quality: DownloadQuality,
                   link: bool = False, screenshot: bool = False, model_name: str = None, provider_id: str = None,
                   _format: list = None, style: str = None, extras: str = None, video_understanding: bool = False,
-                  video_interval=0, grid_size=None, user_id: int = None, attempt_id: str = None
+                  video_interval=0, grid_size=None, user_id: int = None, attempt_id: str = None, asr_provider_id: str = None
                   ):
 
     from app.services.task_service import TaskService
@@ -310,7 +313,7 @@ def run_note_task(task_id: str, video_url: str, platform: str, quality: Download
     state = TaskService(NOTE_OUTPUT_DIR).snapshot(task_id)
     return submit_note(
         task_id, user_id=user_id, attempt_id=attempt_id or (state["attempt_id"] if state else None),
-        root=NOTE_OUTPUT_DIR, video_url=video_url, platform=platform, quality=quality,
+        asr_provider_id=asr_provider_id, root=NOTE_OUTPUT_DIR, video_url=video_url, platform=platform, quality=quality,
         link=link, screenshot=screenshot, model_name=model_name, provider_id=provider_id,
         _format=_format, style=style, extras=extras, video_understanding=video_understanding,
         video_interval=video_interval, grid_size=grid_size,
@@ -510,7 +513,7 @@ def _submit_note_task(background_tasks: BackgroundTasks, *, video_url: str, plat
                       task_id: Optional[str], fmt: list, style: Optional[str],
                       extras: Optional[str], video_understanding: bool,
                       video_interval: int, grid_size: list,
-                      prefetched_transcript: Optional[dict], user) -> str:
+                      prefetched_transcript: Optional[dict], user, asr_provider_id: Optional[str] = None) -> str:
     """校验入参 → 落 PENDING 状态 → 排后台任务 → 返回 task_id。"""
     from app.services.quota import QuotaExceeded, begin_submit, check_submit_quota
 
@@ -543,6 +546,10 @@ def _submit_note_task(background_tasks: BackgroundTasks, *, video_url: str, plat
         provider_id, model_name = resolve_model_selection(
             provider_id, model_name, user_id=_sel_user_id
         )
+        from app.services.asr_selection import validate_asr_selection
+        from app.services.credential_resolver import require_personal_cookie
+        require_personal_cookie(_sel_user_id, platform)
+        asr_provider_id = validate_asr_selection(asr_provider_id, _sel_user_id)
     except Exception as _sel_exc:
         # BYOK 的两类专用异常要转成给用户看的 4xx，而不是落到兜底 500
         from app.services.credential_resolver import (
@@ -550,7 +557,7 @@ def _submit_note_task(background_tasks: BackgroundTasks, *, video_url: str, plat
             CredentialRequired,
         )
 
-        if isinstance(_sel_exc, (CredentialRequired, CredentialBroken)):
+        if isinstance(_sel_exc, (CredentialRequired, CredentialBroken, ValueError)):
             return R.error(msg=str(_sel_exc), code=400)
         raise
 
@@ -596,7 +603,7 @@ def _submit_note_task(background_tasks: BackgroundTasks, *, video_url: str, plat
             request = dict(video_url=str(video_url), platform=platform,
                            quality=getattr(quality, "value", quality), format=fmt,
                            screenshot=screenshot, link=link, model_name=model_name,
-                           provider_id=provider_id, style=style, extras=extras,
+                           provider_id=provider_id, asr_provider_id=asr_provider_id, style=style, extras=extras,
                            video_understanding=video_understanding,
                            video_interval=video_interval, grid_size=grid_size)
             if task_serial_executor.is_active(tid):
@@ -623,7 +630,7 @@ def _submit_note_task(background_tasks: BackgroundTasks, *, video_url: str, plat
     background_tasks.add_task(run_note_task, task_id, video_url, platform, quality, link,
                               screenshot, model_name, provider_id, fmt, style,
                               extras, video_understanding, video_interval, grid_size,
-                              getattr(user, "id", None), attempt_id)
+                              getattr(user, "id", None), attempt_id, asr_provider_id)
     return task_id
 
 
@@ -645,6 +652,7 @@ def generate_note(data: VideoRequest, background_tasks: BackgroundTasks,
         link=bool(data.link),
         model_name=data.model_name,
         provider_id=data.provider_id,
+        asr_provider_id=data.asr_provider_id,
         task_id=data.task_id,
         fmt=data.format,
         style=data.style,
@@ -690,6 +698,7 @@ def create_note(data: CreateNoteRequest, background_tasks: BackgroundTasks,
         link=bool(data.link),
         model_name=data.model_name,
         provider_id=data.provider_id,
+        asr_provider_id=data.asr_provider_id,
         task_id=data.task_id,
         fmt=data.format,
         style=data.style,

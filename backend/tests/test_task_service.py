@@ -381,3 +381,18 @@ def test_http_submission_duplicate_result_and_retry_contract(service, monkeypatc
                 time.sleep(0.01)
     finally:
         release.set()
+
+
+def test_worker_passes_explicit_asr_choice_to_generator(service, monkeypatch):
+    from app.services.task_worker import submit_note
+    from app.services.note import NoteGenerator
+    captured = {}
+    def init(self, **kwargs):
+        captured.update(kwargs)
+    monkeypatch.setattr(NoteGenerator, '__init__', init)
+    monkeypatch.setattr(NoteGenerator, 'generate', lambda self, **kwargs: None)
+    attempt = claim(service)
+    submit_note('task', user_id=1, attempt_id=attempt, root=service.storage.root,
+                asr_provider_id='bcut', platform='local').result(timeout=5)
+    assert captured['asr_provider_id'] == 'bcut'
+    assert captured['user_id'] == 1

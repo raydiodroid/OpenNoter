@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
 import { connectionKey } from '~/logic/client'
-import { listAvailableModels, ping } from '~/logic/api'
+import { type AsrChoice, getAsrChoices, listAvailableModels, ping } from '~/logic/api'
 import { settings, settingsReady } from '~/logic/storage'
 import { ensureHostPermission } from '~/logic/host-permission'
 import { type Model, NOTE_FORMATS, NOTE_STYLES, type NoteFormat, type Provider } from '~/logic/types'
@@ -13,6 +13,7 @@ function toggleFormat(value: NoteFormat, checked: boolean) {
     : cur.filter(v => v !== value)
 }
 
+const asrChoices = ref<AsrChoice[]>([])
 const providers = ref<Provider[]>([])
 const models = ref<Model[]>([])
 const status = ref<{ kind: 'idle' | 'ok' | 'err', text: string }>({ kind: 'idle', text: '' })
@@ -23,6 +24,7 @@ async function refresh() {
   status.value = { kind: 'idle', text: '' }
   try {
     const available = await listAvailableModels()
+    asrChoices.value = await getAsrChoices()
     const ids = [...new Set(available.map(m => m.provider_id))]
     providers.value = ids.map(id => ({ id, name: id.startsWith('own:') ? '我的凭据' : id, logo: 'custom', type: 'custom', enabled: 1 }))
     if (settings.value.providerId && !ids.includes(settings.value.providerId)) {
@@ -183,8 +185,24 @@ onMounted(async () => {
       </label>
     </section>
 
+    <section class="section-card">
+      <h2 class="font-semibold">
+        音频转写
+      </h2>
+      <label class="flex flex-col gap-1 text-sm">
+        <span>本次任务的音频转写</span>
+        <select v-model="settings.asrProviderId" aria-label="本次任务的音频转写" class="input">
+          <option :value="undefined">自动（个人凭据 / 站点默认）</option>
+          <option v-if="settings.asrProviderId && !asrChoices.some(c => c.id === settings.asrProviderId)" :value="settings.asrProviderId" disabled>原转写选项已不可用，请重新选择</option>
+          <option v-for="c in asrChoices" :key="c.id" :value="c.id">{{ c.label }}</option>
+        </select>
+      </label>
+      <p class="text-xs text-gray-500">
+        优先使用字幕；无可用字幕时使用所选转写服务。不会修改站点默认。
+      </p>
+    </section>
     <p class="text-xs text-gray-500">
-      AI 模型的明确选择优先于自动模式；音频转写遵循站点全局默认和独立 BYOK 策略。全局配置请到 Web「模型配置 → 全局默认」，BYOK 策略在「站点设置」。
+      AI 模型的明确选择优先于自动模式；音频转写也可单独选择。默认配置请到 Web「模型配置 → AI 模型 / 音频转写」，BYOK 策略在「站点设置」。
     </p>
     <section class="section-card">
       <h2 class="font-semibold">

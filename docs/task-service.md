@@ -44,7 +44,7 @@ Web 缓存按 API 地址和用户 ID 分区，退出时清空可见任务、聊�
 
 ### 模型选择与 BYOK 策略
 
-Web 的「模型配置 → 全局默认」集中设置站点 AI 模型和默认转写，并显示当前账号自动选择的来源和模型。AI 默认模型持久化到 `config/model_defaults.json`；转写沿用 `config/transcriber.json`，不会新增另一份转写默认值。
+Web 的「模型配置 → AI 模型」设置默认 AI 模型；「音频转写」中选择服务并设为默认。不再使用独立的默认设置分页。AI 默认模型持久化到 `config/model_defaults.json`；转写沿用 `config/transcriber.json`，不会新增另一份转写默认值。
 
 - 明确选择 AI 模型时，供应商、模型和凭据来源绑定；不会因为用户另有个人凭据而替换站点密钥。`required` 策略拒绝明确选择站点模型。
 - 自动模式：`shared` 使用站点；`optional` 优先个人 AI 凭据，再用个人通用凭据，未配置才用站点默认；`required` 必须有个人凭据。个人凭据损坏或地址不被允许时报错，不回退站点。
@@ -52,8 +52,10 @@ Web 的「模型配置 → 全局默认」集中设置站点 AI 模型和默认�
 - AI 问答和生成笔记使用同一解析器。Web 生成页的「自动」及插件未指定模型时由后端执行上述规则；明确选择仅覆盖对应请求/浏览器配置，不改全局默认。
 - 转写独立使用 `asr_mode`。允许个人转写时优先专用 ASR 凭据；仅当 `asr_use_default` 开启时使用个人通用凭据。AI 专用凭据不作为转写兜底。站点内置免费/本地引擎无需个人在线凭据；只用字幕的任务不会调用 ASR。
 - `allow_custom_base_url=false` 时，个人接口必须与 `allowed_base_urls` 中的完整地址匹配（忽略末尾 `/`）。保存、模型发现、连通检查及实际调用都受约束；原有私网安全限制继续生效。
-- Cookie 的 `shared/optional` 策略独立。`optional` 且未配置个人 Cookie 时，只有 `allow_shared_cookie_fallback=true` 才回退站点；否则按未登录身份下载。个人 Cookie 损坏始终不回退站点身份。
+- Cookie 的 `shared/optional/required` 策略独立。`optional` 且未配置个人 Cookie 时，只有 `allow_shared_cookie_fallback=true` 才回退站点；否则按未登录身份下载。个人 Cookie 损坏始终不回退站点身份。`required` 必须有对应平台的个人 Cookie；缺失、无法解密或已知过期时，在提交与执行前拒绝任务，下载器不得吞掉策略错误后匿名访问。本地上传不受影响。旧通用 `mode=required` 仍迁移为 Cookie `optional`，仅显式设置 `cookie_mode=required` 才开启强制模式。
 
 旧策略没有 `asr_mode` 时继承原 `model_mode`；首次局部更新会固化当前值，之后两种能力分别配置。所有新增开关的兼容默认值保留既有部署行为。站点策略位于「站点设置」，个人凭据位于「模型配置」，插件的对应入口按两种能力分别显示。
 
 供应商图标使用标准库：Web 使用 Spectrum 2 和 LobeHub Icons；插件使用 Iconify 提供的 Lucide / Simple Icons。自建统一网关使用标准网关/网络图标，不使用自绘路径或自定义图片。
+
+工作台新增本次任务的音频转写选择（`asr_provider_id`）：空值为自动、`own:asr` 为个人转写、其余为已启用站点 ASR ID。明确选择站点服务不会被个人凭据覆盖；强制个人在线转写策略仍优先校验。字段进入任务请求快照并传给执行器，重试保留。字幕优先，选项仅在需要音频转写时生效。实际 ASR 缓存记录选择来源，更换服务不复用另一服务的缓存；平台/客户端字幕仍可复用。插件同步提供同样的任务转写选择。

@@ -15,6 +15,9 @@ test('administrator manages ASR providers without changing the default implicitl
     else if (path === '/api/me/credentials') {
       data = { mode: 'shared', credentials: [] }
     }
+    else if (path === '/api/asr_choices') {
+      data = []
+    }
     else if (path === '/api/models') {
       data = []
     }

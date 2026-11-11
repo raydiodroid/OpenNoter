@@ -136,11 +136,12 @@ class TestByokModeApi:
             # 切换立即生效（再读一次）
             assert client.get("/api/byok_config").json()["data"]["model_mode"] == mode
 
-    def test_cookie_mode_rejects_required(self, api):
-        """Cookie 不消耗站点额度，没有 required——传了必须被拒。"""
+    def test_cookie_mode_accepts_required(self, api):
+        """Cookie 支持强制个人身份，与模型模式独立。"""
         client, _ = api
         resp = client.patch("/api/byok_config", json={"cookie_mode": "required"})
-        assert resp.status_code == 400
+        assert resp.status_code == 200
+        assert resp.json()["data"]["cookie_mode"] == "required"
 
     def test_two_switches_are_independent(self, api):
         """改模型模式不能顺手改掉 Cookie 模式（拆分前的 bug 就是这样）。"""

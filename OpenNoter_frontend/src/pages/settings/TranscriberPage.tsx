@@ -441,7 +441,7 @@ export default function TranscriberPage({ embedded = false }: { embedded?: boole
       <div className={pageStack}>
         <Section
           title="转写供应商"
-          description="可添加多家服务，启用后设为默认。新任务使用默认供应商，个人 ASR 凭据仍按站点策略优先生效。"
+          description={`站点默认：${config.providers.find(p => p.id === config.transcriber_type)?.name || '未配置'}。选中服务后点击「设为默认」；工作台可为本次任务单独选择，自动模式仍按 BYOK 策略处理。`}
         >
           <div className={maxForm}>
             <Panel>

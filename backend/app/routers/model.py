@@ -222,3 +222,9 @@ def selection_status(user: User | None = Depends(get_optional_user)):
     except Exception as exc:
         result['asr'] = {'source': 'none', 'error': str(exc)}
     return R.success(data=result)
+
+
+@router.get('/asr_choices')
+def asr_choices(user: User | None = Depends(get_optional_user)):
+    from app.services.asr_selection import list_asr_choices
+    return R.success(data=list_asr_choices(getattr(user, 'id', None)))

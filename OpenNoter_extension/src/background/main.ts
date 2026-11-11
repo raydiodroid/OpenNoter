@@ -87,6 +87,7 @@ async function startTask(url: string, title?: string): Promise<{ ok: boolean, ta
         url,
         platform,
         quality: settings.quality,
+        asr_provider_id: settings.asrProviderId || undefined,
         provider_id: settings.providerId || undefined,
         model_name: settings.modelName || undefined,
         // backend 同时接受 format 数组与 screenshot/link 单独布尔；从 formats 派生保持单一真相源

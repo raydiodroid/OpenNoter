@@ -235,7 +235,8 @@ function CookieRow({ item }: { item: CookiePlatformStatus }) {
             return exp ? ` · ${exp}` : ''
           })()}
           {item.broken ? '（无法解密，请重新填写）' : ''}
-          {item.source === 'none' && !item.site_available
+          {item.required && <span className={badgeNone}> · 必须配置个人 Cookie</span>}
+          {item.source === 'none' && !item.site_available && !item.required
             ? ' · 站点也未配置，将按无 Cookie 下载'
             : ''}
         </span>

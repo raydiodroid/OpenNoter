@@ -196,10 +196,15 @@ class KuaiShou:
         """
         stored = None
         try:
-            from app.services.credential_resolver import resolve_cookie
+            from app.services.credential_resolver import resolve_cookie, CredentialRequired, CredentialBroken
 
             stored = resolve_cookie(self.user_id, "kuaishou")
+        except (CredentialRequired, CredentialBroken):
+            raise
         except Exception as exc:  # 配置文件损坏也不该让下载直接崩
+            from app.services.byok_config import byok_config
+            if byok_config.get_cookie_mode() == "required":
+                raise CredentialBroken("读取个人 Cookie 失败，已阻止匿名或站点身份回退") from exc
             logger.warning(f"读取快手 Cookie 配置失败，将使用匿名 Cookie：{exc}")
 
         if stored:

@@ -57,11 +57,16 @@ class BilibiliSubtitleFetcher:
 
         :param user_id: 任务归属用户；None = 匿名部署，只用站点 Cookie。
         """
-        from app.services.credential_resolver import resolve_cookie
+        from app.services.credential_resolver import resolve_cookie, CredentialRequired, CredentialBroken
 
         try:
             self._cookie = resolve_cookie(user_id, "bilibili") or ""
+        except (CredentialRequired, CredentialBroken):
+            raise
         except Exception as exc:  # noqa: BLE001 - 读 Cookie 失败不该让字幕链路崩
+            from app.services.byok_config import byok_config
+            if byok_config.get_cookie_mode() == "required":
+                raise CredentialBroken("读取个人 Cookie 失败，已阻止匿名或站点身份回退") from exc
             logger.warning("读取 B 站 Cookie 失败，按无 Cookie 拉字幕: %s", exc)
             self._cookie = ""
 

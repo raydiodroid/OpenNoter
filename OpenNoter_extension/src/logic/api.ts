@@ -313,3 +313,6 @@ export function resolveImageUrl(url: string | undefined | null): string {
     return `${base}/api/image_proxy?url=${encodeURIComponent(url)}`
   return url
 }
+
+export interface AsrChoice { id: string, label: string, source: 'own' | 'shared' }
+export const getAsrChoices = () => request<AsrChoice[]>('/api/asr_choices')

@@ -27,11 +27,13 @@ import { withScheme } from '@/lib/format'
 import { toast } from '@/lib/toast'
 import type { TaskFormData } from '@/types'
 import { Notice } from '@/components/Notice'
+import { getAsrChoices, type AsrChoice } from '@/services/transcriber'
 import { Fold } from '@/components/Fold'
 
 interface FormValues {
   platform: string
   video_url: string
+  asr_provider_id: string
   model_id: string
   style: string
   format: string[]
@@ -45,6 +47,7 @@ interface FormValues {
 const DEFAULT_VALUES: FormValues = {
   platform: 'bilibili',
   video_url: '',
+  asr_provider_id: '',
   model_id: 'auto',
   style: 'minimal',
   format: [],
@@ -140,6 +143,12 @@ export default function NoteForm() {
   const models = useModelStore(s => s.enabled)
   const loadEnabled = useModelStore(s => s.loadEnabled)
 
+  const [asrChoices, setAsrChoices] = useState<AsrChoice[]>([])
+  useEffect(() => {
+    getAsrChoices()
+      .then(setAsrChoices)
+      .catch(() => toast.error('获取转写服务失败'))
+  }, [])
   const [values, setValues] = useState<FormValues>(DEFAULT_VALUES)
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [submitting, setSubmitting] = useState(false)
@@ -163,6 +172,7 @@ export default function NoteForm() {
     }
     const data = currentTask.formData
     setValues({
+      asr_provider_id: data.asr_provider_id || '',
       platform: data.platform || 'bilibili',
       video_url: data.video_url || '',
       model_id:
@@ -240,6 +250,7 @@ export default function NoteForm() {
       video_url: isLocal ? values.video_url.trim() : withScheme(values.video_url),
       platform: values.platform,
       quality: 'medium',
+      asr_provider_id: values.asr_provider_id || undefined,
       model_name: model?.model_name ?? '',
       provider_id: model?.provider_id ?? '',
       style: values.style,
@@ -357,6 +368,25 @@ export default function NoteForm() {
       {/* ── 生成设置 ── */}
       <section className={section}>
         <h2 className={sectionTitle}>生成设置</h2>
+
+        <Picker
+          label="本次任务的音频转写"
+          selectedKey={values.asr_provider_id || 'auto'}
+          onSelectionChange={key => patch({ asr_provider_id: key === 'auto' ? '' : String(key) })}
+          description="优先使用字幕；无可用字幕时调用所选服务。仅影响本次任务，不修改站点默认。"
+        >
+          <PickerItem id="auto">自动（个人凭据 / 站点默认）</PickerItem>
+          {values.asr_provider_id && !asrChoices.some(c => c.id === values.asr_provider_id) && (
+            <PickerItem id={values.asr_provider_id} isDisabled>
+              原转写选项已不可用，请重新选择
+            </PickerItem>
+          )}
+          {asrChoices.map(c => (
+            <PickerItem key={c.id} id={c.id}>
+              {c.label}
+            </PickerItem>
+          ))}
+        </Picker>
 
         {models.length > 0 ? (
           <div className={twoCol}>

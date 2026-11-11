@@ -5,11 +5,13 @@ test.beforeEach(async ({ context }) => {
     const path = new URL(route.request().url()).pathname
     const data = path === '/api/auth/me'
       ? { id: 1, is_superuser: false }
-      : path === '/api/models'
-        ? [{ id: 'own', provider_id: 'own:llm', model_name: 'my-model', source: 'own' }]
-        : path === '/api/me/credentials'
-          ? { mode: 'optional', credentials: [] }
-          : { cookie_mode: 'optional' }
+      : path === '/api/asr_choices'
+        ? [{ id: 'bcut', label: '必剪', source: 'shared' }]
+        : path === '/api/models'
+          ? [{ id: 'own', provider_id: 'own:llm', model_name: 'my-model', source: 'own' }]
+          : path === '/api/me/credentials'
+            ? { mode: 'optional', credentials: [] }
+            : { cookie_mode: 'optional' }
     await route.fulfill({ json: { code: 0, data } })
   })
 })
@@ -57,4 +59,13 @@ test('ASR-only BYOK exposes speech settings and the allowed endpoint list', asyn
   await speech.getByRole('combobox').selectOption('https://speech.example/v1')
   await expect(speech.getByRole('combobox')).toHaveValue('https://speech.example/v1')
   await expect(speech.getByPlaceholder('https://provider.example/v1')).toHaveCount(0)
+})
+
+test('per-browser ASR choice is retained without changing the site default', async ({ page, extensionId }) => {
+  await page.goto(`chrome-extension://${extensionId}/dist/options/index.html`)
+  const choice = page.getByLabel('本次任务的音频转写', { exact: true })
+  await choice.selectOption('bcut')
+  await expect(choice).toHaveValue('bcut')
+  await page.reload()
+  await expect(page.getByLabel('本次任务的音频转写', { exact: true })).toHaveValue('bcut')
 })

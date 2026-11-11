@@ -84,7 +84,7 @@ def get_mlx_whisper_transcriber(model_size="base"):
     return _init_transcriber(TranscriberType.MLX_WHISPER, MLXWhisperTranscriber, model_size=model_size)
 
 # 通用入口
-def get_transcriber(transcriber_type="fast-whisper", model_size=None, device="cuda", user_id=None, require_ready=False):
+def get_transcriber(transcriber_type="fast-whisper", model_size=None, device="cuda", user_id=None, require_ready=False, credential_source="auto"):
     """
     获取指定类型的转录器实例
 
@@ -99,9 +99,9 @@ def get_transcriber(transcriber_type="fast-whisper", model_size=None, device="cu
     logger.info(f'请求转录器类型: {transcriber_type}')
 
     online = transcriber_type == "groq" or transcriber_type.startswith("asr_")
-    if user_id is not None or online:
+    if user_id is not None or online or credential_source == "own":
         from app.services.credential_resolver import resolve_asr
-        credential = resolve_asr(user_id, online=online, **({"provider_id": transcriber_type} if online else {}))
+        credential = resolve_asr(user_id, online=online, **({"provider_id": transcriber_type} if online else {}), **({"source": credential_source} if credential_source != "auto" else {}))
         if credential is not None:
             return GroqTranscriber(credential=credential)
 

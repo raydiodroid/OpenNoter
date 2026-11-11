@@ -125,11 +125,16 @@ class Downloader(ABC):
         返回 None 表示没有可用 Cookie —— **调用方必须继续执行**（降级到
         无 Cookie 的普通画质），不要当成错误。
         """
-        from app.services.credential_resolver import resolve_cookie
+        from app.services.credential_resolver import resolve_cookie, CredentialRequired, CredentialBroken
 
         try:
             return resolve_cookie(self.user_id, platform)
+        except (CredentialRequired, CredentialBroken):
+            raise
         except Exception as exc:  # noqa: BLE001 - Cookie 读失败不该阻断下载
+            from app.services.byok_config import byok_config
+            if byok_config.get_cookie_mode() == "required":
+                raise CredentialBroken("读取个人 Cookie 失败，已阻止匿名或站点身份回退") from exc
             logger.warning("解析 %s Cookie 失败，按无 Cookie 处理: %s", platform, exc)
             return None
 

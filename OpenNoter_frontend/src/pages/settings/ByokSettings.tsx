@@ -48,9 +48,14 @@ export function ByokPolicyPanel() {
   const save = async () => {
     if (
       (draft.model_mode === 'required' && saved.model_mode !== 'required') ||
-      (draft.asr_mode === 'required' && saved.asr_mode !== 'required')
+      (draft.asr_mode === 'required' && saved.asr_mode !== 'required') ||
+      (draft.cookie_mode === 'required' && saved.cookie_mode !== 'required')
     ) {
-      if (!window.confirm('未配置对应个人凭据的用户将无法使用该在线能力。确定更新站点策略？'))
+      if (
+        !window.confirm(
+          '未配置对应个人凭据或平台 Cookie 的用户将无法使用相关能力。确定更新站点策略？'
+        )
+      )
         return
     }
     setBusy(true)
@@ -120,22 +125,25 @@ export function ByokPolicyPanel() {
           <Picker
             label="平台 Cookie 模式"
             selectedKey={draft.cookie_mode}
-            onSelectionChange={k => patch({ cookie_mode: String(k) as 'shared' | 'optional' })}
+            onSelectionChange={k =>
+              patch({ cookie_mode: String(k) as 'shared' | 'optional' | 'required' })
+            }
             isDisabled={busy}
           >
             <PickerItem id="shared">仅使用站点 Cookie</PickerItem>
             <PickerItem id="optional">允许个人 Cookie</PickerItem>
+            <PickerItem id="required">必须使用个人 Cookie</PickerItem>
           </Picker>
           <Switch
             isSelected={draft.allow_shared_cookie_fallback}
             onChange={v => patch({ allow_shared_cookie_fallback: v })}
-            isDisabled={busy || draft.cookie_mode === 'shared'}
+            isDisabled={busy || draft.cookie_mode !== 'optional'}
           >
             未配置个人 Cookie 时允许使用站点 Cookie
           </Switch>
           <Text>
-            关闭回退后，未配置个人 Cookie 的用户以未登录身份下载；个人 Cookie
-            损坏时也不会切换到管理员身份。
+            允许个人 Cookie 时可决定是否回退站点身份；必须使用个人 Cookie
+            时，缺失、损坏或已知过期均拒绝对应平台任务，不回退站点或匿名下载。本地上传不受影响。
           </Text>
           <Button variant="accent" onPress={save} isDisabled={busy || !dirty}>
             {busy ? '保存中…' : '保存站点策略'}

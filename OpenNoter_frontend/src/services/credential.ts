@@ -32,13 +32,8 @@ export type Capability = 'default' | 'llm' | 'asr'
 /** 模型凭据的站点策略。`required` = 用户必须自带，未配置则拒绝提交。 */
 export type ByokMode = 'shared' | 'optional' | 'required'
 
-/**
- * 平台 Cookie 的站点策略：**没有 required**。
- *
- * Cookie 不消耗站点额度，没配也能正常下载（只是画质低），强制用户登自己的
- * 账号在语义上不成立。后端 `COOKIE_MODES` 只接受这两个值。
- */
-export type CookieMode = 'shared' | 'optional'
+/** Cookie 策略：站点 / 允许个人 / 必须个人。 */
+export type CookieMode = 'shared' | 'optional' | 'required'
 
 export interface ByokConfig {
   /** 模型凭据模式（LLM / 转写） */
@@ -47,7 +42,7 @@ export interface ByokConfig {
   asr_use_default: boolean
   allow_shared_cookie_fallback: boolean
   allowed_base_urls: string[]
-  /** 平台 Cookie 模式（只有 shared / optional） */
+  /** 平台 Cookie 模式 */
   cookie_mode: CookieMode
   allow_custom_base_url: boolean
   updated_at?: string | null
@@ -157,6 +152,7 @@ export interface CookiePlatformStatus {
   entry_count: number
   /** 站点是否提供了该平台 Cookie（用户据此判断「不配也能用」） */
   site_available: boolean
+  required?: boolean
 
   // ---- 过期信息 ----
   /**

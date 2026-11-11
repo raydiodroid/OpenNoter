@@ -106,3 +106,10 @@ export const addWhisperModel = async (data: { name: string; target: string }) =>
 export const deleteWhisperModel = async (name: string) => {
   return await request.delete(`/whisper_models/${encodeURIComponent(name)}`)
 }
+
+export interface AsrChoice {
+  id: string
+  label: string
+  source: 'own' | 'shared'
+}
+export const getAsrChoices = () => request.get<never, AsrChoice[]>('/asr_choices')

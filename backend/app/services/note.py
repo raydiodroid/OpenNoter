@@ -143,12 +143,14 @@ class NoteGenerator:
     以及将任务信息写入状态文件与数据库等功能。
     """
 
-    def __init__(self, user_id: Optional[int] = None, attempt_id: Optional[str] = None):
+    def __init__(self, user_id: Optional[int] = None, attempt_id: Optional[str] = None, asr_provider_id: Optional[str] = None):
         from app.services.transcriber_config_manager import TranscriberConfigManager
         config_manager = TranscriberConfigManager()
         self.model_size: str = config_manager.get_whisper_model_size()
         self.device: Optional[str] = None
-        self.transcriber_type: str = config_manager.get_transcriber_type()
+        self.asr_provider_id = asr_provider_id
+        self.transcriber_type: str = (asr_provider_id if asr_provider_id and asr_provider_id != 'own:asr' else config_manager.get_transcriber_type())
+        self.transcriber_source = 'auto' if not asr_provider_id else ('own' if asr_provider_id == 'own:asr' else 'shared')
         self.transcriber: Optional[Transcriber] = None
         self.attempt_id = attempt_id
         self.deadline = time.monotonic() + max(1, int(os.getenv("TASK_TIMEOUT_SECONDS", "1800")))
@@ -219,6 +221,8 @@ class NoteGenerator:
             logger.info(f"开始生成笔记 (task_id={task_id})")
             self._update_status(task_id, TaskStatus.PARSING)
 
+            from app.services.credential_resolver import require_personal_cookie
+            require_personal_cookie(getattr(self, "user_id", None), platform)
             # 获取下载器与 GPT 实例
 
             downloader = self._get_downloader(platform)
@@ -439,6 +443,7 @@ class NoteGenerator:
             model_size=self.model_size,
             user_id=getattr(self, "user_id", None),
             require_ready=True,
+            **({"credential_source": self.transcriber_source} if getattr(self, "transcriber_source", "auto") != "auto" else {}),
         )
 
     def _get_gpt(self, model_name: Optional[str], provider_id: Optional[str]) -> GPT:
@@ -646,6 +651,8 @@ class NoteGenerator:
             logger.info(f"检测到转写缓存 ({cache_file})，尝试读取")
         try:
             data = json.loads(cache_file.read_text(encoding="utf-8"))
+            if not self._transcript_cache_matches(data):
+                return None
             segments = [TranscriptSegment(**seg) for seg in data.get("segments", [])]
             transcript = TranscriptResult(
                 language=data.get("language"),
@@ -692,7 +699,7 @@ class NoteGenerator:
                 if transcript and transcript.segments:
                     logger.info(f"成功获取平台字幕，共 {len(transcript.segments)} 段")
                     cache.transcript.write_text(
-                        json.dumps(asdict(transcript), ensure_ascii=False, indent=2),
+                        json.dumps({**asdict(transcript), "_transcript_source": "subtitles"}, ensure_ascii=False, indent=2),
                         encoding="utf-8",
                     )
                     holder["transcript"] = transcript
@@ -1064,6 +1071,11 @@ class NoteGenerator:
             )
 
 
+    def _transcript_cache_matches(self, data):
+        if data.get("_transcript_source") == "subtitles":
+            return True
+        return data.get("_asr_selection") == getattr(self, "asr_provider_id", None)
+
     def _get_transcript(
         self,
         downloader: Downloader,
@@ -1094,6 +1106,8 @@ class NoteGenerator:
             logger.info(f"检测到转写缓存 ({transcript_cache_file})，尝试读取")
             try:
                 data = json.loads(transcript_cache_file.read_text(encoding="utf-8"))
+                if not self._transcript_cache_matches(data):
+                    raise ValueError("转写服务已更换，需要重新转写")
                 segments = [TranscriptSegment(**seg) for seg in data.get("segments", [])]
                 return TranscriptResult(language=data.get("language"), full_text=data["full_text"], segments=segments)
             except Exception as e:
@@ -1108,7 +1122,7 @@ class NoteGenerator:
                     logger.info(f"成功获取平台字幕，共 {len(transcript.segments)} 段")
                     # 缓存结果
                     transcript_cache_file.write_text(
-                        json.dumps(asdict(transcript), ensure_ascii=False, indent=2),
+                        json.dumps({**asdict(transcript), "_transcript_source": "subtitles"}, ensure_ascii=False, indent=2),
                         encoding="utf-8"
                     )
                     return transcript
@@ -1151,6 +1165,8 @@ class NoteGenerator:
             logger.info(f"检测到转写缓存 ({transcript_cache_file})，尝试读取")
             try:
                 data = json.loads(transcript_cache_file.read_text(encoding="utf-8"))
+                if not self._transcript_cache_matches(data):
+                    raise ValueError("转写服务已更换，需要重新转写")
                 segments = [TranscriptSegment(**seg) for seg in data.get("segments", [])]
                 return TranscriptResult(language=data["language"], full_text=data["full_text"], segments=segments)
             except Exception as e:
@@ -1162,7 +1178,7 @@ class NoteGenerator:
             if self.transcriber is None:
                 self.transcriber = self._init_transcriber()
             transcript = self.transcriber.transcript(file_path=audio_file)
-            transcript_cache_file.write_text(json.dumps(asdict(transcript), ensure_ascii=False, indent=2), encoding="utf-8")
+            transcript_cache_file.write_text(json.dumps({**asdict(transcript), "_transcript_source": "asr", "_asr_selection": getattr(self, "asr_provider_id", None)}, ensure_ascii=False, indent=2), encoding="utf-8")
             logger.info(f"转写并缓存成功 ({transcript_cache_file})")
             return transcript
         except Exception as exc:

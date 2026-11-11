@@ -135,6 +135,7 @@ export interface Settings {
    * 那是产品级改动，不是这里能"顺手修"的。
    */
   apiKey: string
+  asrProviderId?: string
   providerId: string
   modelName: string
   quality: Quality
