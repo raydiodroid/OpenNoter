@@ -117,7 +117,6 @@ export default function TranscriberPage({ embedded = false }: { embedded?: boole
   const [selectedSize, setSelectedSize] = useState('')
   const [whisperStatus, setWhisperStatus] = useState<ModelStatus[]>([])
   const [mlxStatus, setMlxStatus] = useState<ModelStatus[]>([])
-  const [mlxAvailable, setMlxAvailable] = useState(false)
 
   const [providerName, setProviderName] = useState('')
   const [providerLogo, setProviderLogo] = useState('cloud')
@@ -147,7 +146,6 @@ export default function TranscriberPage({ embedded = false }: { embedded?: boole
       const data = await getModelsStatus()
       setWhisperStatus(data.whisper)
       setMlxStatus(data.mlx_whisper)
-      setMlxAvailable(data.mlx_available)
 
       // 只对「本次新出现的失败」提示一次，避免轮询反复弹
       const failedNow = new Map<string, ModelStatus>()
@@ -304,8 +302,8 @@ export default function TranscriberPage({ embedded = false }: { embedded?: boole
       setRemoteModels(result.models)
       setDiscoveryHint(
         result.models.length
-          ? '请选择支持音频转写的模型；列表可能包含其他类型。'
-          : '未返回模型，可手动填写模型名称。'
+          ? '仅显示识别为音频转写的模型，其他模型可手动填写。'
+          : '未识别到音频转写模型，可手动填写模型名称。'
       )
     } catch {
       if (version === discoveryVersion.current) {
@@ -477,23 +475,28 @@ export default function TranscriberPage({ embedded = false }: { embedded?: boole
     </ProviderListPanel>
   )
 
+  const defaultProviders = config.providers.filter(
+    provider => provider.enabled && (provider.id !== 'mlx-whisper' || config.mlx_whisper_available)
+  )
+  const defaultAvailable = defaultProviders.some(provider => provider.id === defaultType)
+
   const content = (
     <div className={settingsStack}>
       <Panel>
         <div className={defaultStack}>
           <Picker
             label="站点默认音频转写"
-            selectedKey={defaultType}
+            selectedKey={defaultAvailable ? defaultType : null}
+            placeholder={
+              defaultProviders.length === 0
+                ? '暂无可用音频转写，请先启用供应商'
+                : '当前默认不可用，请重新选择'
+            }
             onSelectionChange={key => setDefaultType(String(key))}
-            isDisabled={!admin || saving}
+            isDisabled={!admin || saving || defaultProviders.length === 0}
           >
-            {config.providers.map(provider => (
-              <PickerItem
-                key={provider.id}
-                id={provider.id}
-                textValue={provider.name}
-                isDisabled={!provider.enabled || (provider.id === 'mlx-whisper' && !mlxAvailable)}
-              >
+            {defaultProviders.map(provider => (
+              <PickerItem key={provider.id} id={provider.id} textValue={provider.name}>
                 <Text slot="label">{`${provider.name}${provider.model_name ? ` · ${provider.model_name}` : ''}`}</Text>
               </PickerItem>
             ))}
@@ -511,11 +514,7 @@ export default function TranscriberPage({ embedded = false }: { embedded?: boole
                   if (needsModelDownload()) setConfirmOpen(true)
                   else void setDefault()
                 }}
-                isDisabled={
-                  saving ||
-                  !config.providers.find(p => p.id === defaultType)?.enabled ||
-                  (defaultType === 'mlx-whisper' && !mlxAvailable)
-                }
+                isDisabled={saving || !defaultAvailable}
               >
                 保存默认音频转写
               </Button>

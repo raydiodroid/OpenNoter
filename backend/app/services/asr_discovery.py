@@ -5,6 +5,7 @@ from app.db.engine import SessionLocal
 from app.db.models.asr_providers import AsrProvider
 from app.db.provider_dao import reveal_api_key
 from app.services.asr_providers import AsrProviderService
+from app.services.asr_model_catalog import transcription_models
 from app.utils.env_compat import getbool
 from app.utils.url_safety import safe_get, UnsafeUrlError
 
@@ -57,5 +58,4 @@ def discover_asr_models(base_url, api_key='', provider_id=None):
     items = payload.get('data', payload.get('models')) if isinstance(payload, dict) else payload
     if not isinstance(items, list):
         raise ValueError('该服务未返回有效的模型列表，请手动填写')
-    names = [item.get('id') if isinstance(item, dict) else item for item in items]
-    return {'models': sorted({name for name in names if isinstance(name, str) and name.strip()})}
+    return {'models': transcription_models(items)}

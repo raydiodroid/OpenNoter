@@ -157,10 +157,10 @@ def test_discovery_uses_saved_key_only_for_same_endpoint(registry, monkeypatch):
     calls = []
     def get(url, **kwargs):
         calls.append((url, kwargs))
-        return SimpleNamespace(status_code=200, json=lambda: {'data': [{'id': 'speech'}, {'id': 'speech'}, {'id': ['invalid']}, {'id': 'chat'}, {}]}, close=lambda: None)
+        return SimpleNamespace(status_code=200, json=lambda: {'data': [{'id': 'whisper-1'}, {'id': 'whisper-1'}, {'id': ['invalid']}, {'id': 'chat'}, {}]}, close=lambda: None)
     monkeypatch.setattr(discovery, 'safe_get', get)
     monkeypatch.setattr(discovery, 'getbool', lambda *a: False)
-    assert discovery.discover_asr_models('https://asr.example/v1/', '', p['id']) == {'models': ['chat', 'speech']}
+    assert discovery.discover_asr_models('https://asr.example/v1/', '', p['id']) == {'models': ['whisper-1']}
     assert calls[0][1]['headers']['Authorization'] == 'Bearer complete-secret-key'
     assert calls[0][1]['max_redirects'] == 0
     with pytest.raises(ValueError, match='地址已改变'):
