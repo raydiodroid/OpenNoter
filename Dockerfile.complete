@@ -2,8 +2,10 @@
 #   docker build --build-arg BASE_REGISTRY=docker.m.daocloud.io -f Dockerfile.complete .
 ARG BASE_REGISTRY=docker.io
 
+FROM ${BASE_REGISTRY}/denoland/deno:bin-2.9.8 AS deno
+
 # === 阶段1：构建 Backend ===
-FROM ${BASE_REGISTRY}/library/python:3.11-slim AS backend-builder
+FROM ${BASE_REGISTRY}/library/python:3.11-slim-bookworm AS backend-builder
 
 ARG APT_MIRROR=mirrors.tuna.tsinghua.edu.cn
 ARG PIP_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
@@ -31,9 +33,9 @@ COPY ./backend /tmp/backend
 
 # === 阶段2：构建 Frontend ===
 # Node 18-alpine 跑不动 Tailwind v4 / Vite 6（前者要求 Node 20+，后者推荐 Node 20+），
-# 升到 node:20-alpine。alpine 走 musl，npm 会按 package-lock.json 拉 *-linux-x64-musl native binary。
+# 升到 node:24-alpine。alpine 走 musl，npm 会按 package-lock.json 拉 *-linux-x64-musl native binary。
 ARG BASE_REGISTRY=docker.io
-FROM ${BASE_REGISTRY}/library/node:20-alpine AS frontend-builder
+FROM ${BASE_REGISTRY}/library/node:24-alpine AS frontend-builder
 
 # 可由发布 workflow 从 git tag 注入，用于前端 About 页展示版本；未传时由 Vite 回退读取 tauri.conf.json。
 ARG VITE_APP_VERSION=
@@ -54,7 +56,7 @@ RUN npm run build
 
 # === 阶段3：完整应用镜像 ===
 ARG BASE_REGISTRY=docker.io
-FROM ${BASE_REGISTRY}/library/python:3.11-slim
+FROM ${BASE_REGISTRY}/library/python:3.11-slim-bookworm
 
 ARG APT_MIRROR=mirrors.tuna.tsinghua.edu.cn
 
@@ -79,6 +81,7 @@ COPY --from=backend-builder /usr/local/bin /usr/local/bin
 
 # 复制 backend 代码
 COPY ./backend /app/backend
+COPY --from=deno /deno /usr/local/bin/deno
 WORKDIR /app/backend
 
 # 复制前端静态文件到 nginx

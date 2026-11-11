@@ -3,7 +3,7 @@
 # 或写到 docker-compose.yml 的 build.args / 环境变量里
 ARG BASE_REGISTRY=docker.io
 FROM ${BASE_REGISTRY}/denoland/deno:bin-2.9.8 AS deno
-FROM ${BASE_REGISTRY}/library/python:3.11-slim
+FROM ${BASE_REGISTRY}/library/python:3.11-slim-bookworm
 
 ARG APT_MIRROR=mirrors.tuna.tsinghua.edu.cn
 ARG PIP_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple

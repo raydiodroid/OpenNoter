@@ -4,7 +4,7 @@
 # BASE_REGISTRY 默认 docker.io，国内拉不到可换 daocloud / 阿里云镜像：
 #   docker-compose build --build-arg BASE_REGISTRY=docker.m.daocloud.io
 ARG BASE_REGISTRY=docker.io
-FROM ${BASE_REGISTRY}/library/node:20-alpine AS builder
+FROM ${BASE_REGISTRY}/library/node:24-alpine AS builder
 
 # 可由发布 workflow 从 git tag 注入，用于前端 About 页展示版本；未传时由 Vite 回退读取 tauri.conf.json。
 ARG VITE_APP_VERSION=
@@ -23,7 +23,7 @@ RUN npm run build
 # --- 阶段2：使用 nginx 作为静态服务器 ---
 # 重新声明 ARG —— buildkit 跨阶段不自动继承
 ARG BASE_REGISTRY=docker.io
-FROM ${BASE_REGISTRY}/library/nginx:1.25-alpine
+FROM ${BASE_REGISTRY}/library/nginx:1.30.6-alpine
 
 RUN rm -rf /etc/nginx/conf.d/default.conf
 COPY ./OpenNoter_frontend/deploy/default.conf /etc/nginx/conf.d/default.conf
