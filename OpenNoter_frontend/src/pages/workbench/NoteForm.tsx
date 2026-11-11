@@ -4,6 +4,9 @@ import {
   Button,
   Checkbox,
   CheckboxGroup,
+  Disclosure,
+  DisclosurePanel,
+  DisclosureTitle,
   Link,
   NumberField,
   Picker,
@@ -58,7 +61,7 @@ const DEFAULT_VALUES: FormValues = {
   grid_rows: 2,
 }
 
-const foldInnerStack = style({ display: 'flex', flexDirection: 'column', gap: 12 })
+const foldInnerStack = style({ display: 'flex', flexDirection: 'column', gap: 12, paddingTop: 12 })
 const form = style({
   display: 'flex',
   flexDirection: 'column',
@@ -150,6 +153,7 @@ export default function NoteForm() {
       .catch(() => toast.error('获取转写服务失败'))
   }, [])
   const [values, setValues] = useState<FormValues>(DEFAULT_VALUES)
+  const [advancedOpen, setAdvancedOpen] = useState(false)
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [submitting, setSubmitting] = useState(false)
   const [uploading, setUploading] = useState(false)
@@ -168,9 +172,11 @@ export default function NoteForm() {
   useEffect(() => {
     if (!currentTask) {
       setValues(DEFAULT_VALUES)
+      setAdvancedOpen(false)
       return
     }
     const data = currentTask.formData
+    setAdvancedOpen(Boolean(data.asr_provider_id || data.video_understanding))
     setValues({
       asr_provider_id: data.asr_provider_id || '',
       platform: data.platform || 'bilibili',
@@ -369,25 +375,6 @@ export default function NoteForm() {
       <section className={section}>
         <h2 className={sectionTitle}>生成设置</h2>
 
-        <Picker
-          label="本次任务的音频转写"
-          selectedKey={values.asr_provider_id || 'auto'}
-          onSelectionChange={key => patch({ asr_provider_id: key === 'auto' ? '' : String(key) })}
-          description="优先使用字幕；无可用字幕时调用所选服务。仅影响本次任务，不修改站点默认。"
-        >
-          <PickerItem id="auto">自动（个人凭据 / 站点默认）</PickerItem>
-          {values.asr_provider_id && !asrChoices.some(c => c.id === values.asr_provider_id) && (
-            <PickerItem id={values.asr_provider_id} isDisabled>
-              原转写选项已不可用，请重新选择
-            </PickerItem>
-          )}
-          {asrChoices.map(c => (
-            <PickerItem key={c.id} id={c.id}>
-              {c.label}
-            </PickerItem>
-          ))}
-        </Picker>
-
         {models.length > 0 ? (
           <div className={twoCol}>
             <Picker
@@ -400,7 +387,10 @@ export default function NoteForm() {
               isInvalid={Boolean(errors.model_id)}
               errorMessage={errors.model_id}
             >
-              <PickerItem id="auto">{`自动 · ${models.find(m => m.is_default)?.model_name || '按站点策略选择'}`}</PickerItem>
+              <PickerItem id="auto" textValue="自动选择">
+                <Text slot="label">自动选择</Text>
+                <Text slot="description">按个人凭据和站点策略选择</Text>
+              </PickerItem>
               {models.map(model => (
                 <PickerItem
                   key={String(model.id)}
@@ -446,50 +436,91 @@ export default function NoteForm() {
             </Picker>
           </>
         )}
-      </section>
 
-      {/* ── 视频理解 ── */}
-      <section className={section}>
-        <h2 className={sectionTitle}>视频理解</h2>
-        <Switch
-          isSelected={values.video_understanding}
-          onChange={video_understanding => patch({ video_understanding })}
-        >
-          启用多模态理解
-        </Switch>
-        <p className={inlineNote}>按间隔截取关键帧发给多模态模型，费用更高但理解更准。</p>
+        <Disclosure isExpanded={advancedOpen} onExpandedChange={setAdvancedOpen} isQuiet>
+          <DisclosureTitle>高级设置</DisclosureTitle>
+          <DisclosurePanel>
+            <div className={section}>
+              <Picker
+                label="转写服务"
+                selectedKey={values.asr_provider_id || 'auto'}
+                onSelectionChange={key =>
+                  patch({ asr_provider_id: key === 'auto' ? '' : String(key) })
+                }
+                description="无可用字幕时使用，仅对本次任务生效。"
+              >
+                <PickerItem id="auto">自动选择</PickerItem>
+                {values.asr_provider_id &&
+                  !asrChoices.some(c => c.id === values.asr_provider_id) && (
+                    <PickerItem id={values.asr_provider_id} isDisabled>
+                      原转写选项已不可用，请重新选择
+                    </PickerItem>
+                  )}
+                {asrChoices.map(c => (
+                  <PickerItem key={c.id} id={c.id}>
+                    {c.label}
+                  </PickerItem>
+                ))}
+              </Picker>
 
-        {/* 外层间距由 section 的 gap 负责；折叠区内部间距由这层 stack 给 */}
-        <Fold open={values.video_understanding}>
-          <div className={foldInnerStack}>
-            <NumberField
-              label="采样间隔（秒）"
-              value={values.video_interval}
-              onChange={value => patch({ video_interval: Number.isFinite(value) ? value : 6 })}
-              minValue={1}
-              maxValue={30}
-              step={1}
-            />
-            <div className={twoCol}>
-              <NumberField
-                label="拼图列数"
-                value={values.grid_columns}
-                onChange={value => patch({ grid_columns: Number.isFinite(value) ? value : 2 })}
-                minValue={1}
-                maxValue={10}
-                step={1}
-              />
-              <NumberField
-                label="拼图行数"
-                value={values.grid_rows}
-                onChange={value => patch({ grid_rows: Number.isFinite(value) ? value : 2 })}
-                minValue={1}
-                maxValue={10}
-                step={1}
-              />
+              <div>
+                <Switch
+                  isSelected={values.video_understanding}
+                  onChange={video_understanding => patch({ video_understanding })}
+                >
+                  结合视频画面理解
+                </Switch>
+                <p className={inlineNote}>需要支持图像的模型，会增加用量和耗时。</p>
+
+                <Fold open={values.video_understanding}>
+                  <div className={foldInnerStack}>
+                    <NumberField
+                      label="采样间隔（秒）"
+                      value={values.video_interval}
+                      onChange={value =>
+                        patch({ video_interval: Number.isFinite(value) ? value : 6 })
+                      }
+                      minValue={1}
+                      maxValue={30}
+                      step={1}
+                    />
+                    <div className={twoCol}>
+                      <NumberField
+                        label="拼图列数"
+                        value={values.grid_columns}
+                        onChange={value =>
+                          patch({ grid_columns: Number.isFinite(value) ? value : 2 })
+                        }
+                        minValue={1}
+                        maxValue={10}
+                        step={1}
+                      />
+                      <NumberField
+                        label="拼图行数"
+                        value={values.grid_rows}
+                        onChange={value => patch({ grid_rows: Number.isFinite(value) ? value : 2 })}
+                        minValue={1}
+                        maxValue={10}
+                        step={1}
+                      />
+                    </div>
+                  </div>
+                </Fold>
+              </div>
             </div>
-          </div>
-        </Fold>
+          </DisclosurePanel>
+        </Disclosure>
+        {!advancedOpen && (values.asr_provider_id || values.video_understanding) && (
+          <p className={inlineNote}>
+            {[
+              values.asr_provider_id &&
+                `转写：${asrChoices.find(c => c.id === values.asr_provider_id)?.label || '原选项已不可用，请重新选择'}`,
+              values.video_understanding && '视频理解已开启',
+            ]
+              .filter(Boolean)
+              .join(' · ')}
+          </p>
+        )}
       </section>
 
       {/* ── 输出内容 ── */}
