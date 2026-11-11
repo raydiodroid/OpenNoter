@@ -4,9 +4,6 @@ import {
   Button,
   Checkbox,
   CheckboxGroup,
-  Disclosure,
-  DisclosurePanel,
-  DisclosureTitle,
   Link,
   NumberField,
   Picker,
@@ -83,7 +80,13 @@ const sectionTitle = style({
   margin: 0,
 })
 
-const twoCol = style({ display: 'grid', gridTemplateColumns: ['1fr', '1fr'], gap: 12 })
+const twoCol = style({
+  display: 'grid',
+  gridTemplateColumns: '[repeat(2, minmax(0, 1fr))]',
+  gap: 12,
+  alignItems: 'end',
+})
+const switchCell = style({ display: 'flex', alignItems: 'center', minHeight: 32 })
 
 const platformOption = style({ display: 'inline-flex', alignItems: 'center', gap: 8 })
 
@@ -153,12 +156,24 @@ export default function NoteForm() {
       .catch(() => toast.error('获取转写服务失败'))
   }, [])
   const [values, setValues] = useState<FormValues>(DEFAULT_VALUES)
-  const [advancedOpen, setAdvancedOpen] = useState(false)
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [submitting, setSubmitting] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [dragOver, setDragOver] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const selectionRowRef = useRef<HTMLDivElement>(null)
+  const [selectionMenuWidth, setSelectionMenuWidth] = useState<number>()
+
+  useEffect(() => {
+    const row = selectionRowRef.current
+    if (!row) return
+    // The triggers share a row; the menus use its full width, including after a pane resize.
+    const observer = new ResizeObserver(([entry]) => {
+      setSelectionMenuWidth(entry.contentRect.width)
+    })
+    observer.observe(row)
+    return () => observer.disconnect()
+  }, [])
 
   useEffect(() => {
     loadEnabled()
@@ -172,11 +187,9 @@ export default function NoteForm() {
   useEffect(() => {
     if (!currentTask) {
       setValues(DEFAULT_VALUES)
-      setAdvancedOpen(false)
       return
     }
     const data = currentTask.formData
-    setAdvancedOpen(Boolean(data.asr_provider_id || data.video_understanding))
     setValues({
       asr_provider_id: data.asr_provider_id || '',
       platform: data.platform || 'bilibili',
@@ -375,35 +388,65 @@ export default function NoteForm() {
       <section className={section}>
         <h2 className={sectionTitle}>生成设置</h2>
 
-        {models.length > 0 ? (
+        {models.length === 0 && (
+          <Notice variant="notice">
+            <AlertIcon />
+            <Text>还没有可用模型，先添加一个供应商并启用模型。</Text>
+            <Link onPress={() => navigate('/settings/ai')}>去添加模型</Link>
+          </Notice>
+        )}
+        <div className={twoCol} ref={selectionRowRef}>
+          <Picker
+            label="模型"
+            selectedKey={values.model_id || null}
+            onSelectionChange={key => {
+              patch({ model_id: String(key) })
+              setErrors(prev => ({ ...prev, model_id: '' }))
+            }}
+            isDisabled={models.length === 0}
+            isInvalid={Boolean(errors.model_id)}
+            errorMessage={errors.model_id}
+            menuWidth={selectionMenuWidth}
+          >
+            <PickerItem id="auto" textValue="默认配置">
+              <Text slot="label">默认配置</Text>
+              <Text slot="description">按个人凭据和站点策略选择</Text>
+            </PickerItem>
+            {models.map(model => (
+              <PickerItem key={String(model.id)} id={String(model.id)} textValue={model.model_name}>
+                <Text slot="label">{model.model_name}</Text>
+                <Text slot="description">
+                  {model.provider_name || (model.source === 'own' ? '我的' : model.provider_id)}
+                </Text>
+              </PickerItem>
+            ))}
+          </Picker>
+          <Picker
+            label="音频转写"
+            selectedKey={values.asr_provider_id || 'auto'}
+            onSelectionChange={key => patch({ asr_provider_id: key === 'auto' ? '' : String(key) })}
+            menuWidth={selectionMenuWidth}
+            align="end"
+          >
+            <PickerItem id="auto" textValue="自动选择">
+              <Text slot="label">自动选择</Text>
+              <Text slot="description">无可用字幕时使用，仅对本次任务生效</Text>
+            </PickerItem>
+            {values.asr_provider_id && !asrChoices.some(c => c.id === values.asr_provider_id) && (
+              <PickerItem id={values.asr_provider_id} isDisabled>
+                原转写选项已不可用，请重新选择
+              </PickerItem>
+            )}
+            {asrChoices.map(c => (
+              <PickerItem key={c.id} id={c.id}>
+                {c.label}
+              </PickerItem>
+            ))}
+          </Picker>
+        </div>
+        <div>
           <div className={twoCol}>
             <Picker
-              label="模型"
-              selectedKey={values.model_id || null}
-              onSelectionChange={key => {
-                patch({ model_id: String(key) })
-                setErrors(prev => ({ ...prev, model_id: '' }))
-              }}
-              isInvalid={Boolean(errors.model_id)}
-              errorMessage={errors.model_id}
-            >
-              <PickerItem id="auto" textValue="自动选择">
-                <Text slot="label">自动选择</Text>
-                <Text slot="description">按个人凭据和站点策略选择</Text>
-              </PickerItem>
-              {models.map(model => (
-                <PickerItem
-                  key={String(model.id)}
-                  id={String(model.id)}
-                  textValue={model.model_name}
-                >
-                  {/* BYOK：必须标出来源，否则用户不知道这次调用花的是谁的钱 */}
-                  {`${model.model_name} · ${model.provider_name || (model.source === 'own' ? '我的' : model.provider_id)}`}
-                </PickerItem>
-              ))}
-            </Picker>
-
-            <Picker
               label="笔记风格"
               selectedKey={values.style}
               onSelectionChange={key => patch({ style: String(key) })}
@@ -414,113 +457,47 @@ export default function NoteForm() {
                 </PickerItem>
               ))}
             </Picker>
-          </div>
-        ) : (
-          <>
-            <Notice variant="notice">
-              <AlertIcon />
-              <Text>还没有可用模型，先添加一个供应商并启用模型。</Text>
-              <Link onPress={() => navigate('/settings/ai')}>去添加模型</Link>
-            </Notice>
-
-            <Picker
-              label="笔记风格"
-              selectedKey={values.style}
-              onSelectionChange={key => patch({ style: String(key) })}
-            >
-              {NOTE_STYLES.map(style => (
-                <PickerItem key={style.value} id={style.value} textValue={style.label}>
-                  {style.label}
-                </PickerItem>
-              ))}
-            </Picker>
-          </>
-        )}
-
-        <Disclosure isExpanded={advancedOpen} onExpandedChange={setAdvancedOpen} isQuiet>
-          <DisclosureTitle>高级设置</DisclosureTitle>
-          <DisclosurePanel>
-            <div className={section}>
-              <Picker
-                label="转写服务"
-                selectedKey={values.asr_provider_id || 'auto'}
-                onSelectionChange={key =>
-                  patch({ asr_provider_id: key === 'auto' ? '' : String(key) })
-                }
-                description="无可用字幕时使用，仅对本次任务生效。"
+            <div className={switchCell}>
+              <Switch
+                isSelected={values.video_understanding}
+                onChange={video_understanding => patch({ video_understanding })}
               >
-                <PickerItem id="auto">自动选择</PickerItem>
-                {values.asr_provider_id &&
-                  !asrChoices.some(c => c.id === values.asr_provider_id) && (
-                    <PickerItem id={values.asr_provider_id} isDisabled>
-                      原转写选项已不可用，请重新选择
-                    </PickerItem>
-                  )}
-                {asrChoices.map(c => (
-                  <PickerItem key={c.id} id={c.id}>
-                    {c.label}
-                  </PickerItem>
-                ))}
-              </Picker>
-
-              <div>
-                <Switch
-                  isSelected={values.video_understanding}
-                  onChange={video_understanding => patch({ video_understanding })}
-                >
-                  结合视频画面理解
-                </Switch>
-                <p className={inlineNote}>需要支持图像的模型，会增加用量和耗时。</p>
-
-                <Fold open={values.video_understanding}>
-                  <div className={foldInnerStack}>
-                    <NumberField
-                      label="采样间隔（秒）"
-                      value={values.video_interval}
-                      onChange={value =>
-                        patch({ video_interval: Number.isFinite(value) ? value : 6 })
-                      }
-                      minValue={1}
-                      maxValue={30}
-                      step={1}
-                    />
-                    <div className={twoCol}>
-                      <NumberField
-                        label="拼图列数"
-                        value={values.grid_columns}
-                        onChange={value =>
-                          patch({ grid_columns: Number.isFinite(value) ? value : 2 })
-                        }
-                        minValue={1}
-                        maxValue={10}
-                        step={1}
-                      />
-                      <NumberField
-                        label="拼图行数"
-                        value={values.grid_rows}
-                        onChange={value => patch({ grid_rows: Number.isFinite(value) ? value : 2 })}
-                        minValue={1}
-                        maxValue={10}
-                        step={1}
-                      />
-                    </div>
-                  </div>
-                </Fold>
+                启用多模态理解
+              </Switch>
+            </div>
+          </div>
+          <Fold open={values.video_understanding}>
+            <div className={foldInnerStack}>
+              <p className={inlineNote}>需要支持图像的模型，会增加用量和耗时。</p>
+              <NumberField
+                label="采样间隔（秒）"
+                value={values.video_interval}
+                onChange={value => patch({ video_interval: Number.isFinite(value) ? value : 6 })}
+                minValue={1}
+                maxValue={30}
+                step={1}
+              />
+              <div className={twoCol}>
+                <NumberField
+                  label="拼图列数"
+                  value={values.grid_columns}
+                  onChange={value => patch({ grid_columns: Number.isFinite(value) ? value : 2 })}
+                  minValue={1}
+                  maxValue={10}
+                  step={1}
+                />
+                <NumberField
+                  label="拼图行数"
+                  value={values.grid_rows}
+                  onChange={value => patch({ grid_rows: Number.isFinite(value) ? value : 2 })}
+                  minValue={1}
+                  maxValue={10}
+                  step={1}
+                />
               </div>
             </div>
-          </DisclosurePanel>
-        </Disclosure>
-        {!advancedOpen && (values.asr_provider_id || values.video_understanding) && (
-          <p className={inlineNote}>
-            {[
-              values.asr_provider_id &&
-                `转写：${asrChoices.find(c => c.id === values.asr_provider_id)?.label || '原选项已不可用，请重新选择'}`,
-              values.video_understanding && '视频理解已开启',
-            ]
-              .filter(Boolean)
-              .join(' · ')}
-          </p>
-        )}
+          </Fold>
+        </div>
       </section>
 
       {/* ── 输出内容 ── */}
@@ -530,20 +507,21 @@ export default function NoteForm() {
           label="笔记里要包含哪些元素"
           value={values.format}
           onChange={format => patch({ format })}
-          orientation="horizontal"
         >
-          {NOTE_FORMATS.map(item => (
-            <Checkbox
-              key={item.value}
-              value={item.value}
-              isDisabled={
-                (item.value === 'link' && isLocal) ||
-                (item.value === 'screenshot' && !values.video_understanding)
-              }
-            >
-              {item.label}
-            </Checkbox>
-          ))}
+          <div className={twoCol}>
+            {NOTE_FORMATS.map(item => (
+              <Checkbox
+                key={item.value}
+                value={item.value}
+                isDisabled={
+                  (item.value === 'link' && isLocal) ||
+                  (item.value === 'screenshot' && !values.video_understanding)
+                }
+              >
+                {item.label}
+              </Checkbox>
+            ))}
+          </div>
         </CheckboxGroup>
         <p className={inlineNote}>
           「原片截图」依赖视频理解；本地视频没有在线原片地址，因此不能插入跳转链接。
