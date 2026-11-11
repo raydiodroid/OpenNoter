@@ -10,7 +10,6 @@ import {
   TextField,
 } from '@react-spectrum/s2'
 import { style } from '@react-spectrum/s2/style' with { type: 'macro' }
-import AddIcon from '@react-spectrum/s2/icons/Add'
 
 import { EmptyState, ListDetail, Page, PageHeader, Panel, Section } from '@/components/Page'
 import { ModelConnectionFields } from '@/components/ModelConnectionFields'
@@ -22,6 +21,9 @@ import {
   ListRowMeta,
   ListRowTitle,
 } from '@/components/ListRow'
+import { ProviderIconPicker } from '@/components/ProviderIconPicker'
+import { ProviderListPanel } from '@/components/ProviderListPanel'
+import { PROVIDER_ICONS } from '@/lib/providerIcons'
 import { ProviderMark } from '@/components/Brand'
 import { useProviderStore } from '@/store/providerStore'
 import { useModelStore } from '@/store/modelStore'
@@ -31,8 +33,6 @@ import { toast } from '@/lib/toast'
 import type { Provider } from '@/types'
 import { Notice } from '@/components/Notice'
 
-const listCard = style({ display: 'flex', flexDirection: 'column', gap: 2, padding: 8 })
-const addRow = style({ display: 'flex', paddingBottom: 8 })
 const formStack = style({ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 560 })
 const actions = style({ display: 'flex', justifyContent: 'end', gap: 8 })
 const chips = style({ display: 'flex', flexWrap: 'wrap', gap: 8 })
@@ -91,22 +91,13 @@ function ProviderList({ activeId, onCreate }: { activeId?: string; onCreate: () 
   )
 
   return (
-    <Panel padded={false}>
-      <div className={listCard}>
-        <div className={addRow}>
-          <Button variant="secondary" onPress={onCreate} styles={fullWidth}>
-            <AddIcon />
-            <Text>添加供应商</Text>
-          </Button>
-        </div>
-
-        {visible.length === 0 ? (
-          <Text styles={mutedPadded}>还没有供应商</Text>
-        ) : (
-          visible.map(renderItem)
-        )}
-      </div>
-    </Panel>
+    <ProviderListPanel onCreate={onCreate}>
+      {visible.length === 0 ? (
+        <Text styles={mutedPadded}>还没有供应商</Text>
+      ) : (
+        visible.map(renderItem)
+      )}
+    </ProviderListPanel>
   )
 }
 
@@ -130,6 +121,7 @@ function ProviderDetail({ id, isCreate }: { id?: string; isCreate?: boolean }) {
   const [baseUrl, setBaseUrl] = useState('')
   const [type, setType] = useState('custom')
   const [logo, setLogo] = useState('custom')
+  const [enabled, setEnabled] = useState(1)
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
   const [search, setSearch] = useState('')
@@ -156,6 +148,7 @@ function ProviderDetail({ id, isCreate }: { id?: string; isCreate?: boolean }) {
         setBaseUrl(provider.baseUrl)
         setType(provider.type)
         setLogo(provider.logo)
+        setEnabled(provider.enabled)
       }
       await loadProviderModels(id)
       if (!cancelled) setLoading(false)
@@ -201,7 +194,7 @@ function ProviderDetail({ id, isCreate }: { id?: string; isCreate?: boolean }) {
           baseUrl: baseUrl.trim(),
           type,
           logo,
-          enabled: 1,
+          enabled: useProviderStore.getState().providers.find(p => p.id === id)?.enabled ?? enabled,
         })
         toast.success('已保存')
         setDirty(false)
@@ -283,6 +276,16 @@ function ProviderDetail({ id, isCreate }: { id?: string; isCreate?: boolean }) {
             }}
             isDisabled={isBuiltIn}
             isRequired
+          />
+          <ProviderIconPicker
+            value={logo}
+            onChange={value => {
+              setLogo(value)
+              setDirty(true)
+            }}
+            isDisabled={saving}
+            options={PROVIDER_ICONS}
+            renderIcon={name => <ProviderMark name={name} size={20} boxed={false} />}
           />
           <ModelConnectionFields
             isDisabled={saving}

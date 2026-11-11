@@ -35,6 +35,8 @@ import {
   ListRowMeta,
   ListRowTitle,
 } from '@/components/ListRow'
+import { ProviderIconPicker } from '@/components/ProviderIconPicker'
+import { ProviderListPanel } from '@/components/ProviderListPanel'
 import { AsrMark } from '@/components/AsrMark'
 import { ASR_ICONS } from '@/lib/asrIcons'
 import { hostOf } from '@/lib/format'
@@ -65,7 +67,6 @@ const settingsStack = style({ display: 'flex', flexDirection: 'column', gap: 24 
 const defaultStack = style({ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 640 })
 const pageStack = style({ display: 'flex', flexDirection: 'column' })
 const maxForm = style({ width: 'full' })
-const listCard = style({ display: 'flex', flexDirection: 'column', gap: 2, padding: 8 })
 const detailHead = style({ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 })
 const detailTitle = style({ font: 'title', color: 'neutral', margin: 0 })
 const formStack = style({ display: 'flex', flexDirection: 'column', maxWidth: 560, gap: 16 })
@@ -406,43 +407,37 @@ export default function TranscriberPage({ embedded = false }: { embedded?: boole
         asrModel.trim() !== selectedProvider?.model_name ||
         Boolean(asrApiKey.trim())))
   const engineList = (
-    <Panel padded={false}>
-      <div className={listCard} aria-label="转写供应商">
-        <Button variant="secondary" onPress={startCreate} isDisabled={saving} styles={maxForm}>
-          <AddIcon />
-          <Text>添加供应商</Text>
-        </Button>
-        {config.providers.map(provider => (
-          <ListRow key={provider.id} selected={selectedType === provider.id}>
-            <ListRowButton
-              aria-current={selectedType === provider.id ? 'true' : undefined}
-              onClick={() => selectProvider(provider)}
-              disabled={saving}
-            >
-              <AsrMark name={provider.logo} />
-              <ListRowBody>
-                <ListRowTitle>{provider.name}</ListRowTitle>
-                <ListRowMeta>
-                  {provider.engine === 'groq'
-                    ? hostOf(provider.base_url) || '未配置地址'
-                    : isWhisperType(provider.id)
-                      ? '本地模型'
-                      : '内置在线服务'}
-                  {config.transcriber_type === provider.id ? ' · 默认' : ''}
-                  {!provider.enabled ? ' · 已停用' : ''}
-                </ListRowMeta>
-              </ListRowBody>
-            </ListRowButton>
-            <Switch
-              aria-label={`启用 ${provider.name}`}
-              isSelected={provider.enabled}
-              isDisabled={saving}
-              onChange={enabled => toggle(provider, enabled)}
-            />
-          </ListRow>
-        ))}
-      </div>
-    </Panel>
+    <ProviderListPanel onCreate={startCreate} isDisabled={saving}>
+      {config.providers.map(provider => (
+        <ListRow key={provider.id} selected={selectedType === provider.id}>
+          <ListRowButton
+            aria-current={selectedType === provider.id ? 'true' : undefined}
+            onClick={() => selectProvider(provider)}
+            disabled={saving}
+          >
+            <AsrMark name={provider.logo} />
+            <ListRowBody>
+              <ListRowTitle>{provider.name}</ListRowTitle>
+              <ListRowMeta>
+                {provider.engine === 'groq'
+                  ? hostOf(provider.base_url) || '未配置地址'
+                  : isWhisperType(provider.id)
+                    ? '本地模型'
+                    : '内置在线服务'}
+                {config.transcriber_type === provider.id ? ' · 默认' : ''}
+                {!provider.enabled ? ' · 已停用' : ''}
+              </ListRowMeta>
+            </ListRowBody>
+          </ListRowButton>
+          <Switch
+            aria-label={`启用 ${provider.name}`}
+            isSelected={provider.enabled}
+            isDisabled={saving}
+            onChange={enabled => toggle(provider, enabled)}
+          />
+        </ListRow>
+      ))}
+    </ProviderListPanel>
   )
 
   const content = (
@@ -459,11 +454,10 @@ export default function TranscriberPage({ embedded = false }: { embedded?: boole
               <PickerItem
                 key={provider.id}
                 id={provider.id}
+                textValue={provider.name}
                 isDisabled={!provider.enabled || (provider.id === 'mlx-whisper' && !mlxAvailable)}
               >
-                {provider.name}
-                {provider.model_name ? ` · ${provider.model_name}` : ''}
-                {!provider.enabled ? '（已停用）' : ''}
+                <Text slot="label">{`${provider.name}${provider.model_name ? ` · ${provider.model_name}` : ''}${!provider.enabled ? '（已停用）' : ''}`}</Text>
               </PickerItem>
             ))}
           </Picker>
@@ -525,19 +519,13 @@ export default function TranscriberPage({ embedded = false }: { embedded?: boole
                     isDisabled={saving}
                     styles={maxForm}
                   />
-                  <Picker
-                    label="图标"
-                    selectedKey={providerLogo}
-                    onSelectionChange={key => setProviderLogo(String(key))}
+                  <ProviderIconPicker
+                    value={providerLogo}
+                    onChange={setProviderLogo}
                     isDisabled={saving}
-                  >
-                    {ASR_ICONS.map(icon => (
-                      <PickerItem key={icon.id} id={icon.id} textValue={icon.label}>
-                        <AsrMark name={icon.id} />
-                        <Text>{icon.label}</Text>
-                      </PickerItem>
-                    ))}
-                  </Picker>
+                    options={ASR_ICONS}
+                    renderIcon={name => <AsrMark name={name} boxed={false} />}
+                  />
                   {selectedProvider && !selectedProvider.enabled && (
                     <Notice variant="notice">
                       <Text>此供应商已停用。启用后才能设为默认或用于转写。</Text>

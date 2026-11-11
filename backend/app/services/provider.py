@@ -84,7 +84,7 @@ class ProviderService:
             # 原用 kombu.uuid()（32 位 hex）。改用标准库，避免为这一个
             # 函数引入整个 kombu/amqp 依赖链。
             id = _uuid_mod.uuid4().hex.lower()
-            logo = 'custom'
+            logo = logo or 'custom'
             return insert_provider(id, name, api_key, base_url, logo, type_, enabled)
         except Exception as  e:
             logger.error("创建模式失败: %s", e, exc_info=True)

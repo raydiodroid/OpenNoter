@@ -199,16 +199,19 @@ export function Panel({ children, padded = true }: { children: ReactNode; padded
 
 const listDetail = style({
   display: 'flex',
+  flexWrap: 'wrap',
   gap: 24,
   alignItems: 'start',
 })
 
 const listColumn = style({
   width: 280,
+  maxWidth: 'full',
   flexShrink: 0,
 })
 
 const detailColumn = style({
+  flexBasis: 320,
   flexGrow: 1,
   flexShrink: 1,
   minWidth: 0,

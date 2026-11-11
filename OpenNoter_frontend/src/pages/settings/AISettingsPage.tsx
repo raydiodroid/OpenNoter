@@ -52,7 +52,7 @@ export default function AISettingsPage({
           <Tab id="transcriber">音频转写</Tab>
         </TabList>
 
-        <TabPanel id="model">
+        <TabPanel id="model" shouldForceMount>
           <div className={panelBody}>
             {/* 个人凭据区块（未开启 BYOK 时显示「当前站点统一使用管理员配置」）。
                 站点级策略在「设置 → 站点设置」页，不在这里——
@@ -65,7 +65,7 @@ export default function AISettingsPage({
           </div>
         </TabPanel>
 
-        <TabPanel id="transcriber">
+        <TabPanel id="transcriber" shouldForceMount>
           <div className={panelBody}>
             <TranscriberPage embedded />
           </div>

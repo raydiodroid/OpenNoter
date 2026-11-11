@@ -176,3 +176,21 @@ def test_wrong_key_reveal_returns_empty(provider_db, monkeypatch):
     stored = row.api_key
     monkeypatch.setenv("OPENNOTER_SECRET_KEY", "totally-different-key")
     assert reveal_api_key(stored) == ""
+
+
+@pytest.mark.parametrize("logo, expected", [("deepseek", "deepseek"), (None, "custom")])
+def test_create_and_edit_provider_icon_preserves_credentials_and_state(provider_db, logo, expected):
+    from app.services.provider import ProviderService
+    from app.db.provider_dao import get_provider_by_id, reveal_api_key
+
+    provider_id = ProviderService.add_provider(
+        "Icon choice", "original-secret", "https://example.com/v1", logo, "built-in", enabled=0
+    )
+    row = get_provider_by_id(provider_id)
+    assert row.logo == expected
+    assert row.type == "custom"
+    ProviderService.update_provider(provider_id, {"logo": "qwen"})
+    updated = get_provider_by_id(provider_id)
+    assert updated.logo == "qwen"
+    assert updated.enabled == 0
+    assert reveal_api_key(updated.api_key) == "original-secret"

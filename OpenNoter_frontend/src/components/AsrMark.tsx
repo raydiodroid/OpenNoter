@@ -22,18 +22,16 @@ const box = style({
   borderStyle: 'solid',
   borderColor: 'gray-200',
 })
-export function AsrMark({ name }: { name: string }) {
+export function AsrMark({ name, boxed = true }: { name: string; boxed?: boolean }) {
   const Icon = icons[name as keyof typeof icons] || Cloud
   const Brand = brands[name as keyof typeof brands]
-  return (
-    <span className={box}>
-      {name === 'openai' || name === 'groq' ? (
-        <ProviderMark name={name} size={20} boxed={false} />
-      ) : Brand ? (
-        <PlatformMark Logo={Brand} size={20} />
-      ) : (
-        <Icon />
-      )}
-    </span>
-  )
+  const content =
+    name === 'openai' || name === 'groq' ? (
+      <ProviderMark name={name} size={20} boxed={false} />
+    ) : Brand ? (
+      <PlatformMark Logo={Brand} size={20} />
+    ) : (
+      <Icon />
+    )
+  return boxed ? <span className={box}>{content}</span> : content
 }
