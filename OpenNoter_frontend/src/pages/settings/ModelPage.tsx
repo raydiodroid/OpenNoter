@@ -31,6 +31,7 @@ import { useProviderStore } from '@/store/providerStore'
 import { useModelStore } from '@/store/modelStore'
 import { testConnection } from '@/services/model'
 import { hostOf } from '@/lib/format'
+import { sortModelProviders } from '@/lib/providerPresentation'
 import { toast } from '@/lib/toast'
 import type { Provider } from '@/types'
 import { Notice } from '@/components/Notice'
@@ -60,7 +61,7 @@ function ProviderList({ activeId, onCreate }: { activeId?: string; onCreate: () 
   const update = useProviderStore(s => s.update)
 
   const isTranscriberSlot = (id: string) => id === 'groq'
-  const visible = providers.filter(p => !isTranscriberSlot(p.id))
+  const visible = sortModelProviders(providers.filter(p => !isTranscriberSlot(p.id)))
 
   const toggle = async (provider: Provider, next: boolean) => {
     try {

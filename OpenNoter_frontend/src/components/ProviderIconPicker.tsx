@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { Picker, PickerItem, Text } from '@react-spectrum/s2'
+import { IconContext, Picker, PickerItem, Text } from '@react-spectrum/s2'
 import { style } from '@react-spectrum/s2/style' with { type: 'macro' }
 
 const label = style({ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 })
@@ -41,7 +41,8 @@ export function ProviderIconPicker({
           <Text slot="label">
             <span className={label}>
               <span className={icon} aria-hidden="true">
-                {renderIcon(option.id)}
+                {/* These icons live inside the label, not Picker's offset icon column. */}
+                <IconContext.Provider value={{}}>{renderIcon(option.id)}</IconContext.Provider>
               </span>
               <span>{option.label}</span>
             </span>

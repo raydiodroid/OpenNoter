@@ -5,7 +5,7 @@ import AddIcon from '@react-spectrum/s2/icons/Add'
 import { Panel } from '@/components/Page'
 
 const list = style({ display: 'flex', flexDirection: 'column', gap: 2, padding: 8 })
-const addRow = style({ display: 'flex', paddingBottom: 8 })
+const addRow = style({ display: 'flex', paddingTop: 8 })
 const fullWidth = style({ width: 'full' })
 
 export function ProviderListPanel({
@@ -20,13 +20,13 @@ export function ProviderListPanel({
   return (
     <Panel padded={false}>
       <div className={list} aria-label="供应商列表">
+        {children}
         <div className={addRow}>
           <Button variant="secondary" onPress={onCreate} isDisabled={isDisabled} styles={fullWidth}>
             <AddIcon />
             <Text>添加供应商</Text>
           </Button>
         </div>
-        {children}
       </div>
     </Panel>
   )
