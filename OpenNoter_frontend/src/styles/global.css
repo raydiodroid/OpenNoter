@@ -410,7 +410,7 @@ select {
   background: var(--note-accent-soft-hover);
 }
 
-/* 平台品牌标：SVG 自带 200px 宽高，外层裁切 */
+/* 平台品牌标跟随容器尺寸 */
 .brand-mark > svg {
   width: 100%;
   height: 100%;

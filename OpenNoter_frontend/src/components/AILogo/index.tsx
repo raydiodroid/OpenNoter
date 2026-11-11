@@ -6,7 +6,7 @@
  *   走根导入会让 Rollup 直接报错，也会把整个图标库拖进产物。
  * - 深层导入保证 tree-shake，产物只包含用到的 13 个。
  *
- * 视觉策略：保留品牌色，统一放进同尺寸圆角方框，与 S2 的 20px 线性图标视觉重量对齐。
+ * 视觉策略：使用单色品牌标识，统一放进同尺寸圆角方框，与 S2 的 20px 线性图标视觉重量对齐。
  */
 import OpenAI from '@lobehub/icons/es/OpenAI/components/Mono'
 import Claude from '@lobehub/icons/es/Claude/components/Mono'

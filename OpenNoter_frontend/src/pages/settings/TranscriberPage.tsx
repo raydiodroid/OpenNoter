@@ -53,6 +53,7 @@ import {
   type ModelStatus,
   type TranscriberConfig,
 } from '@/services/transcriber'
+import { useAuthStore } from '@/store/authStore'
 import { toast } from '@/lib/toast'
 import { Notice } from '@/components/Notice'
 import { Fold } from '@/components/Fold'
@@ -60,6 +61,8 @@ import { Fold } from '@/components/Fold'
 const isWhisperType = (type: string) => type === 'fast-whisper' || type === 'mlx-whisper'
 
 // 无 gap：间距由各子项自带，Fold 收起时随之消失（见 Fold.tsx 注释）
+const settingsStack = style({ display: 'flex', flexDirection: 'column', gap: 24 })
+const defaultStack = style({ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 640 })
 const pageStack = style({ display: 'flex', flexDirection: 'column' })
 const maxForm = style({ width: 'full' })
 const listCard = style({ display: 'flex', flexDirection: 'column', gap: 2, padding: 8 })
@@ -100,6 +103,8 @@ const SIZE_HINT: Record<string, string> = {
 }
 
 export default function TranscriberPage({ embedded = false }: { embedded?: boolean }) {
+  const admin = useAuthStore(s => s.user?.is_superuser)
+  const [defaultType, setDefaultType] = useState('')
   const [config, setConfig] = useState<TranscriberConfig | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -155,7 +160,9 @@ export default function TranscriberPage({ embedded = false }: { embedded?: boole
 
   const reloadConfig = useCallback(async () => {
     try {
-      setConfig(await getTranscriberConfig())
+      const data = await getTranscriberConfig()
+      setConfig(data)
+      setDefaultType(data.transcriber_type)
     } catch {
       // 静默
     }
@@ -166,6 +173,7 @@ export default function TranscriberPage({ embedded = false }: { embedded?: boole
       try {
         const data = await getTranscriberConfig()
         setConfig(data)
+        setDefaultType(data.transcriber_type)
         const selected = data.providers.find(p => p.id === data.transcriber_type)
         if (selected) selectProvider(selected)
         setSelectedSize(data.whisper_model_size)
@@ -212,9 +220,10 @@ export default function TranscriberPage({ embedded = false }: { embedded?: boole
 
   /** 选中的 Whisper 模型还没下载时，保存前要先确认（用 S2 AlertDialog，不用浏览器原生 confirm） */
   const needsModelDownload = () => {
-    if (!isWhisperType(selectedType)) return false
-    const target = currentModels.find(model => model.model_size === selectedSize)
-    return Boolean(target && !target.downloaded && !target.downloading)
+    if (!isWhisperType(defaultType)) return false
+    const statuses = defaultType === 'mlx-whisper' ? mlxStatus : whisperStatus
+    const target = statuses.find(model => model.model_size === config?.whisper_model_size)
+    return !target?.downloaded && !target?.downloading
   }
 
   const save = async () => {
@@ -257,8 +266,7 @@ export default function TranscriberPage({ embedded = false }: { embedded?: boole
     setSaving(true)
     try {
       await updateTranscriberConfig({
-        transcriber_type: selectedType,
-        whisper_model_size: isWhisperType(selectedType) ? selectedSize : undefined,
+        transcriber_type: defaultType,
       })
       await reloadConfig()
       toast.success('默认转写供应商已更新')
@@ -289,6 +297,7 @@ export default function TranscriberPage({ embedded = false }: { embedded?: boole
       await deleteAsrProvider(selectedType)
       const data = await getTranscriberConfig()
       setConfig(data)
+      setDefaultType(data.transcriber_type)
       selectProvider(data.providers.find(p => p.id === data.transcriber_type) || data.providers[0])
       toast.success('供应商已删除')
     } catch {
@@ -437,341 +446,360 @@ export default function TranscriberPage({ embedded = false }: { embedded?: boole
   )
 
   const content = (
-    <ListDetail list={engineList}>
-      <div className={pageStack}>
-        <Section
-          title="转写供应商"
-          description={`站点默认：${config.providers.find(p => p.id === config.transcriber_type)?.name || '未配置'}。选中服务后点击「设为默认」；工作台可为本次任务单独选择，自动模式仍按 BYOK 策略处理。`}
-        >
-          <div className={maxForm}>
-            <Panel>
-              <div className={detailHead}>
-                <AsrMark name={providerLogo} />
-                <h2 className={detailTitle}>
-                  {isCreate ? '添加供应商' : selectedProvider?.name || '转写供应商'}
-                </h2>
-              </div>
-              <div className={formStack}>
-                <TextField
-                  label="供应商名称"
-                  value={providerName}
-                  onChange={setProviderName}
-                  isRequired
-                  isDisabled={saving}
-                  styles={maxForm}
-                />
-                <Picker
-                  label="图标"
-                  selectedKey={providerLogo}
-                  onSelectionChange={key => setProviderLogo(String(key))}
-                  isDisabled={saving}
-                >
-                  {ASR_ICONS.map(icon => (
-                    <PickerItem key={icon.id} id={icon.id} textValue={icon.label}>
-                      <AsrMark name={icon.id} />
-                      <Text>{icon.label}</Text>
-                    </PickerItem>
-                  ))}
-                </Picker>
-                {selectedProvider && !selectedProvider.enabled && (
-                  <Notice variant="notice">
-                    <Text>此供应商已停用。启用后才能设为默认或用于转写。</Text>
-                  </Notice>
-                )}
-                {isOnline && (
-                  <>
-                    <Notice variant="informative">
-                      <Text>
-                        任意 OpenAI 兼容的语音转写服务（调用 /audio/transcriptions），可填 Groq
-                        云端，也可填自建网关。
-                      </Text>
-                    </Notice>
-                    <ModelConnectionFields
-                      apiKey={asrApiKey}
-                      onApiKeyChange={setAsrApiKey}
-                      keyPlaceholder={
-                        selectedProvider?.has_api_key ? '已配置，留空则不修改' : '尚未配置，请填写'
-                      }
-                      baseUrl={asrBaseUrl}
-                      onBaseUrlChange={setAsrBaseUrl}
-                      addressPlaceholder="https://api.groq.com/openai/v1"
-                      modelName={asrModel}
-                      onModelNameChange={setAsrModel}
-                      modelPlaceholder="whisper-large-v3"
-                      isDisabled={saving}
-                    />
-                  </>
-                )}
-
-                {isWhisperType(selectedType) && (
-                  <>
-                    <Picker
-                      label="Whisper 模型大小"
-                      isDisabled={saving}
-                      selectedKey={selectedSize}
-                      onSelectionChange={key => setSelectedSize(String(key))}
-                    >
-                      {config.whisper_model_sizes.map(size => {
-                        const status = currentModels.find(model => model.model_size === size)
-                        return (
-                          <PickerItem key={size} id={size} textValue={size}>
-                            {status?.downloaded ? `${size}（已下载）` : size}
-                          </PickerItem>
-                        )
-                      })}
-                    </Picker>
-                    <Text styles={muted}>模型越大精度越高，但速度更慢、占用更多显存。</Text>
-                  </>
-                )}
-
-                <LabeledValue
-                  label="类型"
-                  value={
-                    isWhisperType(selectedType)
-                      ? '本地转写引擎'
-                      : isOnline
-                        ? '在线服务（OpenAI 兼容）'
-                        : '在线转写引擎'
-                  }
-                />
-
-                {selectedType === 'mlx-whisper' && !config.mlx_whisper_available ? (
-                  <div className={spacedAfterFirst}>
-                    <Notice variant="notice">
-                      <AlertIcon />
-                      <Text>
-                        MLX Whisper 当前不可用：需要 macOS 并安装 mlx-whisper，安装后重启后端生效。
-                      </Text>
-                    </Notice>
-                  </div>
-                ) : null}
-
-                <div className={actions}>
-                  <DialogTrigger
-                    isOpen={confirmOpen}
-                    onOpenChange={open => {
-                      if (!open) setConfirmOpen(false)
-                    }}
-                  >
-                    <Button
-                      variant="secondary"
-                      onPress={() => {
-                        if (needsModelDownload()) {
-                          setConfirmOpen(true)
-                          return
-                        }
-                        void setDefault()
-                      }}
-                      isDisabled={
-                        saving ||
-                        isCreate ||
-                        dirty ||
-                        !selectedProvider?.enabled ||
-                        selectedType === config.transcriber_type ||
-                        (selectedType === 'mlx-whisper' && !mlxAvailable)
-                      }
-                    >
-                      {selectedType === config.transcriber_type ? '默认使用' : '设为默认'}
-                    </Button>
-                    <AlertDialog
-                      title="所选模型尚未下载"
-                      variant="warning"
-                      primaryActionLabel="继续保存"
-                      cancelLabel="取消"
-                      onPrimaryAction={() => {
-                        setConfirmOpen(false)
-                        void setDefault()
-                      }}
-                    >
-                      切换后，请在下方下载 {selectedSize} 模型（
-                      {SIZE_HINT[selectedSize] || '体积未知'}）。
-                      下载完成前，需要本地转写的新任务会提示模型未就绪。
-                    </AlertDialog>
-                  </DialogTrigger>
-                  {selectedProvider && !selectedProvider.builtin && (
-                    <DialogTrigger>
-                      <Button
-                        variant="negative"
-                        isDisabled={saving || selectedType === config.transcriber_type}
-                      >
-                        删除供应商
-                      </Button>
-                      <AlertDialog
-                        title="删除供应商"
-                        variant="destructive"
-                        primaryActionLabel="删除"
-                        cancelLabel="取消"
-                        onPrimaryAction={() => void removeProvider()}
-                      >
-                        删除 {selectedProvider.name} 及其连接凭据？历史笔记会保留。
-                      </AlertDialog>
-                    </DialogTrigger>
-                  )}
-                  <Button
-                    variant="accent"
-                    onPress={() => void save()}
-                    isDisabled={saving || !dirty}
-                  >
-                    {saving ? '保存中…' : isCreate ? '添加供应商' : '保存修改'}
-                  </Button>
-                </div>
-              </div>
-            </Panel>
-          </div>
-        </Section>
-
-        <Fold open={isWhisperType(selectedType)}>
-          <div className={modelSection}>
-            <Section
-              title={selectedType === 'mlx-whisper' ? 'MLX Whisper 模型' : 'Faster Whisper 模型'}
-            >
-              <TableView
-                aria-label="转写模型"
-                selectionMode="none"
-                density="spacious"
-                overflowMode="truncate"
-                styles={tableStyles}
+    <div className={settingsStack}>
+      <Panel>
+        <div className={defaultStack}>
+          <Picker
+            label="站点默认音频转写"
+            selectedKey={defaultType}
+            onSelectionChange={key => setDefaultType(String(key))}
+            isDisabled={!admin || saving}
+          >
+            {config.providers.map(provider => (
+              <PickerItem
+                key={provider.id}
+                id={provider.id}
+                isDisabled={!provider.enabled || (provider.id === 'mlx-whisper' && !mlxAvailable)}
               >
-                <TableHeader>
-                  <Column isRowHeader>模型</Column>
-                  <Column width={120}>状态</Column>
-                  <Column width={240}>体积 / 错误</Column>
-                  <Column width={104}>操作</Column>
-                </TableHeader>
-                <TableBody items={currentModels}>
-                  {(model: ModelStatus) => (
-                    <Row>
-                      <Cell>
-                        <Text styles={cellText}>{model.model_size}</Text>
-                      </Cell>
-                      <Cell>{statusOf(model)}</Cell>
-                      <Cell>
-                        <span className={muted} title={model.error}>
-                          {model.failed && model.error
-                            ? model.error.slice(0, 160)
-                            : SIZE_HINT[model.model_size] || '体积未知'}
-                        </span>
-                      </Cell>
-                      <Cell>
-                        {!model.downloaded && !model.downloading ? (
-                          <Button
-                            variant="secondary"
-                            size="S"
-                            onPress={() => download(model.model_size)}
-                          >
-                            <DownloadIcon />
-                            <Text>{model.failed ? '重试' : '下载'}</Text>
-                          </Button>
-                        ) : null}
-                      </Cell>
-                    </Row>
+                {provider.name}
+                {provider.model_name ? ` · ${provider.model_name}` : ''}
+                {!provider.enabled ? '（已停用）' : ''}
+              </PickerItem>
+            ))}
+          </Picker>
+          {admin && (
+            <DialogTrigger
+              isOpen={confirmOpen}
+              onOpenChange={open => {
+                if (!open) setConfirmOpen(false)
+              }}
+            >
+              <Button
+                variant="accent"
+                onPress={() => {
+                  if (needsModelDownload()) setConfirmOpen(true)
+                  else void setDefault()
+                }}
+                isDisabled={
+                  saving ||
+                  !config.providers.find(p => p.id === defaultType)?.enabled ||
+                  (defaultType === 'mlx-whisper' && !mlxAvailable)
+                }
+              >
+                保存默认音频转写
+              </Button>
+              <AlertDialog
+                title="所选模型尚未下载"
+                variant="warning"
+                primaryActionLabel="继续保存"
+                cancelLabel="取消"
+                onPrimaryAction={() => {
+                  setConfirmOpen(false)
+                  void setDefault()
+                }}
+              >
+                请先下载 {config.whisper_model_size}{' '}
+                模型。下载完成前，需要本地转写的新任务会提示模型未就绪。
+              </AlertDialog>
+            </DialogTrigger>
+          )}
+        </div>
+      </Panel>
+      <ListDetail list={engineList}>
+        <div className={pageStack}>
+          <div>
+            <div className={maxForm}>
+              <Panel>
+                <div className={detailHead}>
+                  <AsrMark name={providerLogo} />
+                  <h2 className={detailTitle}>
+                    {isCreate ? '添加供应商' : selectedProvider?.name || '转写供应商'}
+                  </h2>
+                </div>
+                <div className={formStack}>
+                  <TextField
+                    label="供应商名称"
+                    value={providerName}
+                    onChange={setProviderName}
+                    isRequired
+                    isDisabled={saving}
+                    styles={maxForm}
+                  />
+                  <Picker
+                    label="图标"
+                    selectedKey={providerLogo}
+                    onSelectionChange={key => setProviderLogo(String(key))}
+                    isDisabled={saving}
+                  >
+                    {ASR_ICONS.map(icon => (
+                      <PickerItem key={icon.id} id={icon.id} textValue={icon.label}>
+                        <AsrMark name={icon.id} />
+                        <Text>{icon.label}</Text>
+                      </PickerItem>
+                    ))}
+                  </Picker>
+                  {selectedProvider && !selectedProvider.enabled && (
+                    <Notice variant="notice">
+                      <Text>此供应商已停用。启用后才能设为默认或用于转写。</Text>
+                    </Notice>
                   )}
-                </TableBody>
-              </TableView>
-            </Section>
-          </div>
-        </Fold>
+                  {isOnline && (
+                    <>
+                      <Notice variant="informative">
+                        <Text>
+                          任意 OpenAI 兼容的语音转写服务（调用 /audio/transcriptions），可填 Groq
+                          云端，也可填自建网关。
+                        </Text>
+                      </Notice>
+                      <ModelConnectionFields
+                        apiKey={asrApiKey}
+                        onApiKeyChange={setAsrApiKey}
+                        keyPlaceholder={
+                          selectedProvider?.has_api_key
+                            ? '已配置，留空则不修改'
+                            : '尚未配置，请填写'
+                        }
+                        baseUrl={asrBaseUrl}
+                        onBaseUrlChange={setAsrBaseUrl}
+                        addressPlaceholder="https://api.groq.com/openai/v1"
+                        modelName={asrModel}
+                        onModelNameChange={setAsrModel}
+                        modelPlaceholder="whisper-large-v3"
+                        isDisabled={saving}
+                      />
+                    </>
+                  )}
 
-        <Fold open={selectedType === 'fast-whisper'}>
-          <div className={modelSection}>
-            <Section title="自定义模型">
-              <div className={maxForm}>
-                <Panel>
-                  <div className={formStack}>
-                    <Text styles={muted}>
-                      填 HF repo_id（如
-                      Systran/faster-whisper-large-v3，添加后手动下载）或本地模型目录（目录内需含
-                      model.bin，下载会跳过）。添加后即可在上方「模型大小」里选用。
-                    </Text>
-
-                    {config.whisper_custom_models &&
-                    Object.keys(config.whisper_custom_models).length > 0 ? (
-                      <TableView
-                        aria-label="自定义模型"
-                        selectionMode="none"
-                        density="spacious"
-                        overflowMode="truncate"
-                        styles={tableStyles}
+                  {isWhisperType(selectedType) && (
+                    <>
+                      <Picker
+                        label="Whisper 模型大小"
+                        isDisabled={saving}
+                        selectedKey={selectedSize}
+                        onSelectionChange={key => setSelectedSize(String(key))}
                       >
-                        <TableHeader>
-                          <Column isRowHeader>名称</Column>
-                          <Column>仓库或路径</Column>
-                          <Column width={120}>状态</Column>
-                          <Column width={64}>操作</Column>
-                        </TableHeader>
-                        <TableBody items={Object.entries(config.whisper_custom_models)}>
-                          {([name, target]: [string, string]) => {
-                            const status = whisperStatus.find(model => model.model_size === name)
-                            return (
-                              <Row key={name}>
-                                <Cell>
-                                  <Text styles={cellText}>{name}</Text>
-                                </Cell>
-                                <Cell>
-                                  <span className={muted} title={target}>
-                                    {target}
-                                  </span>
-                                </Cell>
-                                <Cell>
-                                  {status?.downloaded ? (
-                                    <StatusIndicator tone="positive">已下载</StatusIndicator>
-                                  ) : null}
-                                  {status?.downloading ? (
-                                    <StatusIndicator tone="notice">下载中</StatusIndicator>
-                                  ) : null}
-                                  {status?.failed ? (
-                                    <StatusIndicator tone="negative">下载失败</StatusIndicator>
-                                  ) : null}
-                                </Cell>
-                                <Cell>
-                                  <ActionButton
-                                    isQuiet
-                                    size="S"
-                                    aria-label={`删除 ${name}`}
-                                    onPress={() => removeCustom(name)}
-                                  >
-                                    <DeleteIcon />
-                                  </ActionButton>
-                                </Cell>
-                              </Row>
-                            )
-                          }}
-                        </TableBody>
-                      </TableView>
-                    ) : (
-                      <Text styles={muted}>还没有自定义模型。</Text>
-                    )}
+                        {config.whisper_model_sizes.map(size => {
+                          const status = currentModels.find(model => model.model_size === size)
+                          return (
+                            <PickerItem key={size} id={size} textValue={size}>
+                              {status?.downloaded ? `${size}（已下载）` : size}
+                            </PickerItem>
+                          )
+                        })}
+                      </Picker>
+                      <Text styles={muted}>模型越大精度越高，但速度更慢、占用更多显存。</Text>
+                    </>
+                  )}
 
-                    <div className={addForm}>
-                      <div className={inlineRow}>
-                        <TextField
-                          label="模型名称"
-                          value={newName}
-                          onChange={setNewName}
-                          placeholder="my-large-v3"
-                          styles={nameField}
-                        />
-                        <TextField
-                          label="HF repo_id 或本地路径"
-                          value={newTarget}
-                          onChange={setNewTarget}
-                          placeholder="Systran/faster-whisper-large-v3"
-                          styles={grow}
-                        />
-                        <Button variant="secondary" onPress={addCustom} isDisabled={adding}>
-                          <AddIcon />
-                          <Text>{adding ? '添加中…' : '添加'}</Text>
+                  <LabeledValue
+                    label="类型"
+                    value={
+                      isWhisperType(selectedType)
+                        ? '本地转写引擎'
+                        : isOnline
+                          ? '在线服务（OpenAI 兼容）'
+                          : '在线转写引擎'
+                    }
+                  />
+
+                  {selectedType === 'mlx-whisper' && !config.mlx_whisper_available ? (
+                    <div className={spacedAfterFirst}>
+                      <Notice variant="notice">
+                        <AlertIcon />
+                        <Text>
+                          MLX Whisper 当前不可用：需要 macOS 并安装
+                          mlx-whisper，安装后重启后端生效。
+                        </Text>
+                      </Notice>
+                    </div>
+                  ) : null}
+
+                  <div className={actions}>
+                    {selectedProvider && !selectedProvider.builtin && (
+                      <DialogTrigger>
+                        <Button
+                          variant="negative"
+                          isDisabled={saving || selectedType === config.transcriber_type}
+                        >
+                          删除供应商
                         </Button>
+                        <AlertDialog
+                          title="删除供应商"
+                          variant="destructive"
+                          primaryActionLabel="删除"
+                          cancelLabel="取消"
+                          onPrimaryAction={() => void removeProvider()}
+                        >
+                          删除 {selectedProvider.name} 及其连接凭据？历史笔记会保留。
+                        </AlertDialog>
+                      </DialogTrigger>
+                    )}
+                    <Button
+                      variant="accent"
+                      onPress={() => void save()}
+                      isDisabled={saving || !dirty}
+                    >
+                      {saving ? '保存中…' : isCreate ? '添加供应商' : '保存修改'}
+                    </Button>
+                  </div>
+                </div>
+              </Panel>
+            </div>
+          </div>
+
+          <Fold open={isWhisperType(selectedType)}>
+            <div className={modelSection}>
+              <Section
+                title={selectedType === 'mlx-whisper' ? 'MLX Whisper 模型' : 'Faster Whisper 模型'}
+              >
+                <TableView
+                  aria-label="转写模型"
+                  selectionMode="none"
+                  density="spacious"
+                  overflowMode="truncate"
+                  styles={tableStyles}
+                >
+                  <TableHeader>
+                    <Column isRowHeader>模型</Column>
+                    <Column width={120}>状态</Column>
+                    <Column width={240}>体积 / 错误</Column>
+                    <Column width={104}>操作</Column>
+                  </TableHeader>
+                  <TableBody items={currentModels}>
+                    {(model: ModelStatus) => (
+                      <Row>
+                        <Cell>
+                          <Text styles={cellText}>{model.model_size}</Text>
+                        </Cell>
+                        <Cell>{statusOf(model)}</Cell>
+                        <Cell>
+                          <span className={muted} title={model.error}>
+                            {model.failed && model.error
+                              ? model.error.slice(0, 160)
+                              : SIZE_HINT[model.model_size] || '体积未知'}
+                          </span>
+                        </Cell>
+                        <Cell>
+                          {!model.downloaded && !model.downloading ? (
+                            <Button
+                              variant="secondary"
+                              size="S"
+                              onPress={() => download(model.model_size)}
+                            >
+                              <DownloadIcon />
+                              <Text>{model.failed ? '重试' : '下载'}</Text>
+                            </Button>
+                          ) : null}
+                        </Cell>
+                      </Row>
+                    )}
+                  </TableBody>
+                </TableView>
+              </Section>
+            </div>
+          </Fold>
+
+          <Fold open={selectedType === 'fast-whisper'}>
+            <div className={modelSection}>
+              <Section title="自定义模型">
+                <div className={maxForm}>
+                  <Panel>
+                    <div className={formStack}>
+                      <Text styles={muted}>
+                        填 HF repo_id（如
+                        Systran/faster-whisper-large-v3，添加后手动下载）或本地模型目录（目录内需含
+                        model.bin，下载会跳过）。添加后即可在上方「模型大小」里选用。
+                      </Text>
+
+                      {config.whisper_custom_models &&
+                      Object.keys(config.whisper_custom_models).length > 0 ? (
+                        <TableView
+                          aria-label="自定义模型"
+                          selectionMode="none"
+                          density="spacious"
+                          overflowMode="truncate"
+                          styles={tableStyles}
+                        >
+                          <TableHeader>
+                            <Column isRowHeader>名称</Column>
+                            <Column>仓库或路径</Column>
+                            <Column width={120}>状态</Column>
+                            <Column width={64}>操作</Column>
+                          </TableHeader>
+                          <TableBody items={Object.entries(config.whisper_custom_models)}>
+                            {([name, target]: [string, string]) => {
+                              const status = whisperStatus.find(model => model.model_size === name)
+                              return (
+                                <Row key={name}>
+                                  <Cell>
+                                    <Text styles={cellText}>{name}</Text>
+                                  </Cell>
+                                  <Cell>
+                                    <span className={muted} title={target}>
+                                      {target}
+                                    </span>
+                                  </Cell>
+                                  <Cell>
+                                    {status?.downloaded ? (
+                                      <StatusIndicator tone="positive">已下载</StatusIndicator>
+                                    ) : null}
+                                    {status?.downloading ? (
+                                      <StatusIndicator tone="notice">下载中</StatusIndicator>
+                                    ) : null}
+                                    {status?.failed ? (
+                                      <StatusIndicator tone="negative">下载失败</StatusIndicator>
+                                    ) : null}
+                                  </Cell>
+                                  <Cell>
+                                    <ActionButton
+                                      isQuiet
+                                      size="S"
+                                      aria-label={`删除 ${name}`}
+                                      onPress={() => removeCustom(name)}
+                                    >
+                                      <DeleteIcon />
+                                    </ActionButton>
+                                  </Cell>
+                                </Row>
+                              )
+                            }}
+                          </TableBody>
+                        </TableView>
+                      ) : (
+                        <Text styles={muted}>还没有自定义模型。</Text>
+                      )}
+
+                      <div className={addForm}>
+                        <div className={inlineRow}>
+                          <TextField
+                            label="模型名称"
+                            value={newName}
+                            onChange={setNewName}
+                            placeholder="my-large-v3"
+                            styles={nameField}
+                          />
+                          <TextField
+                            label="HF repo_id 或本地路径"
+                            value={newTarget}
+                            onChange={setNewTarget}
+                            placeholder="Systran/faster-whisper-large-v3"
+                            styles={grow}
+                          />
+                          <Button variant="secondary" onPress={addCustom} isDisabled={adding}>
+                            <AddIcon />
+                            <Text>{adding ? '添加中…' : '添加'}</Text>
+                          </Button>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                </Panel>
-              </div>
-            </Section>
-          </div>
-        </Fold>
-      </div>
-    </ListDetail>
+                  </Panel>
+                </div>
+              </Section>
+            </div>
+          </Fold>
+        </div>
+      </ListDetail>
+    </div>
   )
 
   if (embedded) return content

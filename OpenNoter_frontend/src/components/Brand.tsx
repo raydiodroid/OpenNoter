@@ -6,12 +6,17 @@ import AILogo from '@/components/AILogo'
 const brandBox = style({
   display: 'inline-flex',
   flexShrink: 0,
+  color: 'neutral',
 })
 
-/** 平台品牌标：图是固定 200×200 的 SVG，外层统一裁到一个方框里 */
+/** 平台品牌标：使用标准库单色 SVG，外层统一尺寸 */
 export function PlatformMark({ Logo, size = 16 }: { Logo: ComponentType; size?: number }) {
   return (
-    <span className={`brand-mark ${brandBox}`} style={{ width: size, height: size }}>
+    <span
+      aria-hidden="true"
+      className={`brand-mark ${brandBox}`}
+      style={{ width: size, height: size }}
+    >
       <Logo />
     </span>
   )

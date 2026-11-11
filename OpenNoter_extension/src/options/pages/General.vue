@@ -192,7 +192,7 @@ onMounted(async () => {
       <label class="flex flex-col gap-1 text-sm">
         <span>本次任务的音频转写</span>
         <select v-model="settings.asrProviderId" aria-label="本次任务的音频转写" class="input">
-          <option :value="undefined">自动（个人凭据 / 站点默认）</option>
+          <option :value="undefined">默认配置</option>
           <option v-if="settings.asrProviderId && !asrChoices.some(c => c.id === settings.asrProviderId)" :value="settings.asrProviderId" disabled>原转写选项已不可用，请重新选择</option>
           <option v-for="c in asrChoices" :key="c.id" :value="c.id">{{ c.label }}</option>
         </select>

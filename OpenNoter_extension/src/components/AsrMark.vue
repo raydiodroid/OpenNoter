@@ -5,20 +5,20 @@ import Server from '~icons/lucide/server'
 import Audio from '~icons/lucide/audio-lines'
 import Computer from '~icons/lucide/cpu'
 import Apple from '~icons/simple-icons/apple'
-import Cut from '~icons/lucide/scissors'
-import Video from '~icons/lucide/video'
+import bcutLogo from '~/assets/brands/bcut-official.png'
+import Kuaishou from '~icons/simple-icons/kuaishou'
 import OpenAI from '~icons/simple-icons/openai'
-import Groq from '~icons/lucide/zap'
-import { ASR_ICONS } from '~/logic/asr-icons'
+import Groq from '~icons/bxl/groq-ai'
 
 const props = defineProps<{ name: string }>()
-const icons = { cloud: Cloud, server: Server, audio: Audio, whisper: Computer, apple: Apple, bcut: Cut, kuaishou: Video, openai: OpenAI, groq: Groq }
-const icon = computed(() => ASR_ICONS.find(icon => icon.id === props.name) || ASR_ICONS[0])
+const icons = { cloud: Cloud, server: Server, audio: Audio, whisper: Computer, apple: Apple, kuaishou: Kuaishou, openai: OpenAI, groq: Groq }
 const component = computed(() => icons[props.name as keyof typeof icons] || Cloud)
 </script>
 
 <template>
-  <span aria-hidden="true" class="inline-flex items-center justify-center shrink-0 rounded border w-8 h-8" :style="{ color: icon.color, background: `${icon.color}12`, borderColor: `${icon.color}30` }">
-    <component :is="component" class="w-5 h-5" />
+  <span aria-hidden="true" class="inline-flex items-center justify-center shrink-0 rounded border border-gray-200 dark:border-gray-700 text-gray-900 dark:text-gray-100 w-8 h-8">
+    <!-- Official unmodified white logo from bcut.bilibili.cn, app.f3896fe6.js module 178a. -->
+    <span v-if="name === 'bcut'" class="w-5 h-5" :style="{ backgroundColor: 'currentColor', mask: `url(${bcutLogo}) center / contain no-repeat` }" />
+    <component v-else :is="component" class="w-5 h-5" />
   </span>
 </template>

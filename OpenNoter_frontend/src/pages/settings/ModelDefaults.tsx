@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Button, Picker, PickerItem, Text } from '@react-spectrum/s2'
 import { style } from '@react-spectrum/s2/style' with { type: 'macro' }
-import { Panel, Section } from '@/components/Page'
+import { Panel } from '@/components/Page'
 import { useAuthStore } from '@/store/authStore'
 import request from '@/lib/api'
 import { toast } from '@/lib/toast'
@@ -53,36 +53,31 @@ export default function ModelDefaults() {
     }
   }
   return (
-    <Section
-      title="默认 AI 模型"
-      description="未明确选择模型时按 BYOK 策略使用个人凭据或此站点默认模型。"
-    >
-      <Panel>
-        <div className={stack}>
-          <Picker
-            label="站点默认 AI 模型"
-            selectedKey={modelId}
-            onSelectionChange={k => setModelId(String(k))}
-            isDisabled={!admin || busy}
-          >
-            <PickerItem id="auto">自动使用首个已启用模型</PickerItem>
-            {modelId === 'unavailable' && (
-              <PickerItem id="unavailable">原默认模型已不可用，请重新选择</PickerItem>
-            )}
-            {defaults.models.map(m => (
-              <PickerItem
-                key={String(m.id)}
-                id={String(m.id)}
-              >{`${m.model_name} · ${m.provider_name || m.provider_id}`}</PickerItem>
-            ))}
-          </Picker>
-          {admin && (
-            <Button variant="accent" onPress={save} isDisabled={busy || modelId === 'unavailable'}>
-              保存默认 AI 模型
-            </Button>
+    <Panel>
+      <div className={stack}>
+        <Picker
+          label="站点默认 AI 模型"
+          selectedKey={modelId}
+          onSelectionChange={k => setModelId(String(k))}
+          isDisabled={!admin || busy}
+        >
+          <PickerItem id="auto">自动使用首个已启用模型</PickerItem>
+          {modelId === 'unavailable' && (
+            <PickerItem id="unavailable">原默认模型已不可用，请重新选择</PickerItem>
           )}
-        </div>
-      </Panel>
-    </Section>
+          {defaults.models.map(m => (
+            <PickerItem
+              key={String(m.id)}
+              id={String(m.id)}
+            >{`${m.model_name} · ${m.provider_name || m.provider_id}`}</PickerItem>
+          ))}
+        </Picker>
+        {admin && (
+          <Button variant="accent" onPress={save} isDisabled={busy || modelId === 'unavailable'}>
+            保存默认 AI 模型
+          </Button>
+        )}
+      </div>
+    </Panel>
   )
 }

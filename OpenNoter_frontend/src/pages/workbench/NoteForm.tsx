@@ -428,8 +428,8 @@ export default function NoteForm() {
             menuWidth={selectionMenuWidth}
             align="end"
           >
-            <PickerItem id="auto" textValue="自动选择">
-              <Text slot="label">自动选择</Text>
+            <PickerItem id="auto" textValue="默认配置">
+              <Text slot="label">默认配置</Text>
               <Text slot="description">无可用字幕时使用，仅对本次任务生效</Text>
             </PickerItem>
             {values.asr_provider_id && !asrChoices.some(c => c.id === values.asr_provider_id) && (
@@ -500,9 +500,9 @@ export default function NoteForm() {
         </div>
       </section>
 
-      {/* ── 输出内容 ── */}
+      {/* ── 增强输出 ── */}
       <section className={section}>
-        <h2 className={sectionTitle}>输出内容</h2>
+        <h2 className={sectionTitle}>增强输出</h2>
         <CheckboxGroup
           label="笔记里要包含哪些元素"
           value={values.format}
