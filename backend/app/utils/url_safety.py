@@ -211,7 +211,24 @@ class TooManyRedirects(UnsafeUrlError):
     """跳转次数超过上限。继承 UnsafeUrlError，调用方可一并按「不安全」处理。"""
 
 
-def pin_url_to_ip(url: str, *, suffixes=()) -> tuple[str, str]:
+def _resolve_through_proxy(host: str, proxy_url: str) -> list[str]:
+    """本机 DNS 受污染/返回 fake-IP 时，从固定的可信 DoH 端点获取公网 A 记录。"""
+    import requests
+    with requests.Session() as session:
+        session.trust_env = False
+        session.proxies = {"https": proxy_url}
+        with session.get("https://1.1.1.1/dns-query", params={"name": host, "type": "A"},
+                         headers={"Accept": "application/dns-json"},
+                         timeout=(5, 10), allow_redirects=False) as response:
+            if response.status_code != 200:
+                raise UnsafeUrlError("代理 DNS 解析失败")
+            data = response.json()
+            if data.get("Status") != 0:
+                raise UnsafeUrlError("代理 DNS 未返回有效记录")
+            return [item["data"] for item in data.get("Answer", []) if item.get("type") == 1]
+
+
+def pin_url_to_ip(url: str, *, suffixes=(), proxy_url=None) -> tuple[str, str]:
     """一次解析、校验所有地址，再固定连接目标；TLS 仍验证原始域名。"""
     assert_url_shape_safe(url)
     parsed = urlparse(url)
@@ -219,7 +236,14 @@ def pin_url_to_ip(url: str, *, suffixes=()) -> tuple[str, str]:
     allowed = allowed_host_suffixes() if suffixes is None else suffixes
     if not _host_allowed(host, allowed):
         raise UnsafeUrlError(f"来源域名不在白名单内: {host}")
-    ips = [host] if _parse_ip(host) is not None else resolve_host(host)
+    if _parse_ip(host) is not None:
+        ips = [host]
+    elif proxy_url:
+        # 代理环境的本机 DNS 可能把目标改写到另一个公网 IP，不能只在私网
+        # 结果出现时回退。通过固定 DoH 解析，结果仍全部检查后才连接。
+        ips = _resolve_through_proxy(host, proxy_url)
+    else:
+        ips = resolve_host(host)
     if not ips:
         raise UnsafeUrlError(f"域名解析失败: {host}")
     for value in ips:
@@ -280,7 +304,7 @@ def safe_get(url: str, *, suffixes=None, max_redirects: int = DEFAULT_MAX_REDIRE
     kwargs.pop("allow_redirects", None)
     headers = dict(kwargs.pop("headers", {}) or {})
     for _ in range(max_redirects + 1):
-        pinned, host_header = pin_url_to_ip(current, suffixes=suffixes)
+        pinned, host_header = pin_url_to_ip(current, suffixes=suffixes, proxy_url=proxy_url)
         request_headers = {k: v for k, v in headers.items() if k.lower() != "host"}
         request_headers["Host"] = host_header
         response = _request_pinned(method.upper(), pinned, hostname=urlparse(current).hostname,

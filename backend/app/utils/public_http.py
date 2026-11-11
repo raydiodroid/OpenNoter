@@ -37,7 +37,7 @@ class PublicEndpointTransport(httpx.BaseTransport):
             raise UnsafeUrlError("个人 API 凭据不能发送到其他来源")
         from app.services.byok_config import byok_config
         byok_config.check_base_url(self.base_url)
-        pinned, host = pin_url_to_ip(str(request.url), suffixes=())
+        pinned, host = pin_url_to_ip(str(request.url), suffixes=(), proxy_url=self.proxy_url)
         headers = request.headers.copy()
         headers["Host"] = host
         if self.proxy_url:

@@ -210,6 +210,7 @@ def test_byok_proxy_preserves_body_and_does_not_double_decompress(isolated,monke
     import gzip
     from app.utils import public_http, url_safety
     monkeypatch.setattr(url_safety,'resolve_host',lambda h:['93.184.216.34'])
+    monkeypatch.setattr(url_safety,'_resolve_through_proxy',lambda h,p:['93.184.216.34'])
     raw=Mock(); raw.headers={'Content-Type':'application/json','Content-Encoding':'gzip'}
     raw.stream.return_value=iter([gzip.compress(b'{"ok":true}')])
     response=Mock(status_code=200,raw=raw)
@@ -222,3 +223,14 @@ def test_byok_proxy_preserves_body_and_does_not_double_decompress(isolated,monke
     assert b'"model":"test"' in send.call_args.kwargs['data']
     raw.stream.assert_called_once_with(65536,decode_content=False)
     response.close.assert_called_once()
+
+def test_proxy_dns_fallback_still_rejects_private_results(isolated,monkeypatch):
+    from app.utils import url_safety as s
+    monkeypatch.setattr(s,'resolve_host',lambda h:['198.18.0.1','2001::1'])
+    resolver=Mock(return_value=['93.184.216.34']); monkeypatch.setattr(s,'_resolve_through_proxy',resolver)
+    assert s.pin_url_to_ip('https://public.example/',proxy_url='http://proxy:8080')[0]=='https://93.184.216.34/'
+    resolver.assert_called_once_with('public.example','http://proxy:8080')
+    resolver.return_value=['127.0.0.1']
+    with pytest.raises(s.UnsafeUrlError):s.pin_url_to_ip('https://public.example/',proxy_url='http://proxy:8080')
+    with pytest.raises(s.UnsafeUrlError):s.pin_url_to_ip('http://169.254.169.254/',proxy_url='http://proxy:8080')
+    with pytest.raises(s.UnsafeUrlError):s.pin_url_to_ip('https://public.example/')

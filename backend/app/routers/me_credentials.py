@@ -105,7 +105,8 @@ def _validate_base_url(base_url: str) -> str:
     复用现成的 ``assert_safe_url``（``routers/provider.py`` 的 probe_endpoint 已用它），
     拦截私网 / 保留地址 / 非 http(s) scheme。
     """
-    from app.utils.url_safety import UnsafeUrlError, assert_safe_url
+    from app.utils.url_safety import UnsafeUrlError, pin_url_to_ip
+    from app.services.proxy_config_manager import ProxyConfigManager
 
     url = (base_url or "").strip().rstrip("/")
     if not url:
@@ -118,7 +119,7 @@ def _validate_base_url(base_url: str) -> str:
 
     # 管理员的内网探测开关不能放宽普通用户自填地址的边界。
     try:
-        assert_safe_url(url, suffixes=())
+        pin_url_to_ip(url, suffixes=(), proxy_url=ProxyConfigManager().get_proxy_url())
     except UnsafeUrlError as exc:
         raise HTTPException(status_code=400, detail=f"接口地址不安全：{exc}") from exc
     return url
