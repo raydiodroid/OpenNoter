@@ -59,6 +59,9 @@ class ProxyConfigManager:
         - 配置文件 enabled=true 且 url 非空 → 用配置的 url
         - 否则回退到环境变量（标准的 HTTP_PROXY / HTTPS_PROXY / ALL_PROXY，大小写都认）
         """
+        from app.services.media_context import isolated, proxy_url
+        if isolated():
+            return proxy_url()
         cfg = self.get_config()
         if cfg["enabled"] and cfg["url"]:
             return cfg["url"]

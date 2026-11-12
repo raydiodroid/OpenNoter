@@ -30,6 +30,7 @@ class User(Base):
     # 权限：admin 可管理用户与全局配置，user 只能操作自己的任务与密钥
     is_superuser = Column(Boolean, nullable=False, default=False)
     is_active = Column(Boolean, nullable=False, default=True)
+    auth_version = Column(Integer, nullable=False, default=0, server_default="0")
 
     created_at = Column(DateTime, server_default=func.now())
     last_login_at = Column(DateTime, nullable=True)

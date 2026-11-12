@@ -2,6 +2,11 @@
 services:
   backend:
     container_name: opennoter-backend
+    depends_on:
+      media-broker:
+        condition: service_healthy
+      media-egress:
+        condition: service_healthy
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -17,11 +22,17 @@ services:
     env_file:
       - .env
     environment:
+      - MEDIA_WORKER_SOCKET=/media-control/media.sock
+      - MEDIA_EGRESS_SOCKET=/media-control/egress.sock
+      - MEDIA_JOBS_DIR=/media-jobs
+      - TASK_MAX_WORKERS=${MEDIA_CONCURRENCY:-2}
       - BACKEND_PORT=${BACKEND_PORT}
       - BACKEND_HOST=${BACKEND_HOST}
       # SQLite 落到 data 卷；多副本请改 Postgres，见 README「多副本」
       - DATABASE_URL=${DATABASE_URL:-sqlite:////app/data/open_noter.db}
     volumes:
+      - media-control:/media-control
+      - media-jobs:/media-jobs
       # 代码在镜像内（Dockerfile COPY）；这里只挂运行时数据，避免整目录 ./backend:/app
       # 把代码与 DB/密钥/Cookie/笔记混在一起（备份易泄露，升级也难）。
       # 本地改代码热重载可临时加回：- ./backend:/app（会盖住镜像代码）。
@@ -58,6 +69,75 @@ services:
     # 否则首次模型加载时容易被 host OOM-killer 干掉。
     mem_limit: 4g
 
+  # Build-only image: disposable containers are launched by the narrow broker.
+  media-image:
+    profiles: [build]
+    image: opennoter-media:local
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      args:
+        BASE_REGISTRY: ${BASE_REGISTRY:-docker.io}
+        APT_MIRROR: ${APT_MIRROR:-mirrors.tuna.tsinghua.edu.cn}
+        PIP_INDEX: ${PIP_INDEX:-https://pypi.tuna.tsinghua.edu.cn/simple}
+    entrypoint: ["true"]
+
+  media-broker:
+    container_name: opennoter-media-broker
+    build:
+      context: .
+      dockerfile: backend/Dockerfile.broker
+      args:
+        BASE_REGISTRY: ${BASE_REGISTRY:-docker.io}
+    network_mode: none
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [DAC_OVERRIDE, FOWNER]
+    pids_limit: 64
+    mem_limit: 128m
+    environment:
+      MEDIA_MODELS_PATH: ${PWD}/backend/models
+      MEDIA_CONCURRENCY: ${MEDIA_CONCURRENCY:-2}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - media-control:/control
+      - media-jobs:/jobs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.socket(socket.AF_UNIX); s.connect('/control/media.sock'); s.close()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  media-egress:
+    container_name: opennoter-media-egress
+    image: opennoter-media:local
+    entrypoint: ["python", "/app/media_egress.py"]
+    working_dir: /tmp
+    environment:
+      PYTHONPATH: /app
+      PYTHONDONTWRITEBYTECODE: "1"
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    pids_limit: 96
+    mem_limit: 256m
+    cpus: 1
+    tmpfs: [/tmp:size=32m]
+    volumes:
+      - media-control:/control
+    networks:
+      media-outbound:
+      media:
+        ipv4_address: 172.16.249.2
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.socket(socket.AF_UNIX); s.connect('/control/egress.sock'); s.close()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
   frontend:
     container_name: opennoter-frontend
     build:
@@ -86,3 +166,18 @@ services:
         condition: service_started
     restart: unless-stopped
     mem_limit: 256m
+
+volumes:
+  media-control:
+  media-jobs:
+    name: opennoter-media-jobs
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: size=4g,mode=0770
+
+networks:
+  media:
+    name: opennoter-media-internal
+    external: true
+  media-outbound:

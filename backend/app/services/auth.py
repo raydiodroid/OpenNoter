@@ -34,6 +34,7 @@ from app.db.models.api_keys import (
     STATUS_REVOKED,
 )
 from app.db.models.users import User
+from app.db.models.auth_sessions import AuthSession
 from app.services import api_key_runtime
 from app.utils.ip_allow import client_ip, ip_allowed
 from app.utils.logger import get_logger
@@ -110,23 +111,58 @@ def verify_password(password: str, hashed: Optional[str]) -> bool:
 
 # ---------- JWT ----------
 
-def create_access_token(user: User) -> str:
+def create_access_token(user: User, db: Session) -> str:
     now = datetime.now(timezone.utc)
+    expires = now + timedelta(hours=_jwt_ttl_hours())
+    session_id = secrets.token_urlsafe(32)
+    version = user.auth_version or 0
+    db.query(AuthSession).filter(AuthSession.expires_at <= now.replace(tzinfo=None)).delete(synchronize_session=False)
+    db.add(AuthSession(token_hash=hashlib.sha256(session_id.encode()).hexdigest(),
+                       user_id=user.id, auth_version=version,
+                       created_at=now.replace(tzinfo=None), expires_at=expires.replace(tzinfo=None)))
     payload = {
         "sub": str(user.id),
         "email": user.email,
         "role": "admin" if user.is_superuser else "user",
         "iat": int(now.timestamp()),
-        "exp": int((now + timedelta(hours=_jwt_ttl_hours())).timestamp()),
+        "exp": int(expires.timestamp()),
+        "jti": session_id,
+        "ver": version,
     }
     return jwt.encode(payload, _jwt_secret(), algorithm=JWT_ALG)
 
 
 def decode_access_token(token: str) -> Optional[dict]:
     try:
-        return jwt.decode(token, _jwt_secret(), algorithms=[JWT_ALG])
-    except jwt.PyJWTError:
+        payload = jwt.decode(token, _jwt_secret(), algorithms=[JWT_ALG],
+                             options={"require": ["sub", "iat", "exp", "jti", "ver"]})
+        if not str(payload["sub"]).isdigit() or not isinstance(payload["jti"], str) or not 32 <= len(payload["jti"]) <= 128:
+            return None
+        if type(payload["ver"]) is not int or payload["ver"] < 0:
+            return None
+        return payload
+    except (jwt.PyJWTError, ValueError, TypeError):
         return None
+
+
+def revoke_session(request: Request, db: Session) -> None:
+    kind, token = _extract_credentials(request)
+    payload = decode_access_token(token) if kind in {"bearer", "cookie"} else None
+    if payload:
+        db.query(AuthSession).filter(
+            AuthSession.token_hash == hashlib.sha256(payload["jti"].encode()).hexdigest(),
+            AuthSession.user_id == int(payload["sub"]),
+            AuthSession.revoked_at.is_(None),
+        ).update({"revoked_at": datetime.now(timezone.utc).replace(tzinfo=None)}, synchronize_session=False)
+
+
+def revoke_user_sessions(user: User, db: Session) -> None:
+    # SQL increment prevents concurrent password/admin changes losing a revocation.
+    # The version also rejects sessions minted concurrently using stale credentials.
+    db.query(User).filter(User.id == user.id).update(
+        {"auth_version": User.auth_version + 1}, synchronize_session=False)
+    db.query(AuthSession).filter(AuthSession.user_id == user.id, AuthSession.revoked_at.is_(None)).update(
+        {"revoked_at": datetime.now(timezone.utc).replace(tzinfo=None)}, synchronize_session=False)
 
 
 # ---------- API Key ----------
@@ -408,6 +444,11 @@ def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
     user = db.query(User).filter(User.id == int(payload.get("sub", 0))).first()
     if not user or not user.is_active:
         raise _unauthorized("账号不存在或已停用", reason="account_disabled")
+    session = db.get(AuthSession, hashlib.sha256(payload["jti"].encode()).hexdigest())
+    if (not session or session.user_id != user.id or session.revoked_at is not None
+            or session.expires_at <= datetime.now(timezone.utc).replace(tzinfo=None)
+            or session.auth_version != user.auth_version or payload["ver"] != user.auth_version):
+        raise _unauthorized("登录已撤销，请重新登录", reason="session_revoked")
     request.state.api_key_id = None
     request.state.auth_kind = "session"
     return user

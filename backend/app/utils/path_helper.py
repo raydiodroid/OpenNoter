@@ -6,6 +6,10 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")
 
 
 def get_data_dir():
+    if os.getenv('OPENNOTER_MEDIA_CHILD') == '1':
+        path = Path('/job/data')
+        path.mkdir(exist_ok=True)
+        return str(path)
     if getattr(sys, 'frozen', False):
 
         base_dir = os.path.dirname(sys.executable)
@@ -38,6 +42,10 @@ def get_app_dir(subdir: str = "") -> str:
     - 开发时：使用项目 data 目录
     - 打包后：使用 exe 所在目录
     """
+    if os.getenv('OPENNOTER_MEDIA_CHILD') == '1':
+        full_path = Path('/job/data') / subdir
+        full_path.mkdir(parents=True, exist_ok=True)
+        return str(full_path)
     if getattr(sys, 'frozen', False):
         # 打包后运行：使用 main.exe 所在目录
         base_dir = os.path.dirname(sys.executable)

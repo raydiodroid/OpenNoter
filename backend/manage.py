@@ -55,6 +55,8 @@ def cmd_reset_password(args):
         password = args.password or secrets.token_urlsafe(12)
         user.hashed_password = hash_password(password)
         user.is_active = True
+        from app.services.auth import revoke_user_sessions
+        revoke_user_sessions(user, db)
         db.commit()
         print(f"已重置 {user.email} 的密码")
         print(f"  新密码：{password}")

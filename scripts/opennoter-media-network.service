@@ -1,0 +1,13 @@
+[Unit]
+Description=OpenNoter media worker network isolation
+Requires=docker.service
+After=docker.service
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh /opt/opennoter-src/scripts/media-network.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target docker.service

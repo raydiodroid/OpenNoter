@@ -9,9 +9,9 @@ def migrate_task_schema(engine):
             "failed_at": "TIMESTAMP", "updated_at": "TIMESTAMP", "deleted_at": "TIMESTAMP",
             "attempt_id": "VARCHAR(36)", "request_json": "TEXT",
         },
-        "users": {name: "INTEGER" for name in (
+        "users": {"auth_version": "INTEGER NOT NULL DEFAULT 0", **{name: "INTEGER" for name in (
             "max_concurrent_tasks", "daily_task_limit", "storage_quota_mb",
-        )},
+        )}},
     }
     with engine.begin() as conn:
         for table, fields in columns.items():

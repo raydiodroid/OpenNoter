@@ -1,0 +1,7 @@
+ARG BASE_REGISTRY=docker.io
+FROM ${BASE_REGISTRY}/library/docker:29.1.3-cli AS docker
+FROM ${BASE_REGISTRY}/library/python:3.11-slim-bookworm
+COPY --from=docker /usr/local/bin/docker /usr/local/bin/docker
+WORKDIR /broker
+COPY backend/media_broker.py /broker/media_broker.py
+CMD ["python", "media_broker.py"]

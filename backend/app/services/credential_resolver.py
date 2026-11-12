@@ -364,6 +364,9 @@ __all__ = [
 
 def resolve_cookie(user_id: Optional[int], platform: str) -> Optional[str]:
     """Required cookies never fall back to a shared identity or anonymous access."""
+    from app.services.media_context import isolated, cookie_for
+    if isolated():
+        return cookie_for(platform)
     mode = byok_config.get_cookie_mode()
     if mode == "shared":
         return _site_cookie(platform)

@@ -127,19 +127,23 @@ cp .env.example .env
 
 ## 快速开始
 
-### 方式一：Docker Compose（推荐）
+### 方式一：Docker Compose（推荐用于 Linux 服务器，Docker Engine 26+）
 
 ```bash
 git clone https://github.com/raydiodroid/OpenNoter.git
 cd OpenNoter
 cp .env.example .env
-docker compose up --build -d
+docker compose --profile build build backend frontend media-image media-broker
+sudo sh scripts/media-network.sh
+docker compose up -d --wait
 
 # 创建首个管理员（否则无法登录）
 docker exec -it opennoter-backend python manage.py create-user you@example.com --admin
 ```
 
 访问 `http://localhost:3015`。
+
+默认启用一次性媒体 worker、公网出口代理和可撤销登录会话。安装网络规则的 systemd 服务、升级时重新登录及安全边界见 [媒体隔离部署说明](docs/media-worker-security.md)。先按部署说明完成网络规则持久化，再对公网开放服务。macOS/Windows 源码与桌面运行仍使用本机适配器。
 
 **GPU 加速转写**（可选，需要 NVIDIA 显卡与 [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)）：
 
@@ -148,7 +152,7 @@ docker compose down                                       # 两套编排用相�
 docker compose -f docker-compose.gpu.yml up --build -d
 ```
 
-GPU 栈只影响本地 Whisper 转写；在线转写引擎与 GPU 无关。确认是否真的走了 GPU：
+独立 GPU 编排目前仍使用进程内媒体适配器，不具备上述默认服务器编排的 worker 隔离。GPU 栈只影响本地 Whisper 转写；在线转写引擎与 GPU 无关。确认是否真的走了 GPU：
 
 ```bash
 docker logs opennoter-backend | grep -i cuda   # 跑过一次本地转写后出现 "CUDA 可用，使用 GPU"
@@ -159,7 +163,8 @@ docker logs opennoter-backend | grep -i cuda   # 跑过一次本地转写后出�
 **国内拉不到 docker.io** 时，所有 Dockerfile 都暴露了 `BASE_REGISTRY` / `APT_MIRROR` / `PIP_INDEX` 构建参数：
 
 ```bash
-BASE_REGISTRY=docker.m.daocloud.io docker compose build
+BASE_REGISTRY=docker.m.daocloud.io docker compose --profile build build backend frontend media-image media-broker
+sudo sh scripts/media-network.sh
 docker compose up -d
 ```
 

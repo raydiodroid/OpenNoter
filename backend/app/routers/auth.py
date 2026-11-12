@@ -92,9 +92,8 @@ def login(data: LoginRequest, request: Request, db: Session = Depends(get_db)):
         raise HTTPException(status_code=403, detail="账号已停用")
 
     user.last_login_at = datetime.now(timezone.utc)
+    token = create_access_token(user, db)
     db.commit()
-
-    token = create_access_token(user)
     # 注意：R.success 返回的是独立的 JSONResponse，注入的 Response 参数改不到它，
     # 必须在返回值上设置 Cookie，否则浏览器拿不到会话。
     resp = R.success(data={"token": token, "user": _user_payload(user)})
@@ -103,7 +102,10 @@ def login(data: LoginRequest, request: Request, db: Session = Depends(get_db)):
 
 
 @router.post("/logout")
-def logout():
+def logout(request: Request, db: Session = Depends(get_db)):
+    from app.services.auth import revoke_session
+    revoke_session(request, db)
+    db.commit()
     resp = R.success(msg="已退出")
     resp.delete_cookie("opennoter_token", path="/")
     return resp
@@ -124,14 +126,20 @@ def set_password(
     new_password = (payload.get("password") or "").strip()
     if len(new_password) < 8:
         raise HTTPException(status_code=400, detail="密码至少 8 位")
+    if len(new_password.encode("utf-8")) > 72:
+        raise HTTPException(status_code=400, detail="密码的 UTF-8 长度不能超过 72 字节")
 
     current = (payload.get("current_password") or "").strip()
     if user.hashed_password and not verify_password(current, user.hashed_password):
         raise HTTPException(status_code=400, detail="当前密码不正确")
 
     user.hashed_password = hash_password(new_password)
+    from app.services.auth import revoke_user_sessions
+    revoke_user_sessions(user, db)
     db.commit()
-    return R.success(msg="密码已更新")
+    resp = R.success(msg="密码已更新，请重新登录")
+    resp.delete_cookie("opennoter_token", path="/")
+    return resp
 
 
 # ---------------- OIDC ----------------
@@ -242,10 +250,10 @@ def oidc_callback(request: Request, code: str = "", state: str = "", db: Session
         raise HTTPException(status_code=403, detail="账号已停用")
 
     user.last_login_at = datetime.now(timezone.utc)
+    db.flush()
+    token = create_access_token(user, db)
     db.commit()
     db.refresh(user)
-
-    token = create_access_token(user)
     from app.utils.env_compat import getenv
 
     target = getenv("POST_LOGIN_REDIRECT", "/")
@@ -293,6 +301,10 @@ def admin_update_user(
         user.is_active = bool(payload["is_active"])
     if "is_superuser" in payload:
         user.is_superuser = bool(payload["is_superuser"])
+
+    if "is_active" in payload or "is_superuser" in payload:
+        from app.services.auth import revoke_user_sessions
+        revoke_user_sessions(user, db)
 
     db.commit()
     return R.success(data=_user_payload(user))

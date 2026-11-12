@@ -161,6 +161,7 @@ class NoteGenerator:
         # BYOK：任务归属用户。用于 `_get_gpt` 解析「用谁的凭据」。
         # None 表示匿名（`AUTH_ENFORCE=0` 的部署），一律走站点凭据。
         self.user_id: Optional[int] = user_id
+        self.media_workspace = None
         logger.info(
             f"NoteGenerator 初始化完成（体积上限 {self.limits.max_size_mb}MB，"
             f"时长上限 {self.limits.max_duration_seconds}s，重试 {self.limits.retry_count} 次，"
@@ -348,6 +349,9 @@ class NoteGenerator:
         `markdown`）—— 那是**缓存**，重跑任务时能省一次下载与转写，删了反而
         让「重试」变慢。也不删截图/封面（属于笔记内容）。
         """
+        if getattr(self, 'media_workspace', None) is not None:
+            self.media_workspace.close()
+            return
         if not task_id:
             return
 
@@ -437,6 +441,11 @@ class NoteGenerator:
         """
         根据环境变量 TRANSCRIBER_TYPE 动态获取并实例化转写器
         """
+        from app.services.media_worker import enabled, MediaWorkspace, WorkerTranscriber
+        if enabled():
+            if self.media_workspace is None:
+                self.media_workspace = MediaWorkspace(self)
+            return WorkerTranscriber(self.media_workspace, self)
         from app.transcriber.transcriber_provider import get_transcriber
         return get_transcriber(
             transcriber_type=self.transcriber_type,
@@ -516,6 +525,11 @@ class NoteGenerator:
         :return: 对应的 Downloader 子类实例
         """
         logger.debug(f"实例化下载器 - {platform}")
+        from app.services.media_worker import enabled, MediaWorkspace, WorkerDownloader
+        if enabled():
+            if self.media_workspace is None:
+                self.media_workspace = MediaWorkspace(self)
+            return WorkerDownloader(self.media_workspace, platform, self.user_id)
         try:
             # BYOK：把归属用户传下去，下载器据此解析「用户自己的平台 Cookie」
             downloader = get_downloader(platform, self.user_id)
@@ -874,7 +888,7 @@ class NoteGenerator:
 
         # 已有缓存，尝试加载。新 key 优先，没有再看一次老 key（历史任务缓存）。
         cache_file = _first_existing(cache.audio, cache.legacy_audio)
-        if cache_file is not None:
+        if cache_file is not None and getattr(self, 'media_workspace', None) is None:
             if cache_file == cache.legacy_audio:
                 logger.info(f"命中历史命名的音频缓存 ({cache_file})，按向后兼容规则读取")
             else:
@@ -942,14 +956,17 @@ class NoteGenerator:
                 logger.info(f"视频下载完成：{self.video_path}")
 
                 if grid_size:
-                    self.video_img_urls = VideoReader(
-                        video_path=str(self.video_path),
-                        grid_size=tuple(grid_size),
-                        frame_interval=frame_interval,
-                        unit_width=960,
-                        unit_height=540,
-                        save_quality=80,
-                    ).run()
+                    if getattr(self, 'media_workspace', None) is not None:
+                        self.video_img_urls = self.media_workspace.frames(str(self.video_path), grid_size, frame_interval)
+                    else:
+                        self.video_img_urls = VideoReader(
+                            video_path=str(self.video_path),
+                            grid_size=tuple(grid_size),
+                            frame_interval=frame_interval,
+                            unit_width=960,
+                            unit_height=540,
+                            save_quality=80,
+                        ).run()
                 else:
                     logger.info("未指定 grid_size，跳过缩略图生成")
             except Exception as exc:
@@ -1316,7 +1333,9 @@ class NoteGenerator:
         matches: List[Tuple[str, int]] = extract_screenshot_timestamps(markdown)
         for idx, (marker, ts) in enumerate(matches):
             try:
-                img_path = generate_screenshot(str(video_path), str(out_dir), ts, idx)
+                workspace = getattr(self, 'media_workspace', None)
+                img_path = (workspace.screenshot(str(video_path), str(out_dir), ts, idx) if workspace
+                            else generate_screenshot(str(video_path), str(out_dir), ts, idx))
                 filename = Path(img_path).name
                 # 构建前端可访问 URL，例如 /static/screenshots/<task_id>/xxx.jpg
                 img_url = f"{url_prefix}/{filename}"
