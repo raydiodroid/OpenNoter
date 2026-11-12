@@ -19,7 +19,7 @@ API 保留鉴权、任务状态、BYOK 决策、LLM 调用和笔记持久化。�
 默认 `docker-compose.yml` 启用 worker。`volume-subpath` 要求 Docker Engine 26 或更新版本。
 
 1. 在项目目录执行 `docker compose --profile build build backend frontend media-image media-broker`。
-2. 以 root 执行 `sh scripts/media-network.sh`。它只操作 `172.16.249.0/24` 的规则，阻断 worker 到私网及宿主机的流量，不改变其他服务的网络策略。若该网段被占用，应统一修改脚本和 compose 中的配置。
+2. 以 root 执行 `sh scripts/media-network.sh`。它只操作 `172.16.249.0/24` 的规则，阻断 worker 到私网及宿主机的流量，不改变其他服务的网络策略。若该网段被占用，应统一修改脚本、compose 以及 `media_worker.py` / `media_egress.py` 中的出口地址。
 3. 安装 `scripts/opennoter-media-network.service` 到 systemd，按实际项目路径调整 `ExecStart`，启用该服务，以便重启 Docker/主机时恢复规则。升级、防火墙重载后重新执行规则脚本并检查；不要单独删除规则。
 4. 执行 `docker compose up -d --wait backend frontend nginx media-broker media-egress`。`MEDIA_MODELS_PATH` 默认取执行 compose 时的 `${PWD}/backend/models`，必须从项目目录运行。
 5. 验证 worker 非 root、无数据库/主密钥/Docker socket，确认私网和宿主访问被拒绝，再验证下载、转写、截图及任务生成。

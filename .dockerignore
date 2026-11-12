@@ -30,8 +30,7 @@ build/
 *.tar
 *.egg-info/
 
-# 环境文件
-.env
-.env.local
-.env.*.local
-!.env.example
+# 环境文件：必须覆盖子目录，防止 backend/.env 被 COPY 进媒体镜像。
+**/.env
+**/.env.*
+!**/.env.example

@@ -235,8 +235,17 @@ class WorkerDownloader:
                 data[key] = str(self.workspace.path(data[key])) if not skip_download else ''
         cover = data.get('cover_url') or ''
         if cover.startswith('/static/'):
-            imported = self.workspace.import_image('/job' + cover, 'static/cover')
-            data['cover_url'] = '/static/cover/' + Path(imported).name
+            from app.utils.static_signing import sign_static_url
+            task_id = getattr(self.workspace.owner, 'media_task_id', None)
+            if task_id:
+                from app.utils.note_paths import validate_task_id
+                validate_task_id(task_id)
+                directory = Path(os.getenv('OUT_DIR', './static/screenshots')) / task_id
+                prefix = os.getenv('IMAGE_BASE_URL', '/static/screenshots').rstrip('/') + '/' + task_id
+            else:
+                directory, prefix = Path('static/cover'), '/static/cover'
+            imported = self.workspace.import_image('/job' + cover, directory)
+            data['cover_url'] = sign_static_url(prefix + '/' + Path(imported).name)
         # Third-party metadata can contain cookies/headers or internal paths.
         data['raw_info'] = {}
         return AudioDownloadResult(**data)

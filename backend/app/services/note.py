@@ -217,6 +217,7 @@ class NoteGenerator:
         # 虽然能兜住，但显式初始化让「哪些中间产物属于本任务」更清楚。
         self.video_path = None
         self._cleanup_done = False
+        self.media_task_id = task_id
 
         try:
             logger.info(f"开始生成笔记 (task_id={task_id})")

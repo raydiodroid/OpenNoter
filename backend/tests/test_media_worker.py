@@ -32,6 +32,31 @@ def test_symlink_and_directory_results_rejected(worker, tmp_path):
         workspace.path('/job')
 
 
+def test_cover_has_task_ownership_signature_and_is_deleted_with_task(worker, monkeypatch):
+    from urllib.parse import urlsplit, parse_qs
+    from app.utils.static_signing import verify_resource_token
+    from app.storage.task_files import LocalTaskStorage
+    task_id = 'release-cover-test'
+    workspace = worker.MediaWorkspace(SimpleNamespace(media_task_id=task_id))
+    (workspace.root / 'static/cover').mkdir(parents=True)
+    (workspace.root / 'static/cover/source.jpg').write_bytes(b'image')
+    (workspace.root / 'audio.mp3').write_bytes(b'audio')
+    downloader = worker.WorkerDownloader(workspace, 'local', 1)
+    monkeypatch.setattr(downloader, '_call', lambda *a, **kw: {
+        'file_path': '/job/audio.mp3', 'video_path': None, 'title': 'test', 'duration': 1,
+        'cover_url': '/static/cover/source.jpg', 'platform': 'local', 'video_id': 'test', 'raw_info': {},
+    })
+    result = downloader.download('/uploads/test.mp4')
+    url = urlsplit(result.cover_url)
+    assert url.path.startswith('/static/screenshots/' + task_id + '/')
+    token = parse_qs(url.query)['t'][0]
+    assert verify_resource_token('task', task_id, token)
+    assert not verify_resource_token('task', 'another-task', token)
+    assert Path(url.path.lstrip('/')).is_file()
+    LocalTaskStorage('note_results').delete(task_id)
+    assert not Path(url.path.lstrip('/')).exists()
+
+
 def test_transcriber_gets_only_resolved_asr_credential(worker, monkeypatch):
     from app.services import credential_resolver
     credential = credential_resolver.Credential('asr-key', 'https://speech.example/v1', 'whisper', 'own')
